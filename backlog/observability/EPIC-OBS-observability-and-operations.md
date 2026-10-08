@@ -15,6 +15,8 @@ Logging is `console.*` in TS and `logging.basicConfig` text in Python; nothing c
 - INF-012 OpenTelemetry traces for Next apps and the worker
 - DOC-003 Postgres backups, PITR, bucket versioning and a restore drill script
 - ADM-023 Audit log retention and export
+- INF-021 Expose queue.oldestDueSec and workers.live in the admin health endpoint
+- WRK-017 Carry eventId/studioId in worker-enqueued job payloads (INDEX_FACES)
 
 ## Definition of Done
 - [ ] One request's log lines across web → worker share a correlation id and parse as JSON.
