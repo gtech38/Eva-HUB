@@ -1,0 +1,31 @@
+name: Bug report
+description: Something that is built does not behave as documented
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [web, admin, worker, db, shared, infra, docs]
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact URLs, accounts (e.g. lakshmi@localhost), commands.
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Dev server output, worker log, Mailpit message, browser console.
+  - type: textarea
+    id: test
+    attributes:
+      label: Failing test (if you have one)
+      description: The TDD gate means a fix starts from a test; paste it or name where it should live.

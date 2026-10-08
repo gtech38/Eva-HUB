@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Pre-push: never push to main directly; verify before anything leaves the machine.
+set -euo pipefail
+remote="$1"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "$local_ref" ] && continue
+  case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac   # branch deletion
+  case "$local_ref" in refs/tags/*) continue ;; esac
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      echo "pre-push: direct pushes to main are blocked. Open a PR from a branch." >&2
+      exit 1 ;;
+  esac
+  branch="${local_ref#refs/heads/}"
+  if ! echo "$branch" | grep -Eq '^([a-z]+-[0-9]+|feat|fix|chore|docs|refactor|test|ci|build|perf)/[a-z0-9._-]+$'; then
+    echo "pre-push: branch '$branch' must look like <backlog-id>/<slug> (e.g. web-012/guardian-search) or <type>/<slug>." >&2
+    exit 1
+  fi
+done
+
+if [ "${SKIP_VERIFY:-}" = "1" ]; then exit 0; fi
+echo "pre-push: typecheck + unit tests (SKIP_VERIFY=1 to bypass once)…" >&2
+pnpm typecheck
+pnpm -r --if-present test
+exit 0
