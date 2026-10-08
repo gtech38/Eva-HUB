@@ -32,6 +32,7 @@ export type Action =
   | "rsvp.report.names"       // name-level RSVP lists and exports
   | "rsvp.respond"            // own household
   | "registry.manage"
+  | "registry.claim"          // guest marks an item purchased
   | "photos.upload"
   | "albums.manage"
   | "photos.hide"
@@ -61,6 +62,10 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     const ageH = (Date.now() - p.authedAt.getTime()) / 36e5;
     if (ageH > REAUTH_HOURS) return false;
   }
+
+  // A claim says "I bought this": only a real guest of the event may make it, platform admins included
+  // (docs/02 section 4). Decided before the platform-admin bypass below.
+  if (action === "registry.claim") return !!r.eventId && p.guestOf.has(r.eventId);
 
   if (p.isPlatformAdmin) return true;
 

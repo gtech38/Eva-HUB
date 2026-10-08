@@ -3,8 +3,9 @@ import type { ThemeKey } from "@hub/db";
 import type { Locale } from "@hub/shared/i18n";
 import type { Brand } from "@/lib/site";
 import type { EventCopy } from "@/lib/eventCopy";
+import type { NavItem } from "@/lib/nav";
 
-export type NavItem = { href: string; label: string; current: boolean };
+export type { NavItem };
 
 export type ShellProps = {
   title: string;

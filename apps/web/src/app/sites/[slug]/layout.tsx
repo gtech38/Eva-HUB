@@ -1,9 +1,9 @@
 import type { CSSProperties, ReactNode } from "react";
-import { eventCopy, hostsPageLabel } from "@/lib/eventCopy";
+import { eventCopy } from "@/lib/eventCopy";
+import { buildNavItems } from "@/lib/nav";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { t, ui, isLocale, type Locale } from "@hub/shared/i18n";
-import { PAGE_PATHS } from "@hub/shared/pages";
 import { env } from "@hub/shared/env";
 import { getSite, type SiteContext } from "@/lib/site";
 import { eventPreviewTitle, originForHost, siteMetadata } from "@/lib/siteMetadata";
@@ -24,30 +24,8 @@ export async function generateMetadata(): Promise<Metadata> {
   });
 }
 
-const NAV_LABEL: Partial<Record<keyof typeof PAGE_PATHS, Parameters<typeof ui>[0]>> = {
-  HOME: "home",
-  ABOUT: "about",
-  SCHEDULE: "schedule",
-  TRAVEL: "travel",
-  FAQ: "faq",
-  REGISTRY: "registry",
-  GALLERY: "gallery",
-  RSVP: "rsvp",
-};
-
 function buildNav(site: SiteContext): NavItem[] {
-  const { locale, path } = site;
-  // Table-driven pages (schedule, RSVP, gallery) are always reachable; content pages only when present+enabled.
-  const types = new Set<keyof typeof PAGE_PATHS>(["HOME", "SCHEDULE", "RSVP", "GALLERY"]);
-  for (const p of site.event.pages) types.add(p.type);
-  const order: Array<keyof typeof PAGE_PATHS> = ["HOME", "ABOUT", "SCHEDULE", "TRAVEL", "FAQ", "REGISTRY", "RSVP", "GALLERY"];
-  return order
-    .filter((ty) => types.has(ty))
-    .map((ty) => {
-      const href = PAGE_PATHS[ty];
-      const key = NAV_LABEL[ty];
-      return { href, label: key ? ui(key, locale) : hostsPageLabel(site.event.kind, locale), current: href === "/" ? path === "/" : path.startsWith(href) };
-    });
+  return buildNavItems({ enabledPages: site.event.pages.map((p) => p.type), kind: site.event.kind, locale: site.locale, path: site.path });
 }
 
 export default async function SiteLayout({ children }: { children: ReactNode }) {
