@@ -205,10 +205,30 @@ describe("blank values mean unset (same as the worker's _value in config.py)", (
     expect(() => env()).toThrow(new RegExp(key));
   });
 
+  it("trims surrounding whitespace from non-blank values (as the worker does)", async () => {
+    const env = await envWith({ ...local, S3_BUCKET: " hub-media\t", APP_ENV: " production ", AUTH_SECRET: `  ${DEV_SECRET} ` });
+    expect(() => env()).toThrow(/AUTH_SECRET/); // " production " counts as production
+    const dev = await envWith({ ...local, S3_BUCKET: " hub-media\t", ROOT_DOMAIN: " studio.example.com " });
+    expect(dev().S3_BUCKET).toBe("hub-media");
+    expect(dev().ROOT_DOMAIN).toBe("studio.example.com");
+  });
+
   it("does not modify process.env", async () => {
     const env = await envWith({ ...local, S3_PUBLIC_ENDPOINT: " " });
     env();
     expect(process.env.S3_PUBLIC_ENDPOINT).toBe(" ");
+  });
+});
+
+describe("FACE_MATCH_THRESHOLD range", () => {
+  it.each(["0", "-0.1", "1.5"])("rejects %s: it must be in (0, 1], and <= 0 would match every face", async (value) => {
+    const env = await envWith({ ...local, FACE_MATCH_THRESHOLD: value });
+    expect(() => env()).toThrow(/FACE_MATCH_THRESHOLD/);
+  });
+
+  it("accepts values in (0, 1]", async () => {
+    expect((await envWith({ ...local, FACE_MATCH_THRESHOLD: "1" }))().FACE_MATCH_THRESHOLD).toBe(1);
+    expect((await envWith({ ...local, FACE_MATCH_THRESHOLD: "0.5" }))().FACE_MATCH_THRESHOLD).toBe(0.5);
   });
 });
 
@@ -219,6 +239,11 @@ describe("loopback detection", () => {
     ["ADMIN_ORIGIN", "http://[::1]:3001"],
     ["ROOT_DOMAIN", "::1"],
     ["WEB_ORIGIN", "http://app.localhost:3000"],
+    ["WEB_ORIGIN", "http://"],
+    ["ROOT_DOMAIN", "localhost."],
+    ["ADMIN_ORIGIN", "http://localhost.:3001"],
+    ["WEB_ORIGIN", "http://[::ffff:127.0.0.1]:3000"],
+    ["ROOT_DOMAIN", "::ffff:127.0.0.1"],
   ] as const)("rejects %s=%s in production", async (key, value) => {
     const env = await envWith({ ...production(), [key]: value });
     expect(() => env()).toThrow(new RegExp(key));
@@ -248,7 +273,7 @@ describe("APP_ENV and NODE_ENV", () => {
     expect(() => prod()).toThrow(/AUTH_SECRET/);
   });
 
-  it.each(["prod", "Production", "PRODUCTION", " production"])("rejects APP_ENV=%j instead of silently skipping the checks", async (bad) => {
+  it.each(["prod", "Production", "PRODUCTION", "pro duction"])("rejects APP_ENV=%j instead of silently skipping the checks", async (bad) => {
     const env = await envWith({ ...production(), APP_ENV: bad });
     expect(() => env()).toThrow(/APP_ENV/);
   });

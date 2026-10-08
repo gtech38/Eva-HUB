@@ -51,6 +51,46 @@ def test_blank_values_fall_back_to_the_default():
     assert ":" in s.worker_id
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_face_match_threshold_is_the_default_never_zero(blank):
+    s = load_settings({"FACE_MATCH_THRESHOLD": blank})
+    assert s.face_match_threshold == 0.363
+    assert s.face_cluster_distance == 1.0 - 0.363
+
+
+@pytest.mark.parametrize("value", ["0", "-0.1", "1.5"])
+def test_face_match_threshold_must_be_in_zero_one(value):
+    # <= 0 would match every face; same range as env.ts (.gt(0).lte(1))
+    with pytest.raises(ValueError, match="FACE_MATCH_THRESHOLD"):
+        load_settings({"FACE_MATCH_THRESHOLD": value})
+
+
+def test_face_match_threshold_accepts_one():
+    assert load_settings({"FACE_MATCH_THRESHOLD": "1"}).face_match_threshold == 1.0
+
+
+def test_non_blank_values_are_trimmed():
+    s = load_settings({"S3_BUCKET": " studio-media\t", "WORKER_LOG_LEVEL": " DEBUG "})
+    assert s.s3_bucket == "studio-media"
+    assert s.log_level == "DEBUG"
+    assert is_production({"APP_ENV": " production "}) is True
+
+
+@pytest.mark.parametrize("bad", ["prod", "Production", "staging"])
+def test_unrecognised_node_env_is_reported(bad):
+    warnings = config_warnings({"NODE_ENV": bad})
+    assert any(w.startswith("NODE_ENV ") for w in warnings)
+
+
+def test_unrecognised_node_env_warning_does_not_echo_the_value():
+    assert all("qa-cluster-7" not in w for w in config_warnings({"NODE_ENV": "qa-cluster-7"}))
+
+
+def test_recognised_node_env_is_not_reported():
+    for ok in ["development", "test"]:
+        assert config_warnings({"NODE_ENV": ok}) == []
+
+
 def test_overrides_are_read_and_inline_comments_stripped():
     s = load_settings({"FACE_MATCH_THRESHOLD": "0.5   # tuned", "WORKER_PORT": "9000"})
     assert s.face_match_threshold == 0.5
@@ -122,7 +162,7 @@ def test_empty_app_env_counts_as_unset():
     assert config_warnings({"APP_ENV": ""}) == []
 
 
-@pytest.mark.parametrize("bad", ["prod", "Production", "PRODUCTION", " production"])
+@pytest.mark.parametrize("bad", ["prod", "Production", "PRODUCTION", "pro duction"])
 def test_unrecognised_app_env_is_reported_and_ignored(bad):
     warnings = config_warnings({"APP_ENV": bad})
     assert len(warnings) == 1 and warnings[0].startswith("APP_ENV ")

@@ -63,9 +63,10 @@ FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
 
 
 def _value(environ: Mapping[str, str], key: str) -> str | None:
-    """The variable's value, or None when it is unset or blank (`KEY=` in a dotenv file means unset)."""
+    """The trimmed value, or None when unset or blank (`KEY=` means unset). Same rule as withoutBlanks() in env.ts."""
     v = environ.get(key)
-    return v if v is not None and v.strip() != "" else None
+    v = v.strip() if v is not None else None
+    return v or None
 
 
 def _app_env(environ: Mapping[str, str]) -> str | None:
@@ -95,6 +96,8 @@ def config_warnings(environ: Mapping[str, str]) -> list[str]:
     out: list[str] = []
     if _value(environ, "APP_ENV") is not None and _app_env(environ) is None:
         out.append(f"APP_ENV is not one of {', '.join(APP_ENVS)} and is ignored; the production checks follow NODE_ENV")
+    if _value(environ, "NODE_ENV") is not None and _value(environ, "NODE_ENV") not in APP_ENVS:
+        out.append(f"NODE_ENV is not one of {', '.join(APP_ENVS)} (web/admin refuse to start with it)")
     if _value(environ, "NODE_ENV") == "production" and _app_env(environ) != "production":
         out.append("NODE_ENV=production but APP_ENV is not 'production'; set APP_ENV=production on every service (docs/deploy/env.md)")
     return out + production_warnings(environ)
@@ -169,6 +172,9 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         return value
 
     thr = _float(get("FACE_MATCH_THRESHOLD"))
+    if not 0 < thr <= 1:
+        # same range as env.ts: a threshold <= 0 would match every face
+        raise ValueError("FACE_MATCH_THRESHOLD must be greater than 0 and at most 1")
     cluster = _value(env, "FACE_CLUSTER_DISTANCE")
     return Settings(
         database_url=get("DATABASE_URL"),

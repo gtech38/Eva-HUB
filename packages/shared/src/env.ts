@@ -1,13 +1,16 @@
 import { z } from "zod";
 
 /**
- * A copy of the environment without blank values: `KEY=` (or whitespace only) means unset, so the default
- * applies or a required key is reported as missing. Same rule as `_value()` in the worker's config.py.
- * Without it `z.coerce.number()` turns "" into 0, e.g. FACE_MATCH_THRESHOLD=0 would match every face.
+ * A trimmed copy of the environment without blank values: `KEY=` (or whitespace only) means unset, so the default
+ * applies or a required key is reported as missing, and other values lose surrounding whitespace. Same rule as
+ * `_value()` in the worker's config.py. Without it `z.coerce.number()` turns "" into 0.
  */
 export function withoutBlanks(source: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(source)) if (v !== undefined && v.trim() !== "") out[k] = v;
+  for (const [k, v] of Object.entries(source)) {
+    const trimmed = v?.trim();
+    if (trimmed) out[k] = trimmed;
+  }
   return out;
 }
 
@@ -60,7 +63,7 @@ const schema = z.object({
   INVITE_SESSION_TTL_DAYS: z.coerce.number().default(90),
 
   WORKER_INTERNAL_URL: z.string().default("http://localhost:8010"),
-  FACE_MATCH_THRESHOLD: z.coerce.number().default(0.363),
+  FACE_MATCH_THRESHOLD: z.coerce.number().gt(0).lte(1).default(0.363),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -87,21 +90,27 @@ export function secretBytes(secret: string): number | null {
   return null;
 }
 
-/** localhost, *.localhost, 127.0.0.0/8, ::1, 0.0.0.0, or no host at all. */
+/**
+ * True unless the value names a usable non-loopback host: localhost (with or without a trailing dot), *.localhost,
+ * 127.0.0.0/8, ::1, IPv4-mapped loopback, 0.0.0.0, no host at all, or anything that does not parse as a host
+ * (a bare "::1", "http://") all count.
+ */
 function isLoopback(value: string): boolean {
-  let host = value.trim();
+  const raw = value.trim();
+  let host: string;
   try {
-    host = new URL(host.includes("://") ? host : `http://${host}`).hostname;
+    host = new URL(raw.includes("://") ? raw : `http://${raw}`).hostname;
   } catch {
-    // not a URL (a bare "::1", say): compare the raw text
+    return true;
   }
-  host = host.replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  host = host.replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "").toLowerCase();
   return (
     host === "" ||
     host === "localhost" ||
     host.endsWith(".localhost") ||
     /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
     host === "::1" ||
+    /^::ffff:(127\.|7f[0-9a-f]{2}:)/.test(host) ||
     host === "0.0.0.0"
   );
 }
