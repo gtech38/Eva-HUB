@@ -77,6 +77,27 @@ describe.skipIf(!dbUp)(suite, () => {
     expect(await expiresAt(t.id)).toEqual(original);
   });
 
+  it("never revives a token that has already expired", async () => {
+    const { event, guest } = await makeEvent(`${run}-g`, d("2027-08-01T00:00:00Z"));
+    const past = new Date(Date.now() - DAY);
+    const dead = await token(guest.id, past);
+    const live = await token(guest.id, d("2027-01-01T00:00:00Z"));
+
+    expect(await extendInviteTokens(studioId, event.id)).toMatchObject({ count: 1 });
+    expect(await expiresAt(dead.id)).toEqual(past);
+    expect(await expiresAt(live.id)).toEqual(new Date(d("2027-08-01T00:00:00Z").getTime() + 90 * DAY));
+  });
+
+  it("leaves tokens of removed guests alone", async () => {
+    const { event, guest } = await makeEvent(`${run}-h`, d("2027-08-01T00:00:00Z"));
+    const exp = d("2027-01-01T00:00:00Z");
+    const t = await token(guest.id, exp);
+    await prisma.guest.update({ where: { id: guest.id }, data: { deletedAt: new Date() } });
+
+    expect(await extendInviteTokens(studioId, event.id)).toMatchObject({ count: 0 });
+    expect(await expiresAt(t.id)).toEqual(exp);
+  });
+
   it("leaves tokens of other events alone", async () => {
     const mine = await makeEvent(`${run}-c`, d("2027-06-01T00:00:00Z"));
     const other = await makeEvent(`${run}-d`, d("2027-06-01T00:00:00Z"));

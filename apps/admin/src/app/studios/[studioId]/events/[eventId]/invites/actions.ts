@@ -9,12 +9,12 @@ import { authorize, requireSignedIn } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { inviteExpiry } from "@hub/shared/invites";
 import { buildMessages, type Ev, type G } from "@/lib/invites";
+import { eventWithDates } from "@/lib/inviteTokens";
 
 const base = (studioId: string, eventId: string) => `/studios/${studioId}/events/${eventId}/invites`;
 
-/** The event plus the sub-event dates `inviteExpiry()` needs, scoped to the studio. */
 async function loadEvent(studioId: string, eventId: string) {
-  const event = await prisma.event.findFirst({ where: { id: eventId, studioId }, include: { subEvents: { select: { startsAt: true, endsAt: true } } } });
+  const event = await eventWithDates(studioId, eventId);
   if (!event) throw new Error("Event not found");
   return event;
 }
