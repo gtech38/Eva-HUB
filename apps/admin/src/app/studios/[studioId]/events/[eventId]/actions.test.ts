@@ -15,6 +15,12 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth")>()),
   requireSignedIn: async () => principal,
 }));
+// Lets one test simulate the token re-extension failing after the settings write committed.
+let failExtend = false;
+vi.mock("@/lib/inviteTokens", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/inviteTokens")>();
+  return { ...real, extendInviteTokens: (...a: Parameters<typeof real.extendInviteTokens>) => (failExtend ? Promise.reject(new Error("extend failed")) : real.extendInviteTokens(...a)) };
+});
 
 const { saveSubEvent, updateEventSettings } = await import("./actions");
 
@@ -104,5 +110,21 @@ describe.skipIf(!dbUp)(suite, () => {
     const want = new Date(new Date("2027-03-20T00:00:00").getTime() + 90 * DAY);
     expect(await expiry(active.id)).toEqual(want);
     expect(await extendAudits(event.id)).toHaveLength(1);
+  });
+
+  it("a failed re-extension does not fail the committed settings save or skip its audit", async () => {
+    const { event, active, original } = await fixture(new Date("2027-03-01T00:00:00Z"));
+    failExtend = true;
+    try {
+      const r = await updateEventSettings(null, form(event.id, {
+        "title.en": event.slug, slug: event.slug, startsOn: "2027-03-25", timezone: "America/Chicago", status: "DRAFT",
+        theme: "LUXURY", enabledLocales: "en", defaultLocale: "en", faceIndexRetentionDays: "",
+      }));
+      expect(r).toMatchObject({ ok: true });
+    } finally {
+      failExtend = false;
+    }
+    expect(await expiry(active.id)).toEqual(original);
+    expect(await prisma.auditLog.count({ where: { studioId, eventId: event.id, action: "event.settings.update" } })).toBe(1);
   });
 });

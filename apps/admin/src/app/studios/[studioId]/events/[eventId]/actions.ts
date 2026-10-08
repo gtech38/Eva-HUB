@@ -17,11 +17,19 @@ async function loadEvent(studioId: string, eventId: string) {
   return e;
 }
 
-/** A date change may move the event end later: keep live invitation links valid until end + 90 d. */
+/**
+ * A date change may move the event end later: keep live invitation links valid until end + 90 d.
+ * Runs after the date write has committed, so a failure here is logged, not returned: the save
+ * itself succeeded and the next date change (or a resend) re-extends.
+ */
 async function reextendInvites(actorUserId: string, studioId: string, eventId: string) {
-  const r = await extendInviteTokens(studioId, eventId);
-  if (r && r.count > 0) {
-    await audit({ studioId, eventId, actorUserId, action: "invite.extend", target: eventId, data: { count: r.count, expiresAt: r.expiresAt.toISOString() } });
+  try {
+    const r = await extendInviteTokens(studioId, eventId);
+    if (r && r.count > 0) {
+      await audit({ studioId, eventId, actorUserId, action: "invite.extend", target: eventId, data: { count: r.count, expiresAt: r.expiresAt.toISOString() } });
+    }
+  } catch (e) {
+    console.error("[invite.extend] failed", { studioId, eventId }, e);
   }
 }
 
