@@ -84,6 +84,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Env docs in sync (docs/deploy/env.md, .env.example)
+        run: node scripts/env-docs.mjs --check
+
       - name: Prisma generate + migrate + drift check
         working-directory: packages/db
         run: |
