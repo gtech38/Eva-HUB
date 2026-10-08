@@ -7,7 +7,10 @@
  * (`getEvent(studioId, eventId)`) before passing `eventId` here.
  */
 import { Prisma, prisma } from "@hub/db";
-import { cancelRefusal, RECENT_WINDOW_MS, type Heartbeat, type JobBucket, type JobStatusName } from "./jobs";
+import {
+  cancelRefusal, etaSeconds, RECENT_WINDOW_MS, summarizeJobs, workerStatuses,
+  type Heartbeat, type JobBucket, type JobsSummary, type JobStatusName, type WorkerStatus,
+} from "./jobs";
 
 export type JobScope = { eventId?: string };
 
@@ -67,7 +70,19 @@ export async function loadWorkers(): Promise<{ beats: Heartbeat[]; busyIds: stri
   return { beats, busyIds: running.map((r) => r.lockedBy!) };
 }
 
-const scopedWhere = (id: bigint, scope: JobScope): Prisma.JobWhereInput =>
+export type JobHealth = { now: Date; summary: JobsSummary; workers: WorkerStatus[]; live: number; eta: number | null };
+
+/** Everything the dashboard block renders. Workers are global: any consumer serves every event. */
+export async function loadJobHealth(scope: JobScope = {}): Promise<JobHealth> {
+  const now = new Date();
+  const [buckets, { beats, busyIds }] = await Promise.all([loadJobBuckets(now, scope), loadWorkers()]);
+  const summary = summarizeJobs(buckets, now);
+  const workers = workerStatuses(beats, busyIds, now);
+  const live = workers.filter((w) => w.live).length;
+  return { now, summary, workers, live, eta: etaSeconds(summary.types, live) };
+}
+
+const scopedWhere =(id: bigint, scope: JobScope): Prisma.JobWhereInput =>
   scope.eventId ? { id, payload: { path: ["eventId"], equals: scope.eventId } } : { id };
 
 export type CancelResult = { ok: true; type: string } | { ok: false; error: string };

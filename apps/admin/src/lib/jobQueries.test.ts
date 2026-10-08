@@ -8,7 +8,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
-import { cancelJob, loadJobBuckets, loadWorkers, retryDeadOfType } from "./jobQueries";
+import { cancelJob, loadJobBuckets, loadJobHealth, loadWorkers, retryDeadOfType } from "./jobQueries";
 
 const run = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
 const T = `TEST_ADM022_${run}`;
@@ -95,6 +95,18 @@ describe.skipIf(!dbUp)(suite, () => {
 
     const all = await loadJobBuckets(now);
     expect(all.some((b) => b.type === type && b.status === "RUNNING")).toBe(true);
+  });
+
+  it("loadJobHealth composes the event's summary, live workers and ETA", async () => {
+    const type = `${T}_HEALTH`;
+    const eventId = `${EVENT}-health`;
+    await make({ type, eventId, status: "SUCCEEDED", lockedAt: new Date(Date.now() - 4000), finishedAt: new Date(Date.now() - 1000) });
+    await make({ type, eventId, status: "RUNNING", lockedBy: `${WORKER}-health`, lockedAt: new Date() });
+    const h = await loadJobHealth({ eventId });
+    expect(h.summary.types.map((t) => t.type)).toEqual([type]);
+    expect(h.summary.total).toMatchObject({ running: 1, succeededLastHour: 1, p50Ms: 3000 });
+    expect(h.eta).toBe(0); // nothing due
+    expect(h.live).toBe(h.workers.filter((w) => w.live).length);
   });
 
   it("loads heartbeats and the lock holders of RUNNING jobs", async () => {
