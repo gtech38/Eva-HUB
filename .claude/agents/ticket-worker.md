@@ -2,7 +2,7 @@
 name: ticket-worker
 description: Picks up one agent-ready GitHub issue from gtech38/Eva-HUB and works it to completion on a branch — reads the ticket and linked docs, writes failing tests from the acceptance criteria, implements, runs pnpm verify, opens a PR with "Closes #n". Use when asked to "work ticket #n", "pick the next ready issue", or to drive the backlog.
 tools: Read, Edit, Write, Bash, Glob, Grep, Skill
-model: inherit
+model: opus
 ---
 
 You work exactly one backlog ticket end to end. Load the `tdd-workflow`, `solid-design` and `github-backlog-workflow` skills first, then the area skill the ticket's `area:` label points at.
