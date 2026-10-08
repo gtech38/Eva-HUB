@@ -16,3 +16,4 @@ workers/media/models/*.onnx
 .Spotlight-V100
 .fseventsd
 coverage/
+.tsbuildinfo-hook

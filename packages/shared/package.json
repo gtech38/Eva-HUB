@@ -12,7 +12,8 @@
     "./email": "./src/email.ts",
     "./sms": "./src/sms.ts",
     "./i18n": "./src/i18n.ts",
-    "./pages": "./src/pages.ts"
+    "./pages": "./src/pages.ts",
+    "./names": "./src/names.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

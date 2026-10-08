@@ -1,6 +1,6 @@
 import { prisma } from "@hub/db";
 import { can } from "@hub/shared";
-import { getEvent, getStudio, THEMES } from "@/lib/data";
+import { getEvent, getStudio, THEMES, EVENT_KINDS } from "@/lib/data";
 import { requireAdmin } from "@/lib/auth";
 import { Card, Field, LocalizedInputs } from "@/components/ui";
 import { ActionForm, ActionButton, FieldError } from "@/components/forms";
@@ -37,6 +37,10 @@ export default async function EventSettingsPage({ params }: { params: Promise<{ 
               <Field label="Slug" name="slug" help={`${event.slug}.${rootDomain} — changing it moves the hostname.`}><input id="slug" name="slug" className="input font-mono" defaultValue={event.slug} required /><FieldError name="slug" /></Field>
               <Field label="Date" name="startsOn"><input id="startsOn" name="startsOn" type="date" className="input" defaultValue={toDateInput(event.startsOn)} /><FieldError name="startsOn" /></Field>
               <Field label="Timezone" name="timezone"><input id="timezone" name="timezone" className="input" defaultValue={event.timezone} /><FieldError name="timezone" /></Field>
+              <Field label="Kind of event" name="kind" help="Themes read this to choose their wording.">
+                <select id="kind" name="kind" className="input" defaultValue={event.kind}>{EVENT_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
+                <FieldError name="kind" />
+              </Field>
               <Field label="Status" name="status" help="LIVE makes the site visible to invited guests.">
                 <select id="status" name="status" className="input" defaultValue={event.status}>{["DRAFT", "LIVE", "COMPLETED", "ARCHIVED"].map((s) => <option key={s}>{s}</option>)}</select>
                 <FieldError name="status" />

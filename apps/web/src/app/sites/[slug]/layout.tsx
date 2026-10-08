@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
+import { eventCopy, hostsPageLabel } from "@/lib/eventCopy";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { t, ui, isLocale, type Locale } from "@hub/shared/i18n";
@@ -38,7 +39,7 @@ function buildNav(site: SiteContext): NavItem[] {
     .map((ty) => {
       const href = PAGE_PATHS[ty];
       const key = NAV_LABEL[ty];
-      return { href, label: key ? ui(key, locale) : "Wedding Party", current: href === "/" ? path === "/" : path.startsWith(href) };
+      return { href, label: key ? ui(key, locale) : hostsPageLabel(site.event.kind, locale), current: href === "/" ? path === "/" : path.startsWith(href) };
     });
 }
 
@@ -51,10 +52,11 @@ export default async function SiteLayout({ children }: { children: ReactNode }) 
   const title = t(event.title as object, locale);
   const locales = event.enabledLocales.filter(isLocale) as Locale[];
   const style = theme.vars as CSSProperties;
+  const copy = eventCopy(event.kind, locale);
 
   const shell = (viewerName: string | null, body: ReactNode) => (
-    <div style={style} className={theme.rootClass ?? ""} data-theme={event.theme} lang={locale}>
-      <theme.Shell title={title} monogram={monogram} nav={buildNav(site)} locale={locale} locales={locales} brand={brand} viewerName={viewerName}>
+    <div style={style} className={`min-h-dvh bg-bg text-fg ${theme.rootClass ?? ""}`} data-theme={event.theme} lang={locale}>
+      <theme.Shell title={title} monogram={monogram} nav={buildNav(site)} locale={locale} locales={locales} brand={brand} copy={copy} viewerName={viewerName}>
         {body}
       </theme.Shell>
     </div>
