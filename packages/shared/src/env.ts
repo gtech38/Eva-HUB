@@ -62,11 +62,33 @@ const schema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().default(30),
   INVITE_SESSION_TTL_DAYS: z.coerce.number().default(90),
 
+  TRUSTED_PROXY_HOPS: z.string().regex(/^\d+$/).default("1").pipe(z.coerce.number().int().min(1).max(10)), // digits only; read by clientIp.ts
+  RATE_LIMIT_SIGN_IN_IP: z.string().optional(), // RATE_LIMIT_*: "max/windowSec", parsed and bounded by ratePolicies.ts
+  RATE_LIMIT_SIGN_IN_ADDRESS_IP: z.string().optional(),
+  RATE_LIMIT_SIGN_IN_ADDRESS: z.string().optional(),
+  RATE_LIMIT_OTP_VERIFY_ADDRESS: z.string().optional(),
+  RATE_LIMIT_INVITE_IP: z.string().optional(),
+  RATE_LIMIT_FACE_SEARCH_USER: z.string().optional(),
+  RATE_LIMIT_FACE_SEARCH_CONCURRENT: z.string().optional(),
+  RATE_LIMIT_ADMIN_MAGIC_LINK_IP: z.string().optional(),
+  RATE_LIMIT_ADMIN_MAGIC_LINK_ADDRESS_IP: z.string().optional(),
+  RATE_LIMIT_ADMIN_MAGIC_LINK_ADDRESS: z.string().optional(),
+
   WORKER_INTERNAL_URL: z.string().default("http://localhost:8010"),
   FACE_MATCH_THRESHOLD: z.coerce.number().gt(0).lte(1).default(0.363),
 });
 
 export type Env = z.infer<typeof schema>;
+
+/**
+ * TRUSTED_PROXY_HOPS through the schema's own rule (so boot validation and env() cannot disagree),
+ * without requiring the rest of the environment. Throws a message naming the variable.
+ */
+export function parseTrustedProxyHops(source: Record<string, string | undefined> = process.env): number {
+  const r = schema.shape.TRUSTED_PROXY_HOPS.safeParse(withoutBlanks({ v: source.TRUSTED_PROXY_HOPS }).v);
+  if (!r.success) throw new Error(`TRUSTED_PROXY_HOPS must be an integer 1..10, got ${JSON.stringify(source.TRUSTED_PROXY_HOPS)}`);
+  return r.data;
+}
 
 /** APP_ENV wins over NODE_ENV, so `next start` can be smoke-tested locally with APP_ENV=development. */
 export function isProduction(e: Pick<Env, "NODE_ENV" | "APP_ENV">): boolean {

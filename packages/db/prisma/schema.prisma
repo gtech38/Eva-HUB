@@ -799,3 +799,15 @@ model WorkerHeartbeat {
   version    String?
   hostname   String?
 }
+
+/// Fixed-window counters and concurrency leases (packages/shared/src/ratelimit.ts, SHR-003).
+/// `key` is HMAC-SHA256(AUTH_SECRET, "<policy>:<value>"): raw addresses, IPs and user ids are never stored.
+/// Platform-wide by design (limits apply per address/IP, not per tenant); no studioId/eventId.
+/// Written only by one INSERT ... ON CONFLICT DO UPDATE per hit; rows past resetAt are swept.
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime @db.Timestamptz(3)
+
+  @@index([resetAt])
+}

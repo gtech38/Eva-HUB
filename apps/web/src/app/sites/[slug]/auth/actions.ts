@@ -5,6 +5,9 @@ import { email, sms } from "@hub/shared";
 import { newToken, hashToken, normalizeContact } from "@hub/shared/auth";
 import { eventOrigin } from "@hub/shared/env";
 import { t, ui } from "@hub/shared/i18n";
+import { addressAtIp, rateLimits } from "@hub/shared/ratePolicies";
+import { clientIp } from "@hub/shared/clientIp";
+import { headers } from "next/headers";
 import { getSite } from "@/lib/site";
 
 export type SignInState = { message: string } | null;
@@ -25,6 +28,10 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
   if (!contact) return done;
 
   try {
+    // Before any guest-list lookup, so on-list and off-list addresses are counted identically.
+    // Over the limit: same sentence, nothing sent (SHR-003).
+    if (!(await withinSignInLimits(contact.value, event))) return done;
+
     // Who is this address? A guest of THIS event, or a member (host/planner/staff) whose verified contact matches.
     const guestWhere = contact.kind === "EMAIL" ? { email: contact.value } : { phone: contact.value };
     const [guests, contactPoint] = await Promise.all([
@@ -94,6 +101,18 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
     console.error("[sign-in] failed", err);
   }
   return done;
+}
+
+/**
+ * Per IP first (so one client spraying addresses does not also use up those addresses), then the
+ * strict per-(address, IP) limit, then the looser address-only cap. Each stops at the first refusal.
+ */
+async function withinSignInLimits(address: string, event: { id: string; studioId: string }) {
+  const ctx = { studioId: event.studioId, eventId: event.id };
+  const ip = clientIp(await headers());
+  if (!(await rateLimits.check("signInIp", ip, ctx)).ok) return false;
+  if (!(await rateLimits.check("signInAddressIp", addressAtIp(address, ip), ctx)).ok) return false;
+  return (await rateLimits.check("signInAddress", address, ctx)).ok;
 }
 
 function escapeHtml(s: string) {

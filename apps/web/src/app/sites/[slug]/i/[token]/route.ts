@@ -6,6 +6,10 @@ import { setSessionCookie } from "@/lib/session";
 import { fullName } from "@/lib/format";
 import { inviteUsable } from "@/lib/inviteLink";
 import { INVITE_EXPIRED_PATH } from "@/lib/inviteNotice";
+import { rateLimits } from "@hub/shared/ratePolicies";
+import type { LimitResult } from "@hub/shared/ratelimit";
+import { clientIp } from "@hub/shared/clientIp";
+import { ui } from "@hub/shared/i18n";
 
 export const dynamic = "force-dynamic";
 
@@ -15,11 +19,24 @@ export const dynamic = "force-dynamic";
  * later than the token. Every dead link (expired, revoked, unknown, another event's) gets the same
  * answer: the sign-in form with an expiry heading, no cookie, token not stamped.
  */
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: string }> }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ token: string }> }) {
   const site = await getSite();
   if (!site) return new NextResponse("Not found", { status: 404 });
   const origin = siteOrigin(site);
   const { token } = await ctx.params;
+
+  // Token-guessing guard (SHR-003): counted before the lookup, so the answer cannot depend on the token.
+  // If the limiter itself fails, refuse (503) rather than let unlimited guesses through.
+  const plain = (status: number, text: string, extra: Record<string, string> = {}) =>
+    new NextResponse(text, { status, headers: { "Cache-Control": "private, no-store", "Content-Type": "text/plain; charset=utf-8", ...extra } });
+  let limited: LimitResult;
+  try {
+    limited = await rateLimits.check("inviteIp", clientIp(req.headers), { studioId: site.event.studioId, eventId: site.event.id });
+  } catch (err) {
+    console.error("[invite-link] rate limiter unavailable", (err as Error).message);
+    return plain(503, ui("temporarilyUnavailable", site.locale), { "Retry-After": "60" });
+  }
+  if (!limited.ok) return plain(429, ui("tooManyRequests", site.locale), { "Retry-After": String(limited.retryAfterSec) });
 
   const invite = await prisma.inviteToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { guest: true } });
   const now = new Date();

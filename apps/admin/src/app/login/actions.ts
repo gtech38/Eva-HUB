@@ -3,7 +3,23 @@
 import { z } from "zod";
 import { prisma } from "@hub/db";
 import { email, env, hashToken, newToken, normalizeContact } from "@hub/shared";
+import { addressAtIp, rateLimits } from "@hub/shared/ratePolicies";
+import { clientIp } from "@hub/shared/clientIp";
+import { headers } from "next/headers";
 import { act, EmailSchema, type ActionState } from "@/lib/action";
+
+/** Per IP, then per (address, IP), then the looser address-only cap. A limiter error counts as "no". */
+async function withinMagicLinkLimits(address: string): Promise<boolean> {
+  try {
+    const ip = clientIp(await headers());
+    if (!(await rateLimits.check("adminMagicLinkIp", ip)).ok) return false;
+    if (!(await rateLimits.check("adminMagicLinkAddressIp", addressAtIp(address, ip))).ok) return false;
+    return (await rateLimits.check("adminMagicLinkAddress", address)).ok;
+  } catch (err) {
+    console.error("[admin-login] rate limiter unavailable", (err as Error).message);
+    return false;
+  }
+}
 
 const Schema = z.object({ email: EmailSchema("Enter a valid email address") });
 
@@ -14,6 +30,9 @@ export async function requestMagicLink(_prev: ActionState, fd: FormData): Promis
     const { email: raw } = Schema.parse({ email: (fd.get("email") ?? "").toString().trim() });
     const contact = normalizeContact(raw);
     if (!contact || contact.kind !== "EMAIL") return { ok: true, message: SAME_MESSAGE };
+    // Before the account lookup so members and strangers are counted alike; over the limit (or if
+    // the limiter itself fails) nothing is sent or written and the reply does not change (SHR-003).
+    if (!(await withinMagicLinkLimits(contact.value))) return { ok: true, message: SAME_MESSAGE };
 
     const cp = await prisma.contactPoint.findUnique({
       where: { kind_value: { kind: "EMAIL", value: contact.value } },

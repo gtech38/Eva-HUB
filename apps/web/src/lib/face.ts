@@ -12,4 +12,5 @@ export type FaceSearchReason =
   | "unavailable"
   | "no_face"
   | "multiple_faces"
+  | "rate_limited"
   | string;
