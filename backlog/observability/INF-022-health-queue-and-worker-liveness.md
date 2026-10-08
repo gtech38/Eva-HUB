@@ -1,5 +1,5 @@
 ---
-id: INF-021
+id: INF-022
 title: Expose queue.oldestDueSec and workers.live in the admin health endpoint
 labels: [type:feature, area:infra, area:admin, priority:p2, size:S, agent-ready]
 milestone: Phase 1 — MVP
@@ -8,7 +8,7 @@ epic: EPIC-OBS
 ---
 
 ## Context
-Deferred from ADM-022 (PR for #74): the jobs dashboard computes queue health, and its scope said the health endpoint (INF-014) "exposes `queue.oldestDueSec` and `workers.live` for alerting". INF-014 has not landed, so there is no admin `/api/health` to extend yet. ADM-022 shipped the pieces: `queueHealth(summary, live)` in `apps/admin/src/lib/jobs.ts` (pure, tested) and `loadJobHealth()` in `apps/admin/src/lib/jobQueries.ts` (one raw aggregate + heartbeat lookup).
+Deferred from ADM-022 (PR for #74): the jobs dashboard computes queue health, and its scope said the health endpoint (INF-014) "exposes `queue.oldestDueSec` and `workers.live` for alerting". INF-014 has not landed, so there is no admin `/api/health` to extend yet. ADM-022 shipped the pieces: `queueHealth(summary, live)` in `apps/admin/src/lib/jobs.ts` (pure, tested) and `loadJobHealth()` in `apps/admin/src/lib/jobQueries.ts` (counting aggregate, percentile query and heartbeat lookup, about 45 ms each at 100k Job rows; a health probe that polls often should skip the percentile query and use only `loadJobBuckets` and `loadWorkers`).
 
 ## Scope
 - In the admin health route from INF-014, add a `queue` and `workers` section built with `queueHealth(...)` from `loadJobHealth()`: `{ queue: { depth, oldestDueSec, retrying, dead }, workers: { live } }`.
