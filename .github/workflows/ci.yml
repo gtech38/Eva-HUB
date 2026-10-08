@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -35,6 +35,21 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: |
           echo "$BODY" | grep -q 'How I verified' || { echo "::error::PR body must keep the 'How I verified' section from the template"; exit 1; }
+      - name: "Branch flow: feature -> dev -> main"
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          case "$BASE" in
+            main)
+              [ "$HEAD" = "dev" ] || { echo "::error::Only 'dev' may open a PR into main (promotion). Target 'dev' instead."; exit 1; }
+              echo "$TITLE" | grep -Eq '^chore\(release\): ' || { echo "::error::Promotion PRs are titled 'chore(release): …'"; exit 1; } ;;
+            dev)
+              case "$HEAD" in main|dev) echo "::error::Open feature PRs from a ticket branch, not '$HEAD'."; exit 1 ;; esac ;;
+            *) echo "::error::PRs must target 'dev' (features) or 'main' (promotion from dev)."; exit 1 ;;
+          esac
+          echo "ok: $HEAD -> $BASE"
 
   verify:
     name: verify

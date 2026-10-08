@@ -7,8 +7,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac   # branch deletion
   case "$local_ref" in refs/tags/*) continue ;; esac
   case "$remote_ref" in
-    refs/heads/main|refs/heads/master)
-      echo "pre-push: direct pushes to main are blocked. Open a PR from a branch." >&2
+    refs/heads/main|refs/heads/master|refs/heads/dev)
+      echo "pre-push: direct pushes to ${remote_ref#refs/heads/} are blocked. Open a PR (features -> dev, dev -> main)." >&2
       exit 1 ;;
   esac
   branch="${local_ref#refs/heads/}"

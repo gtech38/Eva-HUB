@@ -78,8 +78,9 @@ hundred tickets is safe to run repeatedly.
 | `status:ready` | sync | `agent-ready`, unblocked and nobody is on it — what agents filter on |
 | `status:in-progress` | agent / person | Someone is working on it; set when you start |
 | `status:review` | agent / person | A PR is open and awaiting review |
+| `status:in-dev` | agent / person | Merged into `dev`; the issue closes automatically when `dev` is promoted to `main` (closing keywords only act on the default branch) |
 
-The sync never removes `status:in-progress` or `status:review`, does not add `status:ready`
+The sync never removes `status:in-progress`, `status:review` or `status:in-dev`, does not add `status:ready`
 while either is present, and adds no status labels to closed issues. The
 `github-backlog-workflow` skill (`.claude/skills/`) is what sets and clears the two
 agent-owned labels as a ticket moves through the workflow below.
@@ -96,9 +97,10 @@ agent-owned labels as a ticket moves through the workflow below.
 ## Working a ticket (for agents)
 
 1. `gh issue view <n>` and read the linked docs sections. Add `status:in-progress`.
-2. Create a branch `<id-lowercase>/<slug>` from `main`.
+2. Create a branch `<id-lowercase>/<slug>` from `dev` (`git checkout dev && git pull`).
 3. Write the failing test(s) that encode the acceptance criteria first; run them; watch them fail.
 4. Implement until green. Keep the hooks happy (`.claude/hooks/`); see [CONTRIBUTING.md](../CONTRIBUTING.md).
 5. `pnpm verify` (typecheck + tests + python tests) must pass.
-6. Open a PR titled `<id>: <title>` with `Closes #<n>`. Fill the PR template. Swap `status:in-progress` for `status:review`.
+6. Open a PR **into `dev`** titled `<id>: <title>` with `Closes #<n>`. Fill the PR template. Swap `status:in-progress` for `status:review`.
+7. After the squash-merge into `dev`, swap `status:review` for `status:in-dev`. The issue closes when the next `chore(release)` promotion lands on `main`.
 7. Tick the acceptance boxes in the PR description; leave a short "how I verified" note.
