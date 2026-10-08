@@ -14,7 +14,8 @@
     "./i18n": "./src/i18n.ts",
     "./pages": "./src/pages.ts",
     "./names": "./src/names.ts",
-    "./consent": "./src/consent.ts"
+    "./consent": "./src/consent.ts",
+    "./invites": "./src/invites.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

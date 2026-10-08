@@ -3,6 +3,10 @@
 `conn`   module-scoped autocommit connection; skips the module when Postgres is unreachable.
 `queue`  an `IsolatedJobQueue`: a private job type per test, claims restricted to that type and
          asserted by id, and teardown that deletes every Job row created during the test.
+`tenant` a throwaway Studio + Event (`tests/tenants.py`) with helpers for users, photos and faces.
+         Teardown deletes, in one transaction, the event's PhotoMatch/Face/FaceCluster/Photo/ZipExport/
+         AuditLog rows, the event, the studio and the users it made. A module-scoped sweep removes
+         prefixed test tenants older than an hour, left by killed runs.
 
 These tests must not share a database with a running consumer (`make dev` / `make consume`):
 a consumer without `only_types` claims every due row, including TEST_* ones. Point the suite
@@ -19,6 +23,7 @@ import pytest
 
 from hub_worker import jobs
 from hub_worker.db import connect
+from tenants import Tenant, sweep_stale_tenants
 
 WORKER_ID = "pytest"
 CLAIM_TIMEOUT_S = 0.25  # long enough for timestamp(3) rounding, short enough to expose a real delay
@@ -107,3 +112,20 @@ def queue(conn, stale_test_jobs_swept, request, monkeypatch):
     monkeypatch.setattr(jobs, "enqueue", tracked_enqueue)
     yield q
     q.cleanup()
+
+
+@pytest.fixture(scope="module")
+def stale_tenants_swept(conn):
+    """Recover from killed runs: drop test-studio-/test-event-/test-user- rows older than an hour."""
+    sweep_stale_tenants(conn)
+
+
+@pytest.fixture
+def tenant(conn, stale_tenants_swept):
+    """A private Studio + Event (`tests/tenants.py`); cleaned up even when setup or the test fails."""
+    t = Tenant(conn)
+    try:
+        t.create()
+        yield t
+    finally:
+        t.cleanup()
