@@ -85,26 +85,45 @@ Exit code 0 and `RESULT: PASS` means all of these hold for that event in that da
 | `PhotoMatch` / `BiometricConsent` (INFO) | rows kept on purpose; see biometrics.md |
 
 Removing DEAD index jobs for one event (platform operator; `ref` is a ticket id, as in 2.2). It deletes
-only dead `INDEX_FACES`/`PROCESS_PHOTO` rows whose photo belongs to the event, and audits the count:
+only dead `INDEX_FACES`/`PROCESS_PHOTO` rows whose photo belongs to the event, in a transaction you
+confirm, and audits the count and the job ids (the audit row has no actor, so `operator` goes into
+its `data`). **The deletion is irreversible, and a dead `PROCESS_PHOTO` may carry a real processing
+error (a photo that never became READY):** read the preview, keep its `lastError` text in the
+ticket, and delete only what you intend; to keep a `PROCESS_PHOTO` row, add `AND type = 'INDEX_FACES'`
+to both statements. The test suite runs this block as written (rolled back), so keep it in step with
+the script's check.
 
 ```sql
-\set event_id  '<eventId>'
-\set studio_id '<studioId>'
-\set ref       '<ticket id>'
+\set event_id '<eventId>'
+\set ref      '<ticket id>'
+\set operator '<your name or id>'
+BEGIN;
+-- preview: exactly the rows the next statement deletes
+SELECT id, type, "lastError" FROM "Job"
+ WHERE type IN ('INDEX_FACES', 'PROCESS_PHOTO') AND status = 'DEAD'
+   AND payload->>'photoId' IN (SELECT id FROM "Photo" WHERE "eventId" = :'event_id')
+ ORDER BY id;
 WITH del AS (
   DELETE FROM "Job"
    WHERE type IN ('INDEX_FACES', 'PROCESS_PHOTO') AND status = 'DEAD'
      AND payload->>'photoId' IN (SELECT id FROM "Photo" WHERE "eventId" = :'event_id')
-  RETURNING type)
+  RETURNING id)
 INSERT INTO "AuditLog"("studioId", "eventId", action, target, data)
-SELECT NULLIF(:'studio_id', ''), :'event_id', 'job.delete', :'ref',
-       jsonb_build_object('reason', 'dead index jobs after biometric purge', 'count', count(*))
+SELECT (SELECT "studioId" FROM "Event" WHERE id = :'event_id'), :'event_id', 'job.delete', :'ref',
+       jsonb_build_object('reason', 'dead index jobs after biometric purge', 'operator', :'operator',
+                          'count', count(*), 'jobs', coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb))
   FROM del
 RETURNING data;
+-- check the count matches the preview, then:
+COMMIT;   -- or ROLLBACK;
 ```
 
-Until WRK-020 lands (it does not cover dead jobs; see its criteria), this and "do not press Retry dead
-for these types" are the only protection.
+If the check reports queued or running index jobs instead (FAIL), cancel the queued ones on the admin
+Jobs page, wait for the running ones to finish, purge again if they wrote faces, and re-run the check.
+
+Once WRK-020 lands, a revived index job finds the event purged and does nothing, and the purge itself
+removes dead `INDEX_FACES` rows; until then this statement and "do not press Retry dead for these
+types" are the only protection.
 
 Exit code 1 means a `FAIL` line: do not report the purge as done. Exit code 2 is a usage error, a
 refusal (missing or forbidden database name), or any failure to run the checks at all (cannot

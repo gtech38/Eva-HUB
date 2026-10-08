@@ -101,7 +101,9 @@ export async function verifyPurge(query, eventId) {
     "pending-jobs",
     pending.length === 0 ? "PASS" : "FAIL",
     "Queued or running INDEX_FACES / CLUSTER_FACES / PROCESS_PHOTO jobs (would rebuild the index)",
-    pending.length === 0 ? "none" : pending.map((j) => `#${j.id} ${j.type} ${j.status}`).join(", "),
+    pending.length === 0
+      ? "none"
+      : `${pending.map((j) => `#${j.id} ${j.type} ${j.status}`).join(", ")}: cancel the QUEUED ones on the admin Jobs page, wait for the RUNNING ones to finish, then purge again if faces were written and re-run this check`,
   );
 
   add(

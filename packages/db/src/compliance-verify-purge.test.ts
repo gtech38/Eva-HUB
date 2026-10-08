@@ -17,6 +17,7 @@
  */
 import "dotenv/config";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +32,37 @@ import {
   type Query,
 } from "../../../scripts/compliance/verify-purge.mjs";
 import { prisma } from "./index.ts";
+
+const RUNBOOK = fileURLToPath(new URL("../../../docs/compliance/runbook-biometric-deletion.md", import.meta.url));
+
+/**
+ * The statements of the sql block under "Removing DEAD index jobs" in the runbook, as psql would
+ * run them with `\set` variables, minus BEGIN/COMMIT/ROLLBACK (the test wraps them in its own
+ * rolled-back transaction). Throws if the block is missing or if the variables the block declares
+ * differ from the ones supplied, so the runbook text and this test cannot drift apart.
+ */
+function runbookDeadJobStatements(vars: Record<string, string>): string[] {
+  const md = readFileSync(RUNBOOK, "utf8");
+  const after = md.slice(md.indexOf("Removing DEAD index jobs"));
+  const m = /```sql\n([\s\S]*?)```/.exec(after);
+  if (!m || !md.includes("Removing DEAD index jobs")) throw new Error("runbook: DEAD-job sql block not found");
+  const declared = [...m[1].matchAll(/^\\set\s+(\w+)/gm)].map((x) => x[1]).sort();
+  expect(declared).toEqual(Object.keys(vars).sort());
+  const quote = (v: string) => `'${v.replace(/'/g, "''")}'`;
+  const body = m[1]
+    .split("\n")
+    .filter((l) => !l.startsWith("\\set"))
+    .map((l) => l.replace(/--.*$/, ""))
+    .join("\n")
+    .replace(/:'(\w+)'/g, (_, name: string) => {
+      if (!(name in vars)) throw new Error(`runbook sql uses :'${name}' which the test does not supply`);
+      return quote(vars[name]);
+    });
+  return body
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s && !/^(BEGIN|COMMIT|ROLLBACK)$/i.test(s));
+}
 
 const SCRIPT = fileURLToPath(new URL("../../../scripts/compliance/verify-purge.mjs", import.meta.url));
 const run = `test-leg005-${Date.now()}`;
@@ -375,7 +407,22 @@ describe.skipIf(!runDb)(runDb ? "verify-purge against Postgres" : `verify-purge 
     expect(dead?.detail).toMatch(/delete/i);
   });
 
+  it("the queued/running FAIL tells the operator what to do: cancel queued jobs, wait for running ones, then re-run", async () => {
+    const f = await fixture("pending-wording", { purged: true, pendingJob: "INDEX_FACES" });
+    const pending = (await verifyPurge(query, f.eventId)).checks.find((c) => c.id === "pending-jobs");
+    expect(pending?.status).toBe("FAIL");
+    expect(pending?.detail).toMatch(/cancel/i);
+    expect(pending?.detail).toMatch(/wait/i);
+  });
+
   // Scoping guards: another event's work must never change this event's verdict.
+  it("a queued CLUSTER_FACES job for another event (payload eventId branch) does not fail this event", async () => {
+    const mine = await fixture("scope-cluster-mine", { purged: true, faceSearch: false });
+    await fixture("scope-cluster-other", { purged: true, pendingJob: "CLUSTER_FACES" });
+    const result = await verifyPurge(query, mine.eventId);
+    expect(statusOf(result.checks, "pending-jobs")).toBe("PASS");
+  });
+
   it("a queued index job for another event's photo does not fail this event", async () => {
     const mine = await fixture("scope-pending-mine", { purged: true, faceSearch: false });
     await fixture("scope-pending-other", { purged: true, pendingJob: "INDEX_FACES" });
@@ -394,6 +441,54 @@ describe.skipIf(!runDb)(runDb ? "verify-purge against Postgres" : `verify-purge 
     );
     const result = await verifyPurge(query, mine.eventId);
     expect(statusOf(result.checks, "dead-jobs")).toBe("PASS");
+  });
+
+  it("runbook 1.4's DEAD-job statement, as written, deletes only this event's DEAD index jobs and audits them", async () => {
+    const mine = await fixture("remedy-mine", { purged: true });
+    const other = await fixture("remedy-other", { purged: true });
+    const insertJob = (type: string, status: string, photoId: string, key: string, lastError: string | null = null) =>
+      prisma.$executeRawUnsafe(
+        `INSERT INTO "Job"(type, payload, status, "dedupeKey", "lastError") VALUES ($1, $2::jsonb, $3::"JobStatus", $4, $5)`,
+        type,
+        JSON.stringify({ photoId, run }),
+        status,
+        `${run}:${key}`,
+        lastError,
+      );
+    await insertJob("INDEX_FACES", "DEAD", mine.photoId, "remedy-dead-index", "boom");
+    await insertJob("PROCESS_PHOTO", "DEAD", mine.photoId, "remedy-dead-process", "decode failed");
+    await insertJob("INDEX_FACES", "QUEUED", mine.photoId, "remedy-queued");
+    await insertJob("INDEX_FACES", "DEAD", other.photoId, "remedy-dead-other");
+
+    const jobsLeft = async () =>
+      (await prisma.$queryRawUnsafe<Array<{ k: string }>>(`SELECT "dedupeKey" AS k FROM "Job" WHERE "dedupeKey" LIKE $1 ORDER BY 1`, `${run}:remedy-%`)).map((r) => r.k.slice(run.length + 1));
+
+    const statements = runbookDeadJobStatements({ event_id: mine.eventId, ref: "SUP-123", operator: "pat" });
+    expect(statements.length).toBeGreaterThanOrEqual(2); // preview SELECT + the DELETE/INSERT
+    const ROLLBACK = new Error("rollback");
+    let audit: Array<{ studioId: string | null; eventId: string | null; target: string | null; data: Record<string, unknown> }> = [];
+    let during: string[] = [];
+    await prisma
+      .$transaction(async (tx) => {
+        for (const sql of statements) await tx.$queryRawUnsafe(sql);
+        during = (await tx.$queryRawUnsafe<Array<{ k: string }>>(`SELECT "dedupeKey" AS k FROM "Job" WHERE "dedupeKey" LIKE $1 ORDER BY 1`, `${run}:remedy-%`)).map((r) => r.k.slice(run.length + 1));
+        audit = await tx.$queryRawUnsafe(`SELECT "studioId", "eventId", target, data FROM "AuditLog" WHERE action = 'job.delete' AND "eventId" = $1`, mine.eventId);
+        throw ROLLBACK; // never commit the statement under test
+      })
+      .catch((e) => {
+        if (e !== ROLLBACK) throw e;
+      });
+
+    // This event's DEAD jobs went; its QUEUED job and the other event's DEAD job stayed.
+    expect(during).toEqual(["remedy-dead-other", "remedy-queued"]);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].studioId).toBe(mine.studioId); // derived from the event, not typed
+    expect(audit[0].eventId).toBe(mine.eventId);
+    expect(audit[0].target).toBe("SUP-123");
+    expect(audit[0].data).toMatchObject({ count: 2, operator: "pat" });
+    expect(audit[0].data.jobs).toHaveLength(2);
+    // And the rollback left everything as it was.
+    expect(await jobsLeft()).toEqual(["remedy-dead-index", "remedy-dead-other", "remedy-dead-process", "remedy-queued"]);
   });
 
   it("only ever issues SELECT statements", async () => {

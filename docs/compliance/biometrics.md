@@ -166,7 +166,7 @@ These are not hypothetical. Counsel should read them before the consent text.
 | G9 | Profile lifecycle: revoke, `lastUsedAt` refresh, 3-year purge, re-enable enrolment | WEB-006, WRK-010, WEB-029 | existing |
 | G10 | Row-level security | DB-004 | existing |
 | G11 | Audit log retention and export | ADM-023 | existing |
-| G12 | Deletion record that survives a restore | LEG-008 | in PR #135 |
+| G12 | Deletion record that survives a restore | LEG-008 | existing |
 | G13 | DSAR flow, `PhotoMatch` retention | LEG-007 | existing |
 | G14 | Invitation-link sessions can run face searches and consent as the invitee | SHR-026 | new, in this PR |
 | G15 | Nothing checks the selfie shows the searcher | WEB-041 | new, in this PR |

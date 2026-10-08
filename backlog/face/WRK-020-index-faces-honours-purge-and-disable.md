@@ -14,7 +14,7 @@ Two more holes found in review. `PURGE_FACE_INDEX` races with work in flight: an
 ## Scope
 - `hub_worker/handlers/index_faces.py`: when `Event.faceIndexPurgedAt IS NOT NULL`, log and return without writing `Face` rows (same pattern as the existing `faceSearchEnabled` skip).
 - Close the race: in `index_faces`, re-check `faceIndexPurgedAt` and `faceSearchEnabled` inside the write transaction after taking `SELECT ... FROM "Event" WHERE id = %s FOR SHARE`; `purge_face_index` already takes `FOR UPDATE` on the same row, so one of them waits for the other. Make `purge_face_index` also delete queued (not running) `INDEX_FACES` jobs for the event's photos (dedupe keys `faces:{photoId}`).
-- Dead jobs: `purge_face_index` also deletes the event's DEAD `INDEX_FACES` rows (and DEAD `PROCESS_PHOTO` rows only while face search is being turned off), because the admin jobs page's "Retry dead" revives every dead job of a type across all events and would rebuild a purged index. Until then the runbook (1.4) tells operators to delete them by SQL.
+- Dead jobs: `purge_face_index` also deletes the event's DEAD `INDEX_FACES` rows, because the admin jobs page's "Retry dead" revives every dead job of a type across all events. With the purged/disabled check above, a revived `INDEX_FACES` or the `INDEX_FACES` that a revived `PROCESS_PHOTO` enqueues is a no-op, so DEAD `PROCESS_PHOTO` rows are deliberately **left alone**: they can hold a real processing error. Until this ships the runbook (1.4) tells operators to delete dead rows by SQL.
 - `hub_worker/handlers/cluster_faces.py`: return without clustering or profile matching when `faceSearchEnabled` is false; `_match_profiles` skips guests with `Guest.faceSearchOptOut` (it joins `Guest` but ignores the flag, so an opted-out guest's `PROFILE_AUTO` matches are recreated on the next run, undoing an operator's event-scoped delete).
 - Admin `updateEventSettings`: when `faceSearchEnabled` changes from true to false, enqueue `PURGE_FACE_INDEX {eventId}` (dedupe key as in `purgeFaceIndexNow`) and audit `faceindex.purge.request` with `data: { reason: "face-search-disabled" }`.
 - Update `docs/compliance/biometrics.md` (G4, C6, C11, L11) and the runbook step 1.1 to match.
@@ -28,7 +28,8 @@ Two more holes found in review. `PURGE_FACE_INDEX` races with work in flight: an
 - [ ] Without `faceIndexPurgedAt`, indexing is unchanged.
 - [ ] An `INDEX_FACES` whose event is purged (or has face search turned off) between its start and its write writes no `Face` rows (test by running the purge between the handler's read and write, for example with a hook on the connection or a second connection holding the event row).
 - [ ] After a purge, no queued `INDEX_FACES` job for the event's photos remains; a RUNNING one is not touched.
-- [ ] After a purge, no DEAD `INDEX_FACES` job for the event's photos remains, and DEAD jobs of other events are untouched.
+- [ ] After a purge, no DEAD `INDEX_FACES` job for the event's photos remains; DEAD `PROCESS_PHOTO` rows of the event and DEAD jobs of other events are untouched.
+- [ ] A revived DEAD `PROCESS_PHOTO` for a purged event ends with `INDEX_FACES` writing no `Face` rows.
 - [ ] `CLUSTER_FACES` on an event with face search off creates no clusters and writes no `PhotoMatch`.
 - [ ] `_match_profiles` writes no `PROFILE_AUTO` match for a guest with `faceSearchOptOut = true`.
 - [ ] Saving event settings with face search turned off queues exactly one `PURGE_FACE_INDEX` job and one `faceindex.purge.request` audit row; saving with it already off, or turning it on, queues none.
