@@ -48,8 +48,8 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 | `event.content.edit` | OWNER, assigned STAFF (studio STAFF + event STAFF role), HOST, COHOST, PLANNER |
 | `event.members.manage` | OWNER, HOST |
 | `guests.manage`, `invites.send` | OWNER, HOST, COHOST, PLANNER |
-| `rsvp.report` | OWNER, STAFF, HOST, COHOST, PLANNER, VENDOR (headcounts and meal totals) |
-| `rsvp.report.names` | OWNER, STAFF, HOST, COHOST, PLANNER (name-level lists/exports; not VENDOR) |
+| `rsvp.report` | OWNER, STAFF, HOST, COHOST, PLANNER, VENDOR (attending headcount and meal totals) |
+| `rsvp.report.names` | OWNER, assigned STAFF (studio STAFF + event STAFF role), HOST, COHOST, PLANNER (names, response counts, household figures, name-level exports; not VENDOR, not unassigned staff) |
 | `rsvp.respond`, `face.search`, `favorites` | linked guest, HOST, COHOST |
 | `registry.manage`, `proofing.edit` | HOST, COHOST (+OWNER for registry) |
 | `photos.upload`, `albums.manage` | OWNER, assigned STAFF |
@@ -95,7 +95,7 @@ Write a `policy.test.ts`-style unit test for the new `LoginToken` purpose check 
 - `can()` ignores `Resource.eventId` for studio-level actions but roles in another studio grant nothing (tested: "tenant isolation").
 - Cookies on `localhost` are host-only; a session on `priya-arjun.localhost` does not carry to `sofia-james.localhost` in dev (it will in production via `Domain=.yourstudio.com`).
 - `docs/02` §4 says planners/vendors may create face profiles; `can()` gives `face.search` to hosts/guests only. The code is authoritative until the doc is updated.
-- Vendors' "meal counts only" is `rsvp.report` without `rsvp.report.names`: anything that returns guest names (report page name lists, `guests/report/export` without `totals=1`) must check `rsvp.report.names`, and the data loader (`loadRsvpReport(eventId, "totals")` in `apps/admin/src/lib/guests.ts`) never selects name/contact columns in totals mode.
+- Vendors' "meal counts only" is `rsvp.report` without `rsvp.report.names`. The data functions enforce it, not the UI: `loadRsvpReport(principal, resource, opts)` and `loadWideCsv(principal, resource)` in `apps/admin/src/lib/guests.ts` take the principal, derive access through `can()` (`reportAccess()`), return null when denied, and in totals mode never select name/contact columns nor return invited/declined/pending or household figures. Never add a loader that accepts a bare access string. Name-level export attempts by non-name users are audited as `rsvp.export.denied`.
 - Changing `AUTH_SECRET` invalidates every cookie (signature) but not the `Session` rows.
 
 ## Verification
