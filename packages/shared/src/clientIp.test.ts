@@ -1,33 +1,44 @@
 /**
- * SHR-003 review: the client address used for per-IP rate limits. Behind N trusted proxies that
- * APPEND to X-Forwarded-For, the client is the Nth entry from the right; everything left of it is
- * client-controlled. Pure: no env reads (hops and production are passed in).
+ * SHR-003: the client address used for per-IP rate limits. Behind N trusted proxies that APPEND to
+ * X-Forwarded-For, the client is the Nth entry from the right, counted on the raw list; everything
+ * left of it is client-written. Only the selected entry is normalised: if the trusted proxy wrote
+ * something that is not an IP (nginx `unix:`, Squid `unknown`), production answers UNKNOWN_CLIENT
+ * rather than sliding left into client-controlled entries. Hops are passed in (env() supplies them
+ * in the apps); the mode comes from APP_ENV/NODE_ENV, stubbed with vi.stubEnv.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clientIp, trustedProxyHops, UNKNOWN_CLIENT } from "./clientIp.ts";
+import { clientIp, UNKNOWN_CLIENT } from "./clientIp.ts";
 
 const xff = (value?: string) => new Headers(value === undefined ? {} : { "x-forwarded-for": value });
 const dev = { hops: 1, production: false };
 const prod = { hops: 1, production: true };
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
 describe("clientIp", () => {
   it("with one appending proxy, takes the rightmost entry, not the client-supplied first hop", () => {
     expect(clientIp(xff("203.0.113.9"), prod)).toBe("203.0.113.9");
     expect(clientIp(xff("6.6.6.6, 203.0.113.9"), prod), "spoofed first hop ignored").toBe("203.0.113.9");
+    expect(clientIp(xff(", 203.0.113.9"), prod), "a client-written blank entry changes nothing").toBe("203.0.113.9");
   });
 
   it("with two trusted proxies, takes the second entry from the right", () => {
     expect(clientIp(xff("6.6.6.6, 203.0.113.9, 10.0.0.2"), { hops: 2, production: true })).toBe("203.0.113.9");
   });
 
-  it("a chain shorter than the trusted hops falls back to its leftmost valid entry", () => {
+  it("a chain shorter than the trusted hops falls back to its leftmost entry", () => {
     expect(clientIp(xff("203.0.113.9"), { hops: 2, production: true })).toBe("203.0.113.9");
   });
 
-  it("ignores empty and non-IP entries, so ', x' cannot blank the address", () => {
-    expect(clientIp(xff(", 203.0.113.9"), prod)).toBe("203.0.113.9");
-    expect(clientIp(xff("203.0.113.9, "), prod)).toBe("203.0.113.9");
-    expect(clientIp(xff("203.0.113.9, not-an-ip, unknown"), prod)).toBe("203.0.113.9");
+  it("counts positions on the raw list: a non-IP at the trusted position is UNKNOWN, never the client's entry to its left", () => {
+    expect(clientIp(xff("6.6.6.6, unknown"), prod), "Squid writes `unknown`").toBe(UNKNOWN_CLIENT);
+    expect(clientIp(xff("6.6.6.6, unix:"), prod), "nginx on a unix socket writes `unix:`").toBe(UNKNOWN_CLIENT);
+    expect(clientIp(xff("203.0.113.9, not-an-ip, unknown"), prod)).toBe(UNKNOWN_CLIENT);
+    expect(clientIp(xff("203.0.113.9, "), prod)).toBe(UNKNOWN_CLIENT);
+    expect(clientIp(xff("6.6.6.6, unknown"), dev), "development skips per-IP limits instead").toBeNull();
   });
 
   it("normalises IPv4-mapped IPv6 to IPv4 and strips ports", () => {
@@ -51,29 +62,35 @@ describe("clientIp", () => {
   });
 });
 
-describe("clientIp production default", () => {
-  afterEach(() => vi.unstubAllEnvs());
+describe("clientIp mode default", () => {
+  const mode = (APP_ENV: string, NODE_ENV: string) => {
+    vi.stubEnv("APP_ENV", APP_ENV);
+    vi.stubEnv("NODE_ENV", NODE_ENV);
+    return clientIp(xff(), { hops: 1 });
+  };
 
-  it("follows the repo rule: APP_ENV wins over NODE_ENV", () => {
-    vi.stubEnv("TRUSTED_PROXY_HOPS", "");
-    vi.stubEnv("NODE_ENV", "development");
-    vi.stubEnv("APP_ENV", "production");
-    expect(clientIp(xff())).toBe(UNKNOWN_CLIENT);
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("APP_ENV", "development");
-    expect(clientIp(xff())).toBeNull();
-    vi.stubEnv("APP_ENV", " ");
-    expect(clientIp(xff()), "a blank APP_ENV is unset, so NODE_ENV decides").toBe(UNKNOWN_CLIENT);
-  });
-});
-
-describe("trustedProxyHops", () => {
-  it("defaults to 1 and accepts 1..10", () => {
-    expect(trustedProxyHops({})).toBe(1);
-    expect(trustedProxyHops({ TRUSTED_PROXY_HOPS: " 2 " })).toBe(2);
+  it("skips per-IP limits only for an explicit development or test mode; APP_ENV wins over NODE_ENV", () => {
+    expect(mode("", "development")).toBeNull();
+    expect(mode("", "test")).toBeNull();
+    expect(mode("test", "production")).toBeNull();
+    expect(mode("production", "development")).toBe(UNKNOWN_CLIENT);
+    expect(mode(" ", "production"), "a blank APP_ENV is unset, so NODE_ENV decides").toBe(UNKNOWN_CLIENT);
   });
 
-  it.each(["0", "-1", "11", "1.5", "two"])("rejects %j", (bad) => {
-    expect(() => trustedProxyHops({ TRUSTED_PROXY_HOPS: bad })).toThrow(/TRUSTED_PROXY_HOPS/);
+  it("anything else, including no mode at all, is treated as production (fail closed)", () => {
+    expect(mode("", "")).toBe(UNKNOWN_CLIENT);
+    expect(mode("staging", "")).toBe(UNKNOWN_CLIENT);
+  });
+
+  it("logs the production fallback to the shared bucket once per process, without the header", async () => {
+    vi.resetModules();
+    const fresh = await import("./clientIp.ts");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fresh.clientIp(xff("6.6.6.6, unknown"), prod);
+    fresh.clientIp(xff(), prod);
+    fresh.clientIp(xff("203.0.113.9"), prod);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0])).toMatch(/TRUSTED_PROXY_HOPS/);
+    expect(String(warn.mock.calls[0])).not.toContain("6.6.6.6");
   });
 });

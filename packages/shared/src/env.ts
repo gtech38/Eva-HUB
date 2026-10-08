@@ -80,6 +80,16 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
+/**
+ * TRUSTED_PROXY_HOPS through the schema's own rule (so boot validation and env() cannot disagree),
+ * without requiring the rest of the environment. Throws a message naming the variable.
+ */
+export function parseTrustedProxyHops(source: Record<string, string | undefined> = process.env): number {
+  const r = schema.shape.TRUSTED_PROXY_HOPS.safeParse(withoutBlanks({ v: source.TRUSTED_PROXY_HOPS }).v);
+  if (!r.success) throw new Error(`TRUSTED_PROXY_HOPS must be an integer 1..10, got ${JSON.stringify(source.TRUSTED_PROXY_HOPS)}`);
+  return r.data;
+}
+
 /** APP_ENV wins over NODE_ENV, so `next start` can be smoke-tested locally with APP_ENV=development. */
 export function isProduction(e: Pick<Env, "NODE_ENV" | "APP_ENV">): boolean {
   return (e.APP_ENV ?? e.NODE_ENV) === "production";

@@ -1,5 +1,5 @@
 import { prisma } from "@hub/db";
-import { trustedProxyHops } from "./clientIp.ts";
+import { parseTrustedProxyHops } from "./env.ts";
 import { acquireSlot, limit, type LimitResult, type RateLimitStore, type RateWindow, type Slot } from "./ratelimit.ts";
 
 /**
@@ -59,10 +59,29 @@ export function ratePolicies(source: EnvSource = process.env): Record<RatePolicy
   return out;
 }
 
-/** Boot-time check of every rate-limit setting; throws so a bad deploy fails to start. */
+/** Check every rate-limit setting (RATE_LIMIT_* and TRUSTED_PROXY_HOPS); throws on the first bad one. */
 export function validateRateLimitConfig(source: EnvSource = process.env): void {
   ratePolicies(source);
-  trustedProxyHops(source);
+  parseTrustedProxyHops(source);
+}
+
+/**
+ * Boot hook for each app's src/instrumentation.ts. A throw from register() does not stop Next (it
+ * caches the failure and keeps serving 500s), so a bad setting logs the reason and exits with 1.
+ */
+export function exitOnInvalidRateLimitConfig(
+  source: EnvSource = process.env,
+  deps: { exit: (code: number) => void; log: (message: string) => void } = {
+    exit: (code) => process.exit(code),
+    log: (message) => console.error(message),
+  },
+): void {
+  try {
+    validateRateLimitConfig(source);
+  } catch (err) {
+    deps.log(`[rate-limits] invalid configuration, refusing to start: ${(err as Error).message}`);
+    deps.exit(1);
+  }
 }
 
 /** Value for the `*AddressIp` policies: one budget per address per client network. */

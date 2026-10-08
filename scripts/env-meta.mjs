@@ -235,15 +235,15 @@ export const SECTIONS = [
     title: "Rate limits",
     intro: [
       "packages/shared/src/ratePolicies.ts; docs/01 §9. Overrides are max/windowSec (1..1000000 / 1..604800),",
-      "validated at server boot: a bad value stops web/admin. Per-IP limits are loose on purpose (venue",
+      "checked when web/admin start: a bad value logs the reason and the process exits with code 1. Per-IP limits are loose on purpose (venue",
       "Wi-Fi, carrier NAT); the per-address limits are the real control.",
     ],
     vars: {
       TRUSTED_PROXY_HOPS: {
         production: "optional",
         owner: "Deploy topology (DOC-006)",
-        notes: "How many proxies in front of web/admin APPEND to X-Forwarded-For (Fly, Cloud Run, Render, ALB, Railway each append one). The client IP for per-IP limits and face-search ipHash is the Nth valid entry from the right; entries further left are client-written and ignored. Too high lets clients choose their IP; too low makes every request look like the proxy. Without the header, production uses one shared bucket and development skips per-IP limits.",
-        hint: "Number of proxies that append to X-Forwarded-For; the client is that many valid entries from the right.",
+        notes: "How many entries the proxies in front of web/admin APPEND to X-Forwarded-For. This varies by platform (GCP's external Application Load Balancer appends two, for example), so the deploy (DOC-006) must check it: send a request with `X-Forwarded-For: 198.51.100.1` and log the header the app receives; the real client must sit exactly N entries from the right. The client IP for per-IP limits and face-search ipHash is the Nth entry from the right; entries further left are client-written and ignored, and a non-IP at that position (`unknown`, `unix:`) maps to one shared bucket. Too high lets clients choose their IP; too low makes every request look like the proxy. Per-IP limits are skipped only when APP_ENV (else NODE_ENV) is `development` or `test`.",
+        hint: "Number of X-Forwarded-For entries your proxies append; the client is that many entries from the right.",
       },
       RATE_LIMIT_SIGN_IN_IP: {
         production: "optional",

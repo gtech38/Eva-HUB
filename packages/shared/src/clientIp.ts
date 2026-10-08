@@ -1,49 +1,49 @@
 import { isIP } from "node:net";
-import { withoutBlanks } from "./env.ts";
+import { env, withoutBlanks } from "./env.ts";
 
 /**
- * The client address for per-IP rate limits (SHR-003).
+ * The client address for per-IP rate limits and face-search ipHash (SHR-003).
  *
- * Trust model: production runs behind `TRUSTED_PROXY_HOPS` proxies (default 1) that each APPEND the
- * address they saw to `X-Forwarded-For` (Fly, Cloud Run, Render, ALB, Railway, nginx
- * `$proxy_add_x_forwarded_for`). The client is therefore the Nth valid entry from the right;
- * everything to its left was written by the client and is ignored. Empty and non-IP entries are
- * skipped so `", x"` cannot blank the address.
+ * Trust model: production runs behind `TRUSTED_PROXY_HOPS` proxies (env(), default 1) that each APPEND
+ * the address they saw to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for` and most managed load
+ * balancers do; how many entries a platform appends varies, e.g. GCP's external Application LB adds
+ * two, so the deploy must check it: docs/deploy/env.md, DOC-006). The client is the Nth entry from
+ * the right, counted on the raw list; everything to its left was written by the client and ignored.
+ * Only that entry is normalised: if it is not an address (nginx on a unix socket writes `unix:`,
+ * Squid writes `unknown`), the answer is the shared `UNKNOWN_CLIENT` bucket, never a client entry.
  *
  * IPv4-mapped IPv6 becomes IPv4; other IPv6 addresses are grouped by /64 (one subscriber), so rotating
- * the interface id does not reset a limit. Without a usable header, production returns one shared
- * `UNKNOWN_CLIENT` bucket (fail closed); development returns `null` and per-IP limits do not apply.
+ * the interface id does not reset a limit. Per-IP limits are skipped (`null`) only when the mode is
+ * explicitly development or test (APP_ENV, else NODE_ENV); every other mode, including none, gets the
+ * shared bucket (fail closed), logged once per process.
  */
 export const UNKNOWN_CLIENT = "unknown";
 
-type EnvSource = Record<string, string | undefined>;
-
 export type ClientIpOptions = { hops?: number; production?: boolean };
 
-/** `TRUSTED_PROXY_HOPS`, 1..10, default 1. Throws on anything else (validated at boot). */
-export function trustedProxyHops(source: EnvSource = process.env): number {
-  const raw = source.TRUSTED_PROXY_HOPS?.trim();
-  if (!raw) return 1;
-  const n = Number(raw);
-  if (!/^\d+$/.test(raw) || n < 1 || n > 10) throw new Error(`TRUSTED_PROXY_HOPS must be an integer 1..10, got ${JSON.stringify(raw)}`);
-  return n;
-}
+let warnedUnknown = false;
 
 export function clientIp(headers: Pick<Headers, "get">, opts: ClientIpOptions = {}): string | null {
-  const hops = opts.hops ?? trustedProxyHops();
-  const production = opts.production ?? isProductionRuntime();
-  const valid = (headers.get("x-forwarded-for") ?? "")
-    .split(",")
-    .map(normalizeIp)
-    .filter((ip): ip is string => ip !== null);
-  if (valid.length === 0) return production ? UNKNOWN_CLIENT : null;
-  return valid[Math.max(0, valid.length - hops)]!;
+  const production = opts.production ?? !isDevOrTestMode();
+  const hops = opts.hops ?? env().TRUSTED_PROXY_HOPS;
+  const raw = (headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim());
+  const ip = normalizeIp(raw[Math.max(0, raw.length - hops)] ?? "");
+  if (ip) return ip;
+  if (!production) return null;
+  if (!warnedUnknown) {
+    warnedUnknown = true;
+    console.warn(
+      "[clientIp] no client address at the trusted X-Forwarded-For position; per-IP limits now share one bucket. Check TRUSTED_PROXY_HOPS and the proxy (docs/deploy/env.md).",
+    );
+  }
+  return UNKNOWN_CLIENT;
 }
 
-/** The repo-wide rule (env.ts isProduction): APP_ENV wins over NODE_ENV; blank means unset. */
-function isProductionRuntime(): boolean {
+/** Per-IP limits are skipped only in an explicit development or test mode (APP_ENV wins; blank = unset). */
+function isDevOrTestMode(): boolean {
   const e = withoutBlanks({ APP_ENV: process.env.APP_ENV, NODE_ENV: process.env.NODE_ENV });
-  return (e.APP_ENV ?? e.NODE_ENV) === "production";
+  const mode = e.APP_ENV ?? e.NODE_ENV;
+  return mode === "development" || mode === "test";
 }
 
 const V4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;

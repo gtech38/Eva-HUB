@@ -9,6 +9,7 @@ import { hashRateKey, memoryRateLimitStore } from "./ratelimit.ts";
 import {
   addressAtIp,
   envName,
+  exitOnInvalidRateLimitConfig,
   RATE_LIMITS,
   ratePolicies,
   rateLimiter,
@@ -78,6 +79,24 @@ describe("validateRateLimitConfig (called at server boot)", () => {
     expect(() => validateRateLimitConfig({})).not.toThrow();
     expect(() => validateRateLimitConfig({ RATE_LIMIT_SIGN_IN_IP: "lots" })).toThrow(/RATE_LIMIT_SIGN_IN_IP/);
     expect(() => validateRateLimitConfig({ TRUSTED_PROXY_HOPS: "0" })).toThrow(/TRUSTED_PROXY_HOPS/);
+  });
+
+  it("validates TRUSTED_PROXY_HOPS with the same rule as env() (1..10 integer, blank = default)", () => {
+    expect(() => validateRateLimitConfig({ TRUSTED_PROXY_HOPS: " 2 " })).not.toThrow();
+    expect(() => validateRateLimitConfig({ TRUSTED_PROXY_HOPS: "" })).not.toThrow();
+    for (const bad of ["11", "1.5", "two", "-1"]) expect(() => validateRateLimitConfig({ TRUSTED_PROXY_HOPS: bad }), bad).toThrow(/TRUSTED_PROXY_HOPS/);
+  });
+
+  it("exitOnInvalidRateLimitConfig stops the process (exit 1) with the reason logged; a good config does nothing", () => {
+    const calls: Array<string | number> = [];
+    const deps = { exit: (code: number) => void calls.push(code), log: (m: string) => void calls.push(m) };
+    exitOnInvalidRateLimitConfig({ RATE_LIMIT_INVITE_IP: "nope" }, deps);
+    expect(calls).toHaveLength(2);
+    expect(String(calls[0])).toMatch(/RATE_LIMIT_INVITE_IP/);
+    expect(calls[1]).toBe(1);
+    calls.length = 0;
+    exitOnInvalidRateLimitConfig({}, deps);
+    expect(calls).toStrictEqual([]);
   });
 
   it("a limiter parses its overrides once, at construction, not per request", () => {
