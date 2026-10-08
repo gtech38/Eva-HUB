@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@hub/db", "@hub/shared"],
   serverExternalPackages: ["@prisma/client", "nodemailer", "@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner"],
   poweredByHeader: false,
+  webpack(config) {
+    // Biometric consent texts (legal/consent/**) are bundled as strings by `?raw` imports in
+    // @hub/shared/consent; vitest handles `?raw` natively. Scoped to exactly `?raw` under legal/.
+    config.module.rules.push({ resourceQuery: /^\?raw$/, include: path.resolve(process.cwd(), "../../legal"), type: "asset/source" });
+    return config;
+  },
   images: { unoptimized: true },
   async headers() {
     // Nothing on an event site is public: never let a shared cache keep a response.
