@@ -75,6 +75,61 @@ def test_stop_verify_runs_the_scripts_tests_when_tooling_changed(repo, tmp_path,
     assert any(c.startswith(str((repo / "scripts").resolve())) and c.endswith("run test") for c in calls), calls
 
 
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=cwd, check=True, capture_output=True, env={**os.environ, **GIT_ENV})
+
+
+def _tooling_repo(root: Path) -> Path:
+    (root / "scripts").mkdir(parents=True)
+    (root / "docs" / "adr").mkdir(parents=True)
+    (root / "scripts" / "package.json").write_text(json.dumps({"name": "@hub/scripts", "scripts": {"test": "vitest run"}}))
+    (root / "scripts" / "adr-new.mjs").write_text("export {};\n")
+    (root / "docs" / "adr" / "0001-x.md").write_text("# ADR-0001: x\n")
+    _git(root, "init", "-q", "-b", "main")
+    return root
+
+
+@pytest.fixture()
+def ours_wt_other(tmp_path: Path):
+    ours = _tooling_repo(tmp_path / "ours")
+    _git(ours, "add", "-A")
+    _git(ours, "commit", "-q", "-m", "init")
+    wt = tmp_path / "wt"
+    _git(ours, "worktree", "add", "-q", str(wt))
+    (wt / "node_modules").mkdir()
+    other = _tooling_repo(tmp_path / "other")
+    (other / "node_modules").mkdir()
+    return ours, wt, other
+
+
+@pytest.mark.parametrize("rel", ["scripts/adr-new.mjs", "docs/adr/0001-x.md"])
+def test_a_foreign_repos_tooling_edit_is_ignored_by_both_hooks(ours_wt_other, tmp_path, rel):
+    ours, _wt, other = ours_wt_other
+    bin_dir, log = _stub_pnpm(tmp_path)
+    r = _run("post_edit_check.py", _edit(other / rel), ours, bin_dir)
+    assert r.returncode == 0, r.stderr
+    assert _ledger(ours) == [], "foreign edits must not enter our ledger"
+    ledger = ours / ".claude" / ".touched"
+    ledger.mkdir(parents=True, exist_ok=True)
+    (ledger / "pytest").write_text(f"{(other / rel).resolve()}\n")
+    r = _run("stop_verify.py", {"session_id": "pytest", "stop_hook_active": False}, ours, bin_dir)
+    assert r.returncode == 0, r.stderr
+    assert not log.exists(), "no tests may run for a foreign repo's scripts/"
+
+
+def test_a_worktree_tooling_edit_runs_the_worktrees_scripts_package(ours_wt_other, tmp_path):
+    ours, wt, _other = ours_wt_other
+    bin_dir, log = _stub_pnpm(tmp_path)
+    r = _run("post_edit_check.py", _edit(wt / "scripts/adr-new.mjs"), ours, bin_dir)
+    assert r.returncode == 0, r.stderr
+    assert str((wt / "scripts/adr-new.mjs").resolve()) in _ledger(ours)
+    r = _run("stop_verify.py", {"session_id": "pytest", "stop_hook_active": False}, ours, bin_dir)
+    assert r.returncode == 0, r.stderr
+    calls = log.read_text().splitlines()
+    assert any(c.startswith(str((wt / "scripts").resolve())) and c.endswith("run test") for c in calls), calls
+    assert not any(c.startswith(str((ours / "scripts").resolve())) for c in calls), calls
+
+
 def test_stop_verify_ignores_other_docs(repo, tmp_path):
     bin_dir, log = _stub_pnpm(tmp_path)
     other = repo / "docs" / "01-architecture.md"
