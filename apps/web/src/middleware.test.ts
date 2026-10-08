@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { config, middleware } from "./middleware.ts";
@@ -18,6 +18,31 @@ describe("middleware: trusted host", () => {
   it("overwrites x-hub-host on the root host too", () => {
     const res = call("http://localhost:3000/", { host: "localhost:3000", ...forged });
     expect(forwarded(res, "x-hub-host")).toBe("localhost");
+  });
+});
+
+describe("middleware: ROOT_DOMAIN (blank means unset, as in env())", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** ROOT_DOMAIN is read at module load, so import a fresh copy per case. */
+  async function middlewareWith(rootDomain: string | undefined) {
+    vi.stubEnv("ROOT_DOMAIN", rootDomain);
+    vi.resetModules();
+    return (await import("./middleware.ts")).middleware;
+  }
+
+  it.each([undefined, "", "   "])("ROOT_DOMAIN=%j routes localhost to the root site", async (value) => {
+    const mw = await middlewareWith(value);
+    const res = mw(new NextRequest("http://localhost:3000/", { headers: { host: "localhost:3000" } }));
+    expect(res.headers.get("x-middleware-rewrite")).toContain("/root");
+  });
+
+  it("an explicit ROOT_DOMAIN is used, case-insensitively and trimmed", async () => {
+    const mw = await middlewareWith(" Studio.Example.com ");
+    const res = mw(new NextRequest("https://studio.example.com/", { headers: { host: "studio.example.com" } }));
+    expect(res.headers.get("x-middleware-rewrite")).toContain("/root");
   });
 });
 

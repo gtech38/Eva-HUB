@@ -45,6 +45,7 @@ Rule of the product (README decisions): everyone sees watermarked images until t
 ```bash
 # 1. real test keys in .env (never commit): STRIPE_SECRET_KEY=sk_test_..., STRIPE_WEBHOOK_SECRET from step 3
 # 2. add to packages/shared/src/env.ts: STRIPE_SECRET_KEY: z.string().optional(), STRIPE_WEBHOOK_SECRET: z.string().optional()
+#    and drop `planned` from their entries in scripts/env-meta.mjs; run `pnpm env:docs`
 # 3. forward webhooks to the web app (container, no local install):
 docker run --rm -it --network host -e STRIPE_API_KEY=sk_test_... stripe/stripe-cli listen --forward-to http://localhost:3000/api/webhooks/stripe
 #    prints "whsec_..." -> STRIPE_WEBHOOK_SECRET. (Or add a `stripe` service to infra/docker-compose.yml as docs/01 §2 suggests.)
