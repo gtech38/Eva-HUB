@@ -6,7 +6,7 @@ import { derivativeUrl } from "@hub/shared/storage";
 import { requireViewer, page } from "@/lib/site";
 import { hostsPageLabel } from "@/lib/eventCopy";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
-import { groupByRole, isEventStorageKey } from "@/lib/party";
+import { groupByRole, isEventSiteKey } from "@/lib/party";
 
 export const dynamic = "force-dynamic";
 
@@ -20,11 +20,11 @@ export default async function PartyPage() {
   const { members } = parsePage("WEDDING_PARTY", row.content);
   const title = hostsPageLabel(event.kind, locale);
 
-  // Page content is host-authored: only sign keys that live under this event's own prefix.
+  // Page content is host-authored: only sign site assets of this event (never orig/, d/ or zip/).
   const withPhotos = await Promise.all(
     members.map(async (m) => ({
       ...m,
-      photoUrl: isEventStorageKey(m.photoKey, event.studioId, event.id) ? await derivativeUrl(m.photoKey) : null,
+      photoUrl: isEventSiteKey(m.photoKey, event.studioId, event.id) ? await derivativeUrl(m.photoKey) : null,
     })),
   );
   const groups = groupByRole(withPhotos, locale);

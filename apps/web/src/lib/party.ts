@@ -30,11 +30,15 @@ export function groupByRole<M extends Pick<PartyMember, "role">>(members: readon
 }
 
 /**
- * Page content is host-authored JSON, so a photo key could name another tenant's object. Only keys
- * under this event's own prefix (see `keys` in @hub/shared storage) may be presigned.
+ * Page content is host-authored JSON, so a photo key could name anything in the bucket. Only
+ * site assets (`s/{studio}/e/{event}/site/...`, see `keys.hero` in @hub/shared storage) may be
+ * presigned for every guest: not another tenant's objects, and not this event's own `orig/`,
+ * `d/` (derivatives of possibly hidden or unentitled photos) or `zip/` objects, which would
+ * bypass album visibility and `isEntitledFullRes`.
  */
-export function isEventStorageKey(key: string | null | undefined, studioId: string, eventId: string): key is string {
+export function isEventSiteKey(key: string | null | undefined, studioId: string, eventId: string): key is string {
   if (typeof key !== "string") return false;
-  if (key.split("/").includes("..")) return false;
-  return key.startsWith(`s/${studioId}/e/${eventId}/`);
+  if (key.includes("\\") || key.split("/").some((seg) => seg === ".." || seg === ".")) return false;
+  const prefix = `s/${studioId}/e/${eventId}/site/`;
+  return key.startsWith(prefix) && key.length > prefix.length;
 }

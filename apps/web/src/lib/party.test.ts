@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByRole, isEventStorageKey } from "./party.ts";
+import { groupByRole, isEventSiteKey } from "./party.ts";
 
 const m = (name: string, role: Record<string, string> = {}) => ({ name, role, photoKey: null, blurb: {} });
 
@@ -35,16 +35,33 @@ describe("groupByRole", () => {
   });
 });
 
-describe("isEventStorageKey", () => {
-  it("accepts keys under this studio and event prefix", () => {
-    expect(isEventStorageKey("s/st1/e/ev1/site/party-a.jpg", "st1", "ev1")).toBe(true);
+describe("isEventSiteKey", () => {
+  it("accepts keys under this studio and event's site/ prefix", () => {
+    expect(isEventSiteKey("s/st1/e/ev1/site/party-a.jpg", "st1", "ev1")).toBe(true);
+  });
+
+  it("rejects originals, photo derivatives and zips of the same event: only site/ assets may be signed for every guest", () => {
+    for (const key of [
+      "s/st1/e/ev1/orig/photo1.jpg",
+      "s/st1/e/ev1/d/photo1/web.jpg",
+      "s/st1/e/ev1/d/hiddenPhoto/thumb.jpg",
+      "s/st1/e/ev1/zip/z1-1.zip",
+      "s/st1/e/ev1/sitemap/x.jpg",
+      "s/st1/e/ev1/site",
+      "s/st1/e/ev1/",
+    ]) {
+      expect(isEventSiteKey(key, "st1", "ev1"), key).toBe(false);
+    }
   });
 
   it("rejects another event's or studio's key, traversal and non-strings", () => {
-    expect(isEventStorageKey("s/st1/e/ev2/site/a.jpg", "st1", "ev1")).toBe(false);
-    expect(isEventStorageKey("s/st2/e/ev1/site/a.jpg", "st1", "ev1")).toBe(false);
-    expect(isEventStorageKey("s/st1/e/ev1/../ev2/site/a.jpg", "st1", "ev1")).toBe(false);
-    expect(isEventStorageKey("s/st1/e/ev10/site/a.jpg", "st1", "ev1")).toBe(false);
-    expect(isEventStorageKey(null, "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/st1/e/ev2/site/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/st2/e/ev1/site/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/st1/e/ev1/site/../orig/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/st1/e/ev1/../ev2/site/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/st1/e/ev1/site/a\\..\\b.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/st1/e/ev10/site/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey(null, "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey(undefined, "st1", "ev1")).toBe(false);
   });
 });
