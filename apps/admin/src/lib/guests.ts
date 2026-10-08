@@ -1,6 +1,6 @@
 import { prisma, type RsvpStatus } from "@hub/db";
 import { can, type Principal, type Resource } from "@hub/shared";
-import { lt } from "@/lib/format";
+import { fullName, lt } from "@/lib/format";
 
 // ───────────────────────────── RSVP report access ─────────────────────────────
 
@@ -64,6 +64,68 @@ export function summarizeSubEvent(rsvps: readonly ReportRsvp[], options: readonl
   const kids = rsvps.filter((r) => r.status === "ATTENDING" && r.isChild).length;
   const attending = n("ATTENDING");
   return { invited: rsvps.length, attending, declined: n("DECLINED"), pending: n("PENDING"), adults: attending - kids, kids, meals: mealTotals(rsvps, options) };
+}
+
+// ───────────────────────────── RSVP report loaders (Prisma) ─────────────────────────────
+
+const SUB_ORDER = [{ sortOrder: "asc" as const }, { startsAt: "asc" as const }];
+
+/**
+ * The RSVP report for an event (or one of its sub-events). In "totals" mode the guest select is
+ * `isChild` only, so names and contact details never leave the database for vendors; callers
+ * decide `access` with `reportAccess()`. A `subEventId` outside the event yields no sub-events.
+ */
+export async function loadRsvpReport(eventId: string, access: ReportAccess, opts: { subEventId?: string } = {}): Promise<RsvpReport> {
+  const subs = await prisma.subEvent.findMany({
+    where: { eventId, ...(opts.subEventId ? { id: opts.subEventId } : {}) },
+    orderBy: SUB_ORDER,
+    select: { id: true, name: true, servesMeal: true, mealOptions: { orderBy: { sortOrder: "asc" }, select: { id: true, label: true, isKidsMeal: true } } },
+  });
+  const where = { subEventId: { in: subs.map((s) => s.id) }, guest: { eventId, deletedAt: null } };
+  const counts = await prisma.rsvp.findMany({ where, select: { subEventId: true, status: true, mealOptionId: true, guest: { select: { isChild: true } } } });
+  const lines = access === "names" ? await guestLines(where) : null;
+
+  return {
+    access,
+    subEvents: subs.map((s) => {
+      const rs = counts.filter((r) => r.subEventId === s.id).map((r) => ({ status: r.status, mealOptionId: r.mealOptionId, isChild: r.guest.isChild }));
+      const report: SubEventReport = { id: s.id, name: s.name, servesMeal: s.servesMeal, summary: summarizeSubEvent(rs, s.mealOptions) };
+      if (lines) report.guests = lines.filter((l) => l.subEventId === s.id).map(({ subEventId: _, ...l }) => l);
+      return report;
+    }),
+  };
+}
+
+/** Name-level rows; only called for access "names". Meal shown for attending guests only. */
+async function guestLines(where: { subEventId: { in: string[] }; guest: { eventId: string; deletedAt: null } }) {
+  const rows = await prisma.rsvp.findMany({
+    where,
+    orderBy: [{ guest: { household: { name: "asc" } } }, { guest: { createdAt: "asc" } }],
+    select: {
+      subEventId: true, status: true, mealOption: { select: { label: true } },
+      guest: { select: { firstName: true, lastName: true, isPlusOne: true, isChild: true, household: { select: { name: true } } } },
+    },
+  });
+  return rows.map((r) => ({
+    subEventId: r.subEventId,
+    household: r.guest.household.name,
+    guest: fullName(r.guest),
+    isChild: r.guest.isChild,
+    status: r.status,
+    meal: r.status === "ATTENDING" && r.mealOption ? lt(r.mealOption.label) : "",
+  }));
+}
+
+/** The whole-event CSV (one row per live guest, three columns per sub-event). Name-level. */
+export async function loadWideCsv(eventId: string): Promise<string[][]> {
+  const subs = await prisma.subEvent.findMany({ where: { eventId }, orderBy: SUB_ORDER });
+  const guests = await prisma.guest.findMany({ where: { eventId, deletedAt: null }, include: { household: true, rsvps: { include: { mealOption: true } }, invites: true }, orderBy: [{ household: { name: "asc" } }, { createdAt: "asc" }] });
+  const head = ["household", "first_name", "last_name", "email", "phone", "is_child", "is_plus_one", "linked_user", ...subs.flatMap((s) => [`${lt(s.name)} invited`, `${lt(s.name)} rsvp`, `${lt(s.name)} meal`])];
+  const rows = guests.map((g) => [
+    g.household.name, g.firstName ?? "", g.lastName ?? "", g.email ?? "", g.phone ?? "", g.isChild ? "yes" : "", g.isPlusOne ? "yes" : "", g.userId ? "yes" : "",
+    ...subs.flatMap((s) => { const inv = g.invites.some((i) => i.subEventId === s.id); const r = g.rsvps.find((x) => x.subEventId === s.id); return [inv ? "yes" : "", inv ? (r?.status ?? "PENDING") : "", r?.mealOption ? lt(r.mealOption.label) : ""]; }),
+  ]);
+  return [head, ...rows];
 }
 
 /** Make a guest's SubEventInvite + Rsvp rows match `wanted`. Answered RSVPs are never removed. */
