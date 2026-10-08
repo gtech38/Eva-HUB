@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session_start.py\"", "timeout": 15 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/prompt_context.py\"", "timeout": 5 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/tdd_gate.py\"", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/post_edit_check.py\"", "timeout": 200 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/stop_verify.py\"", "timeout": 600 }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pnpm *)",
+      "Bash(node --import tsx --test *)",
+      "Bash(npx prisma *)",
+      "Bash(docker compose *)",
+      "Bash(docker ps*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git checkout -b *)",
+      "Bash(git add *)",
+      "Bash(gh issue list*)",
+      "Bash(gh issue view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr checks*)",
+      "Bash(curl -s localhost:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(make test)",
+      "Bash(make dev)",
+      "Bash(make models)",
+      "Bash(.venv/bin/pytest *)",
+      "Bash(.venv/bin/python -m pytest *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(rm -rf /*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./.env)"
+    ]
+  }
+}
