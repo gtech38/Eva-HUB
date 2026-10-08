@@ -1,0 +1,34 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ogCard (the OG image shows the sign-in screen's title and monogram only) > snapshot: card per theme carries title, monogram and theme colours > HINDU_TRADITIONAL 1`] = `
+{
+  "accent": "#450000",
+  "background": "#f6f4ee",
+  "foreground": "#212121",
+  "monogram": "P&A",
+  "muted": "#4e4e4e",
+  "title": "Priya & Arjun",
+}
+`;
+
+exports[`ogCard (the OG image shows the sign-in screen's title and monogram only) > snapshot: card per theme carries title, monogram and theme colours > LUXURY 1`] = `
+{
+  "accent": "#c9a961",
+  "background": "#f7ead7",
+  "foreground": "#2a0a10",
+  "monogram": "P&A",
+  "muted": "#7a5a52",
+  "title": "Priya & Arjun",
+}
+`;
+
+exports[`ogCard (the OG image shows the sign-in screen's title and monogram only) > snapshot: card per theme carries title, monogram and theme colours > ROMANTIC 1`] = `
+{
+  "accent": "#b88792",
+  "background": "#f6f1e8",
+  "foreground": "#2b2926",
+  "monogram": "P&A",
+  "muted": "#756e67",
+  "title": "Priya & Arjun",
+}
+`;
