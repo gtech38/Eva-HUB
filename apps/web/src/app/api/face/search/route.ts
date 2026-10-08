@@ -5,6 +5,7 @@ import { env } from "@hub/shared/env";
 import { requireViewer } from "@/lib/site";
 import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
 import { consentRecordVersion } from "@hub/shared/consent";
+import { checkConsentSubmission, faceSearchAllowed, mayEnrolFaceProfile } from "@/lib/faceConsent";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest) {
   if (!site) return fail("unauthorized", 401);
   const { event, viewer } = site;
   if (!viewer.can("face.search")) return fail("forbidden", 403);
-  if (!event.faceSearchEnabled) return fail("disabled", 400);
+  if (!event.faceSearchEnabled || !faceSearchAllowed(process.env.NODE_ENV)) return fail("disabled", 400);
 
   const form = await req.formData();
   const file = form.get("file");
@@ -32,7 +33,18 @@ export async function POST(req: NextRequest) {
   if (file.size > 12 * 1024 * 1024) return fail("too_large", 413);
   if (form.get("consent") !== "on") return fail("consent_required", 400);
   const subject = String(form.get("subject") ?? "me");
-  const remember = form.get("remember") === "on";
+  const field = (name: string) => (typeof form.get(name) === "string" ? (form.get(name) as string) : null);
+
+  // The text the person saw must be the text we would record; otherwise make them re-read it.
+  const consent = checkConsentSubmission({
+    subject,
+    consentVersion: field("consentVersion"),
+    consentLocale: field("consentLocale"),
+    remember: form.get("remember") === "on",
+    profileConsentVersion: field("profileConsentVersion"),
+  });
+  if (!consent.ok) return fail(consent.reason, 409);
+  const { kind, locale, recordVersion } = consent;
 
   // Who is being searched for? Me, or a child in my household (guardian search).
   let subjectGuestId: string | null = null;
@@ -100,7 +112,7 @@ export async function POST(req: NextRequest) {
 
   // ── 4. Persist: matches, consent, audit (and optional face profile) ──
   const ipHash = hashIp(req, env().AUTH_SECRET);
-  const kind = subjectGuestId ? "SEARCH_GUARDIAN" : "SEARCH_SELF";
+  const enrolProfile = mayEnrolFaceProfile({ profileRequested: consent.profileRequested, subjectGuestId, guest: viewer.guest });
   await prisma.$transaction(async (tx) => {
     for (const p of photos) {
       const score = scores.get(p.id) ?? 0;
@@ -124,7 +136,7 @@ export async function POST(req: NextRequest) {
         consentedByUserId: viewer.principal.userId,
         subjectGuestId,
         eventId: event.id,
-        consentTextVersion: consentRecordVersion(kind),
+        consentTextVersion: recordVersion,
         ipHash,
       },
     });
@@ -135,24 +147,26 @@ export async function POST(req: NextRequest) {
         actorUserId: viewer.principal.userId,
         action: "face.search",
         target: subjectGuestId ?? viewer.principal.userId,
-        data: { kind, candidates: rows.length, visible: photos.length, model },
+        data: { kind, consentVersion: recordVersion, locale, candidates: rows.length, visible: photos.length, model },
       },
     });
 
-    // "Remember my face": adults searching for themselves only. Embedding only, never the image.
-    if (remember && !subjectGuestId && !viewer.guest?.isChild) {
-      const consent = await tx.biometricConsent.create({
-        data: { kind: "FACE_PROFILE", consentedByUserId: viewer.principal.userId, eventId: null, consentTextVersion: consentRecordVersion("FACE_PROFILE"), ipHash },
+    // "Remember my face": adult guests searching for themselves only, and only while enrolment is
+    // switched on (FACE_PROFILE_ENROLMENT, off until revoke ships). Embedding only, never the image.
+    if (enrolProfile) {
+      const profileVersion = consentRecordVersion("FACE_PROFILE");
+      const profileConsent = await tx.biometricConsent.create({
+        data: { kind: "FACE_PROFILE", consentedByUserId: viewer.principal.userId, eventId: null, consentTextVersion: profileVersion, ipHash },
       });
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO "FaceProfile" (id, "userId", "consentId", "modelVersion", embedding, stale, "createdAt", "lastUsedAt", "purgeAfter")
-        VALUES (${randomUUID()}, ${viewer.principal.userId}, ${consent.id}, ${model}, ${vec}, false, now(), now(), now() + interval '3 years')
+        VALUES (${randomUUID()}, ${viewer.principal.userId}, ${profileConsent.id}, ${model}, ${vec}, false, now(), now(), now() + interval '3 years')
         ON CONFLICT ("userId") DO UPDATE SET
           embedding = EXCLUDED.embedding, "modelVersion" = EXCLUDED."modelVersion", "consentId" = EXCLUDED."consentId",
           stale = false, "lastUsedAt" = now(), "purgeAfter" = now() + interval '3 years'
       `);
       await tx.auditLog.create({
-        data: { studioId: event.studioId, eventId: null, actorUserId: viewer.principal.userId, action: "consent.grant", target: consent.id, data: { kind: "FACE_PROFILE" } },
+        data: { studioId: event.studioId, eventId: null, actorUserId: viewer.principal.userId, action: "consent.grant", target: profileConsent.id, data: { kind: "FACE_PROFILE", consentVersion: profileVersion, locale } },
       });
     }
   });

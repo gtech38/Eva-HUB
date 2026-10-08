@@ -1,30 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { LOCALES } from "@hub/shared/i18n";
-import { consentBlocks, consentText } from "@hub/shared/consent";
-import { consentTextsFor } from "./consentView";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { consentFor, type ConsentTexts, type ConsentView } from "./consentView";
 
-describe("consentTextsFor", () => {
-  it("gives the face-search UI the full text of all three kinds in every locale", () => {
-    for (const locale of LOCALES) {
-      const v = consentTextsFor(locale);
-      expect(v.self.blocks).toStrictEqual(consentBlocks(consentText("SEARCH_SELF", locale).body));
-      expect(v.guardian.blocks).toStrictEqual(consentBlocks(consentText("SEARCH_GUARDIAN", locale).body));
-      expect(v.profile.blocks).toStrictEqual(consentBlocks(consentText("FACE_PROFILE", locale).body));
-    }
+const v = (label: string): ConsentView => ({ label, summary: "", blocks: [], version: `X:${label}`, locale: "en" });
+const texts: ConsentTexts = { self: v("self"), guardian: v("guardian"), profile: v("profile") };
+
+describe("consentFor", () => {
+  it("searching for yourself shows the self text", () => {
+    expect(consentFor("me", texts)).toBe(texts.self);
   });
 
-  it("labels each text with the exact value the search route stores", () => {
-    const v = consentTextsFor("te");
-    expect([v.self.version, v.guardian.version, v.profile.version]).toStrictEqual([
-      "SEARCH_SELF:v1-2026-10",
-      "SEARCH_GUARDIAN:v1-2026-10",
-      "FACE_PROFILE:v1-2026-10",
-    ]);
+  it("searching for a child guest shows the guardian text", () => {
+    expect(consentFor("guest-child-id", texts)).toBe(texts.guardian);
   });
 
-  it("renders Telugu text for te (not an English fallback)", () => {
-    const first = consentTextsFor("te").self.blocks[0];
-    expect(first.type).toBe("heading");
-    expect(first.type === "heading" && /[ఀ-౿]/.test(first.text)).toBe(true);
+  it("is client-safe: imports nothing from @hub/shared/consent at runtime", () => {
+    const src = readFileSync(fileURLToPath(new URL("./consentView.ts", import.meta.url)), "utf8");
+    expect(src).not.toMatch(/^import (?!type )[^;]*@hub\/shared\/consent/m);
   });
 });

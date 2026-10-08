@@ -7,6 +7,7 @@ export type FaceSearchReason =
   | "no_file"
   | "too_large"
   | "consent_required"
+  | "consent_stale"
   | "opted_out"
   | "unavailable"
   | "no_face"

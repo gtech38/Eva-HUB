@@ -12,8 +12,8 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   webpack(config) {
     // Biometric consent texts (legal/consent/**) are bundled as strings by `?raw` imports in
-    // @hub/shared/consent; vitest handles `?raw` natively.
-    config.module.rules.push({ resourceQuery: /raw/, type: "asset/source" });
+    // @hub/shared/consent; vitest handles `?raw` natively. Scoped to exactly `?raw` under legal/.
+    config.module.rules.push({ resourceQuery: /^\?raw$/, include: path.resolve(process.cwd(), "../../legal"), type: "asset/source" });
     return config;
   },
   images: { unoptimized: true },
