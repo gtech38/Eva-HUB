@@ -2,14 +2,35 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_WORDS, citedPaths, implementationPaths, section, wordCount } from "./adr-lint.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const ADR_DIR = join(ROOT, "docs/adr");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 
 const adrFiles = () => readdirSync(ADR_DIR).filter((f) => /^\d{4}-.+\.md$/.test(f) && !f.startsWith("0000-")).sort();
-const section = (text, name) => new RegExp(`^## ${name}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m").exec(text)?.[1] ?? "";
 const STATUSES = ["Proposed", "Accepted", "Superseded"];
+
+describe("adr-lint helpers", () => {
+  const sample = ["## Decision", "x", "## References", "", "- `docs/01-architecture.md` section 2", "- `backlog/a/B-1.md`", "- `packages/db/src/index.ts:25`", "- `NOTE`"].join("\n");
+
+  it("section returns the body up to the next heading", () => {
+    expect(section(sample, "Decision").trim()).toBe("x");
+  });
+  it("citedPaths strips line anchors and ignores backticked words without a slash", () => {
+    expect(citedPaths(sample)).toEqual(["docs/01-architecture.md", "backlog/a/B-1.md", "packages/db/src/index.ts"]);
+  });
+  it("implementationPaths excludes docs/ and backlog/ citations", () => {
+    expect(implementationPaths(sample)).toEqual(["packages/db/src/index.ts"]);
+  });
+  it("a docs-only References section has no implementation path", () => {
+    const docsOnly = "## References\n\n- `docs/01-architecture.md`\n- `backlog/x/Y-1.md`\n";
+    expect(implementationPaths(docsOnly)).toEqual([]);
+  });
+  it("wordCount counts whitespace-separated words", () => {
+    expect(wordCount("a b\n c  d")).toBe(4);
+  });
+});
 
 describe("ADR process files", () => {
   it("ships a README and a template", () => {
@@ -60,16 +81,13 @@ describe("initial ADRs", () => {
       }
     });
 
-    it("fits on one page", () => {
-      expect(text.split("\n").length).toBeLessThanOrEqual(70);
+    it(`fits on one page (at most ${MAX_WORDS} words)`, () => {
+      expect(wordCount(text)).toBeLessThanOrEqual(MAX_WORDS);
     });
 
-    it("cites at least one implementing file, and every cited path exists", () => {
-      const cited = [...section(text, "References").matchAll(/`([^`\s]+)`/g)]
-        .map((m) => m[1].replace(/[:#].*$/, ""))
-        .filter((p) => p.includes("/"));
-      expect(cited.length).toBeGreaterThan(0);
-      for (const p of cited) expect(existsSync(join(ROOT, p)), `${p} exists`).toBe(true);
+    it("cites at least one implementing file outside docs/ and backlog/, and every cited path exists", () => {
+      expect(implementationPaths(section(text, "References")).length).toBeGreaterThan(0);
+      for (const p of citedPaths(section(text, "References"))) expect(existsSync(join(ROOT, p)), `${p} exists`).toBe(true);
     });
   });
 
