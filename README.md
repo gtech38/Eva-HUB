@@ -35,6 +35,7 @@ cd workers/media && make models && make dev
 | [docs/03-data-model.md](docs/03-data-model.md) | Entity overview, ERD, key modelling decisions |
 | [docs/schema.draft.prisma](docs/schema.draft.prisma) | Draft Prisma schema (not yet migrated) |
 | [docs/04-plan.md](docs/04-plan.md) | Phased delivery, MVP scope, long-lead items, open questions, risks |
+| [docs/adr/README.md](docs/adr/README.md) | Architecture decision records: what we chose and why (queue, storage, tenancy, face model, auth) |
 
 ## Decisions so far (2026-10-07)
 
