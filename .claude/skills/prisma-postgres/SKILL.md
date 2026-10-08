@@ -27,7 +27,7 @@ Connection: `postgresql://hub:hub@localhost:5433/hub` (compose maps 5433 -> 5432
 ## Conventions in this repo
 - Generator `prisma-client-js` with `previewFeatures = ["postgresqlExtensions"]`; datasource `extensions = [vector, citext]`.
 - **Ids are `String @id @default(cuid())`.** Python inserts generate `'c' + 24 hex` (`db.new_id()`). `Job.id` and `AuditLog.id` are `BigInt autoincrement` -- serialize with `String(j.id)` in React keys.
-- **Tenancy columns:** every event-owned table has `eventId`; the ones that also need studio-level listing carry `studioId` (`Household`, `Guest`, `Album`, `Photo`, `Message`, `Order`). `Face.eventId` is denormalized for the filtered exact scan.
+- **Tenancy columns:** every event-owned table has `eventId`; the ones that also need studio-level listing carry `studioId` (`Household`, `Guest`, `Album`, `Photo`, `Message`, `Order`, `ZipExport`). `Face.eventId` is denormalized for the filtered exact scan.
 - **LocalizedText is `Json`** shaped `{ en?, te?, hi? }` (`Event.title`, `SubEvent.name`, `Album.title`, `EventPage.content` fields). Render with `t()` from `@hub/shared/i18n`; parse page content with `parsePage()`.
 - **Enums everywhere** (`UserStatus`, `AuthMethod`, `EventStatus`, `ThemeKey`, `PageType`, `RsvpStatus`, `AlbumVisibility`, `PhotoStatus`, `JobStatus`, `EntitlementScope`, ...). In raw SQL cast literals: `'READY'::"PhotoStatus"`.
 - **Vectors:** `embedding Unsupported("vector(128)")` on `Face` and `FaceProfile`. Prisma cannot read/write them; use raw SQL. TS inlines a validated literal: `Prisma.raw(\`'[${nums.join(",")}]'::vector\`)` (see `apps/web/src/app/api/face/search/route.ts`). Python passes `vec_literal(v)` as a `%s::vector` parameter. Do **not** try `$1::vector` with `Prisma.sql` parameter binding for the array -- Prisma sends it as text/JSON and pgvector rejects it.
@@ -73,7 +73,7 @@ ALTER TABLE "PhotoMatch" ADD CONSTRAINT "PhotoMatch_one_subject"
   CHECK (num_nonnulls("userId", "subjectGuestId") = 1);
 -- RLS (Phase 3): ALTER TABLE "Guest" ENABLE ROW LEVEL SECURITY; CREATE POLICY ... USING ("eventId" = current_setting('hub.event_id', true));
 ```
-Then `pnpm exec prisma migrate dev` to apply. Test: a Python test in `workers/media/tests/` that inserts a violating row inside a rolled-back transaction and expects `psycopg.errors.CheckViolation`. Note: the schema comment on `PhotoMatch` says this CHECK exists "via raw migration" but the init migration does not contain it.
+Then `pnpm exec prisma migrate dev` to apply. Test: a Python test in `workers/media/tests/` that inserts a violating row inside a rolled-back transaction and expects `psycopg.errors.CheckViolation`. `PhotoMatch_one_subject` (migration `add_tenant_columns_and_checks`, DB-001) is the worked example; `workers/media/tests/test_schema_constraints.py` is its test.
 
 ### Query with pgvector from TS
 ```ts
@@ -101,6 +101,7 @@ docker compose -f infra/docker-compose.yml exec postgres psql -U hub -d hub -c '
 ## Gotchas
 - `prisma migrate dev` is interactive and refuses on drift; if the DB was touched by hand, `pnpm db:reset` (destroys local data).
 - Both the TS and Python sides write `Job`; keep `JobType` in `packages/db/src/index.ts` and `JOB_TYPES`/`default_handlers()` in `workers/media/hub_worker/jobs.py` in sync, plus the `Job.type` comment in the schema.
+- `@updatedAt` is set by the Prisma client only; the column has no DB default, so raw-SQL inserts (worker, migrations) must set `"updatedAt"` themselves (see `cluster_faces.py`).
 - `DateTime` columns are `timestamp(3)` without tz; the worker forces `timezone=UTC` on its session so `now()` matches Prisma. Compare with naive UTC in Python (`db.utcnow()`).
 - `BigInt` fields (`Job.id`, `Photo.originalBytes`) are JS `bigint`; `JSON.stringify` throws -- convert with `String()`/`Number()`.
 - `Json` fields typed as `Prisma.InputJsonValue` reject `undefined`; strip undefined keys first (`savePage` in admin does this).

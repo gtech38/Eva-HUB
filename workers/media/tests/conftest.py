@@ -3,6 +3,8 @@
 `conn`   module-scoped autocommit connection; skips the module when Postgres is unreachable.
 `queue`  an `IsolatedJobQueue`: a private job type per test, claims restricted to that type and
          asserted by id, and teardown that deletes every Job row created during the test.
+`tenant` a throwaway Studio + Event (`Tenant`) with helpers for users, photos and faces; teardown
+         deletes everything hung off the event.
 
 These tests must not share a database with a running consumer (`make dev` / `make consume`):
 a consumer without `only_types` claims every due row, including TEST_* ones. Point the suite

@@ -513,6 +513,8 @@ model FaceCluster {
   eventId   String
   label     String? // optional host label, e.g. "Bride"
   suppressed Boolean @default(false) // "remove me from face search"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt // client-side in Prisma; raw-SQL writers (worker) must set it
   faces     Face[]
 }
 
@@ -585,7 +587,8 @@ model PhotoMatch {
 
   @@unique([userId, photoId])
   @@unique([subjectGuestId, photoId])
-  // CHECK (num_nonnulls(user_id, subject_guest_id) = 1) via raw migration
+  // CHECK "PhotoMatch_one_subject": num_nonnulls("userId", "subjectGuestId") = 1
+  // (raw SQL in migration add_tenant_columns_and_checks; Prisma cannot express it)
 }
 
 model Favorite {
@@ -611,12 +614,15 @@ model ProofingList {
 
 model ZipExport {
   id        String   @id @default(cuid())
+  studioId  String   // storage key s/{studioId}/e/{eventId}/zip/... derives from the row alone
   eventId   String
   scopeHash String   // hash of (photo ids, visibility state); reuse when unchanged
   partKeys  String[]
   status    String   // QUEUED|BUILDING|READY|FAILED
   bytes     BigInt?
   createdAt DateTime @default(now())
+
+  @@index([eventId, scopeHash])
 }
 
 // ───────────────────────────── Commerce ─────────────────────────────
