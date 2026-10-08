@@ -17,6 +17,9 @@ Today the only automated tests are `packages/shared/src/policy.test.ts` (node:te
 - WEB-001 e2e: guest sign-in, RSVP and gallery
 - ADM-001 e2e: admin sign-in and event creation
 - DOC-001 CONTRIBUTING.md including the `.claude/hooks` TDD gate
+- WRK-011 Fix flaky consumer tests on CI
+- WRK-015 Default job runAt from the database clock
+- WRK-016 Scope requeue_stale() by job type
 
 ## Definition of Done
 - [ ] `pnpm verify` runs lint, typecheck, vitest (all packages), pytest and exits non-zero on any failure.
