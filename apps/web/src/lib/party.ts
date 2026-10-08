@@ -38,7 +38,12 @@ export function groupByRole<M extends Pick<PartyMember, "role">>(members: readon
  */
 export function isEventSiteKey(key: string | null | undefined, studioId: string, eventId: string): key is string {
   if (typeof key !== "string") return false;
-  if (key.includes("\\") || key.split("/").some((seg) => seg === ".." || seg === ".")) return false;
   const prefix = `s/${studioId}/e/${eventId}/site/`;
-  return key.startsWith(prefix) && key.length > prefix.length;
+  if (!key.startsWith(prefix)) return false;
+  // Allowlist for everything after the prefix: plain name segments only. No dots-only segments,
+  // no percent-encoding, empty segments, trailing slash, control characters or non-ASCII, so
+  // nothing a CDN or proxy in front of storage might normalise into traversal can get through.
+  return SITE_KEY_REST.test(key.slice(prefix.length));
 }
+
+const SITE_KEY_REST = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;

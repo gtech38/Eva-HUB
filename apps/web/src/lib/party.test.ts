@@ -54,6 +54,43 @@ describe("isEventSiteKey", () => {
     }
   });
 
+  it("accepts plain nested file names under site/", () => {
+    expect(isEventSiteKey("s/st1/e/ev1/site/party/a-b_c.v2.jpg", "st1", "ev1")).toBe(true);
+    expect(isEventSiteKey("s/st1/e/ev1/site/hero-3f9a.jpg", "st1", "ev1")).toBe(true);
+  });
+
+  it("allowlist: anything after site/ other than plain name segments is refused (encoded dots/slashes, //, trailing /, control chars, spaces, case tricks)", () => {
+    for (const rest of [
+      "%2e%2e/orig/a.jpg",
+      "..%2forig/a.jpg",
+      "a%2fb.jpg",
+      "a%00.jpg",
+      "a//b.jpg",
+      "a/",
+      "/a.jpg",
+      "a.jpg\n",
+      "a\u0000.jpg",
+      "a\tb.jpg",
+      "a b.jpg",
+      "a?x=1.jpg",
+      "a#b.jpg",
+      "a;b.jpg",
+      ".hidden.jpg",
+      "./a.jpg",
+      "a/./b.jpg",
+      "a/../b.jpg",
+      "é.jpg",
+    ]) {
+      expect(isEventSiteKey(`s/st1/e/ev1/site/${rest}`, "st1", "ev1"), JSON.stringify(rest)).toBe(false);
+    }
+  });
+
+  it("the prefix is case-sensitive: SITE/ and S/ do not match", () => {
+    expect(isEventSiteKey("s/st1/e/ev1/SITE/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("S/st1/e/ev1/site/a.jpg", "st1", "ev1")).toBe(false);
+    expect(isEventSiteKey("s/ST1/e/ev1/site/a.jpg", "st1", "ev1")).toBe(false);
+  });
+
   it("rejects another event's or studio's key, traversal and non-strings", () => {
     expect(isEventSiteKey("s/st1/e/ev2/site/a.jpg", "st1", "ev1")).toBe(false);
     expect(isEventSiteKey("s/st2/e/ev1/site/a.jpg", "st1", "ev1")).toBe(false);
