@@ -17,7 +17,7 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 | `packages/shared/src/auth.ts` | `SESSION_COOKIE = "hub_session"`, `newToken()`, `hashToken()`, `encodeCookie()/decodeCookie()` (HMAC-SHA256 with `AUTH_SECRET`), `createSession()`, `destroySession()`, `normalizeContact()`, `principalFromCookie()`, `resolveUserForVerifiedContact()`, `linkGuestsForContact()` |
 | `packages/shared/src/policy.ts` | `Principal`, `Action` union, `Resource`, `ELEVATED` set, `REAUTH_HOURS = 12`, `can()` |
 | `packages/shared/src/policy.test.ts` | vitest suite; `pnpm --filter @hub/shared test` |
-| `packages/shared/src/env.ts` | `AUTH_SECRET` (min 16 chars), `SESSION_TTL_DAYS` (30), `INVITE_SESSION_TTL_DAYS` (90), `cookieDomain()` |
+| `packages/shared/src/env.ts` | `AUTH_SECRET` (min 16 chars), `SESSION_TTL_DAYS` (30), `INVITE_SESSION_TTL_DAYS` (90; an INVITE_LINK session is also capped at its token's expiry, see `sessionExpiry()`), `cookieDomain()` |
 | `apps/web/src/app/sites/[slug]/auth/actions.ts` | `requestSignIn` server action (guest-site magic link, email or SMS) |
 | `apps/web/src/app/sites/[slug]/auth/callback/route.ts` | magic-link landing: burn token, resolve user, link guests, `createSession(EMAIL_LINK|SMS_OTP)` |
 | `apps/web/src/app/sites/[slug]/i/[token]/route.ts` | invitation link: resolve user, link that guest row, `createSession("INVITE_LINK", eventId)` |
@@ -29,7 +29,7 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 
 ## Conventions in this repo
 - **Cookie = `<sessionId>.<base64url HMAC>`.** `decodeCookie` uses `timingSafeEqual`; a bad signature is `null`, never an exception. The cookie carries no claims; everything is loaded from `Session` + `User` per request.
-- **Tokens are stored hashed only** (`tokenHash = sha256(token)`, `@unique`). `LoginToken` (magic link, 15 min, single use via `updateMany({ usedAt: null })` so a double click cannot mint two sessions) and `InviteToken` (per guest per channel, expires `startsOn + 90d` or `now + 180d`, reusable until `revokedAt`, `lastUsedAt` stamped).
+- **Tokens are stored hashed only** (`tokenHash = sha256(token)`, `@unique`). `LoginToken` (magic link, 15 min, single use via `updateMany({ usedAt: null })` so a double click cannot mint two sessions) and `InviteToken` (per guest per channel, expires at event end + 90 d via `inviteExpiry()` in `packages/shared/src/invites.ts` (latest sub-event end, else `startsOn`; `now + 180d` without dates), reusable until `revokedAt`, `lastUsedAt` stamped).
 - **`authMethod` decides scope.** `INVITE_LINK` sessions get `guestScopeEventId`, a 90-day TTL, and `can()` returns false for every `ELEVATED` action regardless of roles. Magic-link sessions are `EMAIL_LINK` (or `SMS_OTP` for SMS delivery) with a 30-day TTL.
 - **Re-auth gate:** elevated actions also fail when `authedAt` is older than 12 h. Admin `authorize()` turns that specific case into `redirect("/login?reauth=1")`; a real denial throws `ForbiddenError`.
 - **Platform admin bypasses role checks but not the INVITE_LINK rule** (tested).
@@ -103,7 +103,7 @@ pnpm typecheck
 # enumeration check: both must print the same body
 curl -s -X POST -d 'contact=nobody@example.com' -H 'Host: priya-arjun.localhost' http://localhost:3000/  # via UI form in practice
 ```
-Manual: sign in at `http://localhost:3001/login` as `admin@localhost`, open Mailpit `http://localhost:8025`, click the link; try a `/i/<bogus>` URL on an event site and confirm redirect to `/?error=invite`.
+Manual: sign in at `http://localhost:3001/login` as `admin@localhost`, open Mailpit `http://localhost:8025`, click the link; try a `/i/<bogus>` URL on an event site and confirm redirect to `/?invite=expired`, where the sign-in form shows "This link has expired".
 
 ## References
 - `docs/02-users-and-roles.md` §2 (linking rules), §4 (matrix)
