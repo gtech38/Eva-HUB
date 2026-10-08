@@ -15,6 +15,7 @@ Face search indexes every face in a gallery, including people who never opted in
 - LEG-005 Biometric compliance checklist (CUBI, COPPA) and data-deletion runbook
 - LEG-007 DSAR / "delete my data" flow spec and data retention matrix
 - LEG-006 Texas attorney review (external)
+- DB-005 BiometricConsent.consentLocale column
 
 ## Definition of Done
 - [ ] Consent texts shown in the product are the versioned files, with the version recorded on every `BiometricConsent` row.

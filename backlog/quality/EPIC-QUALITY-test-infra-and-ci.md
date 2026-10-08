@@ -20,6 +20,7 @@ When this epic was written, the only automated tests were `packages/shared/src/p
 - WRK-011 Fix flaky consumer tests on CI
 - WRK-015 Default job runAt from the database clock
 - WRK-016 Scope requeue_stale() by job type
+- INF-021 Turbopack rule for ?raw consent-text imports
 
 ## Definition of Done
 - [ ] `pnpm verify` runs lint, typecheck, vitest (all packages), pytest and exits non-zero on any failure.

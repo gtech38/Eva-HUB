@@ -18,6 +18,12 @@ Human checklist:
 - [ ] Record the engagement date, firm, and sign-off here; attach the opinion letter location (not in repo).
 - [ ] Re-run LEG-001 tests after bumping versions; confirm `BiometricConsent` rows after launch carry the reviewed version.
 
+## Launch dependencies (from LEG-001 review)
+The v1 consent texts deliberately describe only what exists today. Before sign-off can enable face search in production (filling `reviewed_by` lifts the production guard), these must ship so the texts can promise them, via a new `v2` version:
+- #35 WEB-021 "Remove me from face search" guest control (self-service exclusion from matching; v1 tells people to ask the studio).
+- #39 WRK-012 scheduler tick: automatic face-index purges at `faceIndexPurgeAt` and the face-profile 3-year purge (v1 states retention as studio/platform policy only).
+- #7 WEB-006 account settings: face-profile revoke and "delete my data" (until then "Remember my face" is hidden and the route ignores `remember`).
+
 ## Out of scope
 - Any code beyond version bumps handled by the referenced tickets.
 
