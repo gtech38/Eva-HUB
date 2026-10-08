@@ -15,7 +15,9 @@
     "./pages": "./src/pages.ts",
     "./names": "./src/names.ts",
     "./consent": "./src/consent.ts",
-    "./invites": "./src/invites.ts"
+    "./invites": "./src/invites.ts",
+    "./ratelimit": "./src/ratelimit.ts",
+    "./ratePolicies": "./src/ratePolicies.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
