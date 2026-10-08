@@ -22,6 +22,7 @@ const { default: AlbumPage } = await import("./page");
 
 const dbUp = await dbReachable();
 failInCiWithoutPostgres("album page", dbUp);
+vi.setConfig({ testTimeout: 30_000 }); // 2,000 seeded photos; see lib/gallery.test.ts
 
 const BIG = 2000;
 const imgCount = (html: string) => (html.match(/<img\b/g) ?? []).length;

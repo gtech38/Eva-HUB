@@ -2,7 +2,7 @@
  * Postgres-backed tests for the gallery feeds (keyset pagination) and the visibility and
  * entitlement rules they sit on. Needs the local stack; skipped with a reason when Postgres is down.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@hub/db";
 import { VISIBLE_IN_MAIN, createGalleryFixture, dbReachable, failInCiWithoutPostgres, fakeViewer } from "../../test/galleryFixture";
 import { countAlbumPhotos, findVisibleAlbum, listAlbumPage, listFavoritesPage, listMatchPage, MAX_PAGE_SIZE, PAGE_SIZE, type PhotoDTO } from "./gallery";
@@ -10,6 +10,8 @@ import type { KeysetCursor, ScoreCursor } from "./galleryCursor";
 
 const dbUp = await dbReachable();
 failInCiWithoutPostgres("gallery feeds against Postgres", dbUp);
+// Paging 125 photos signs 250 URLs and runs several queries; a loaded machine (pnpm -r test) needs headroom over 5 s.
+vi.setConfig({ testTimeout: 30_000 });
 const dbHost =(process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
 const suite = dbUp ? "gallery feeds against Postgres" : `gallery feeds against Postgres [skipped: Postgres unreachable at ${dbHost}; run pnpm infra:up]`;
 

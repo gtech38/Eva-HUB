@@ -2,7 +2,7 @@
  * The request-level rules behind GET /api/gallery/*: who may page which feed, cursor validation,
  * and that the album endpoint never reveals photos from albums the viewer cannot see.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@hub/db";
 import { createGalleryFixture, dbReachable, failInCiWithoutPostgres, fakeViewer, VISIBLE_IN_MAIN } from "../../test/galleryFixture";
 import { decodeCursor } from "./galleryCursor";
@@ -11,6 +11,7 @@ import type { Viewer } from "./site";
 
 const dbUp = await dbReachable();
 failInCiWithoutPostgres("gallery feed requests against Postgres", dbUp);
+vi.setConfig({ testTimeout: 30_000 }); // see gallery.test.ts
 const dbHost = (process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
 const suite = dbUp ? "gallery feed requests against Postgres" : `gallery feed requests against Postgres [skipped: Postgres unreachable at ${dbHost}; run pnpm infra:up]`;
 
