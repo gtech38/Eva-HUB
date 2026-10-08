@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
 import { VISIBLE_IN_MAIN, createGalleryFixture, dbReachable, fakeViewer } from "../../test/galleryFixture";
 import { countAlbumPhotos, listAlbumPage, listFavoritesPage, listMatchPage, MAX_PAGE_SIZE, PAGE_SIZE, type PhotoDTO } from "./gallery";
-import type { KeysetCursor } from "./galleryCursor";
+import type { KeysetCursor, ScoreCursor } from "./galleryCursor";
 
 const dbUp = await dbReachable();
 const dbHost = (process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
@@ -41,7 +41,7 @@ describe.skipIf(!dbUp)(suite, () => {
   describe("listAlbumPage", () => {
     it("pages through 125 fixture photos in pages of 60 with no gaps or duplicates", async () => {
       const viewer = fakeViewer(fx.users.viewer.id);
-      const pages = await walk((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 60 }));
+      const pages = await walk<KeysetCursor>((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 60 }));
       expect(pages.map((p) => p.length)).toEqual([60, 60, 5]);
       const ids = pages.flat().map((p) => p.id);
       expect(new Set(ids).size).toBe(VISIBLE_IN_MAIN);
@@ -57,13 +57,13 @@ describe.skipIf(!dbUp)(suite, () => {
 
     it("returns a null nextCursor when the last page is exactly full", async () => {
       const viewer = fakeViewer(fx.users.viewer.id);
-      const pages = await walk((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 25 }));
+      const pages = await walk<KeysetCursor>((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 25 }));
       expect(pages.map((p) => p.length)).toEqual([25, 25, 25, 25, 25]);
     });
 
     it("keeps photos without a sortKey (listed last) even when the cursor itself has a null sortKey", async () => {
       const viewer = fakeViewer(fx.users.viewer.id);
-      const pages = await walk((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 2 }));
+      const pages = await walk<KeysetCursor>((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 2 }));
       expect(pages.flat().map((p) => p.id)).toEqual(fx.expectedMainOrder);
     });
 
@@ -76,7 +76,7 @@ describe.skipIf(!dbUp)(suite, () => {
 
     it("never lists hidden photos or photos that are not READY", async () => {
       const viewer = fakeViewer(fx.users.viewer.id);
-      const pages = await walk((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 100 }));
+      const pages = await walk<KeysetCursor>((cursor) => listAlbumPage(fx.eventA.id, viewer, fx.albums.main.id, { cursor, limit: 100 }));
       const ids = pages.flat().map((p) => p.id);
       expect(ids.some((i) => i.includes("-h") || i.includes("-u"))).toBe(false);
       expect(ids).toHaveLength(VISIBLE_IN_MAIN);
@@ -121,7 +121,7 @@ describe.skipIf(!dbUp)(suite, () => {
         ),
       });
       const viewer = fakeViewer(fx.users.viewer.id);
-      const pages = await walk((cursor) => listFavoritesPage(fx.eventA.id, viewer, { cursor, limit: 60 }));
+      const pages = await walk<KeysetCursor>((cursor) => listFavoritesPage(fx.eventA.id, viewer, { cursor, limit: 60 }));
       expect(pages.map((p) => p.length)).toEqual([60, 10]);
       expect(pages.flat().map((p) => p.id)).toEqual(mine);
       expect(pages.flat().every((p) => p.favorited)).toBe(true);
@@ -148,7 +148,7 @@ describe.skipIf(!dbUp)(suite, () => {
         .map((m) => m.id);
 
       const viewer = fakeViewer(fx.users.viewer.id);
-      const pages = await walk((cursor) => listMatchPage(fx.eventA.id, viewer, { userId: fx.users.viewer.id }, { cursor, limit: 60 }));
+      const pages = await walk<ScoreCursor>((cursor) => listMatchPage(fx.eventA.id, viewer, { userId: fx.users.viewer.id }, { cursor, limit: 60 }));
       expect(pages.map((p) => p.length)).toEqual([60, 10]);
       expect(pages.flat().map((p) => p.id)).toEqual(expected);
       expect(pages.flat()[0].score).toBe(1);
