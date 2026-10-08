@@ -28,11 +28,13 @@ export type ClaimInput = {
  * Create a claim unless it would take the item past its quantity. The item row is locked
  * (SELECT ... FOR UPDATE) for the transaction so two guests claiming the last unit serialize
  * instead of both reading the same remaining count. The same lock makes a double submit safe:
- * a second claim by the same user on the same item within CLAIM_DEDUPE_WINDOW_MS returns the
- * first claim (idempotent success) instead of creating another.
+ * a second claim by the same user on the same item for the same quantity within
+ * CLAIM_DEDUPE_WINDOW_MS returns the first claim (idempotent success) instead of creating another.
  */
 export async function claimRegistryItem(input: ClaimInput): Promise<ClaimResult> {
   const { eventId, studioId, itemId, userId, guestName, quantity, now = new Date() } = input;
+  // Validate before anything can be mistaken for a duplicate: a bad quantity is never an idempotent success.
+  if (!Number.isInteger(quantity) || quantity < 1) return { ok: false, reason: "invalid_quantity" };
   try {
     return await prisma.$transaction(async (tx): Promise<ClaimResult> => {
       const locked = await tx.$queryRaw<Array<{ id: string }>>`
@@ -46,7 +48,8 @@ export async function claimRegistryItem(input: ClaimInput): Promise<ClaimResult>
       if (!item) return { ok: false, reason: "not_found" };
 
       const since = now.getTime() - CLAIM_DEDUPE_WINDOW_MS;
-      const duplicate = item.claims.find((c) => c.userId === userId && c.claimedAt.getTime() >= since);
+      // A double submit repeats the same request: same user, same item, same quantity. A different quantity is a new claim.
+      const duplicate = item.claims.find((c) => c.userId === userId && c.quantity === quantity && c.claimedAt.getTime() >= since);
       if (duplicate) return { ok: true, claimId: duplicate.id, remaining: remainingQuantity(item, item.claims) };
 
       const check = checkClaim(item, item.claims, quantity);

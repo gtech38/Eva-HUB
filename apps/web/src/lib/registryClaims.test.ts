@@ -169,6 +169,26 @@ describe.skipIf(!dbUp)(suite, () => {
       expect(await claimsOf(two.id)).toHaveLength(1);
     });
 
+    it("a different quantity within the window is a real second claim, never a silent 'ok' that records the first quantity", async () => {
+      const item = await newItem(5);
+      const first = await claim(item.id, "u-a", 1);
+      const second = await claim(item.id, "u-a", 2);
+      expect(first.ok && second.ok).toBe(true);
+      if (first.ok && second.ok) expect(second.claimId).not.toBe(first.claimId);
+      expect((await claimsOf(item.id)).map((c) => c.quantity).sort()).toEqual([1, 2]);
+      // ...and it is still subject to the remaining count.
+      expect(await claim(item.id, "u-a", 3)).toEqual({ ok: false, reason: "exceeds_remaining", remaining: 2 });
+    });
+
+    it("an invalid quantity is refused even when it would otherwise look like a double submit", async () => {
+      const item = await newItem(3);
+      await claim(item.id, "u-a", 1);
+      for (const q of [0, -1, 1.5, Number.NaN]) {
+        expect(await claim(item.id, "u-a", q), String(q)).toEqual({ ok: false, reason: "invalid_quantity" });
+      }
+      expect(await claimsOf(item.id)).toHaveLength(1);
+    });
+
     it("a later claim (after the 10 s window) by the same user is a new claim", async () => {
       const item = await newItem(3);
       const first = await claim(item.id, "u-a");
