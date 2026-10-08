@@ -3,9 +3,10 @@ import { prisma } from "@hub/db";
 import { t, type Locale, type LocalizedText } from "@hub/shared/i18n";
 import { requireViewer } from "@/lib/site";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
-import { FaceSearch, type FaceStrings } from "@/components/gallery/FaceSearch";
+import { FaceSearch, type FaceStrings, type PreviousFeed } from "@/components/gallery/FaceSearch";
 import { galleryStrings } from "@/lib/gallery-strings";
-import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs, type PhotoDTO } from "@/lib/gallery";
+import { listMatchPage, type MatchSubject } from "@/lib/gallery";
+import { encodeScoreCursor } from "@/lib/galleryCursor";
 import { fullName } from "@/lib/format";
 import { consentTextsFor } from "@/lib/consentTexts";
 import { FACE_PROFILE_ENROLMENT, faceSearchAllowed } from "@/lib/faceConsent";
@@ -106,22 +107,15 @@ export default async function MyPhotosPage() {
     : [];
   const subjects = [{ id: "me", label: F.me }, ...children.map((c) => ({ id: c.id, label: fullName(c) }))];
 
-  // Previously matched photos (PhotoMatch survives the face-index purge).
-  const entitled = await isEntitledFullRes(event.id, viewer.principal.userId);
-  const withScores = async (matches: Array<{ photoId: string; score: number }>): Promise<PhotoDTO[]> => {
-    if (matches.length === 0) return [];
-    const scores = new Map(matches.map((m) => [m.photoId, m.score]));
-    const photos = await prisma.photo.findMany({ where: visiblePhotoWhere(event.id, viewer, { id: { in: [...scores.keys()] } }) });
-    photos.sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
-    return toPhotoDTOs(photos, viewer, { entitled, scores });
+  // Previously matched photos, best match first (PhotoMatch survives the face-index purge). Only the
+  // first page is rendered here; PhotoGrid fetches the rest from /api/gallery/me.
+  const previousFeed = async (subject: MatchSubject, endpoint: string): Promise<PreviousFeed> => {
+    const page = await listMatchPage(event.id, viewer, subject);
+    return { photos: page.photos, more: { endpoint, nextCursor: page.nextCursor && encodeScoreCursor(page.nextCursor) } };
   };
-  const me = await withScores(await prisma.photoMatch.findMany({ where: { userId: viewer.principal.userId, photo: { eventId: event.id } }, select: { photoId: true, score: true } }));
+  const me = await previousFeed({ userId: viewer.principal.userId }, "/api/gallery/me?subject=me");
   const family = await Promise.all(
-    children.map(async (c) => ({
-      guestId: c.id,
-      name: fullName(c),
-      photos: await withScores(await prisma.photoMatch.findMany({ where: { subjectGuestId: c.id }, select: { photoId: true, score: true } })),
-    })),
+    children.map(async (c) => ({ guestId: c.id, name: fullName(c), ...(await previousFeed({ guestId: c.id }, `/api/gallery/me?subject=${encodeURIComponent(c.id)}`)) })),
   );
 
   // Hidden until face profiles can be revoked by their owner (WEB-006); the route ignores `remember` too.

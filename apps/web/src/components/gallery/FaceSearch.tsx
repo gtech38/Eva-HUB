@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PhotoDTO } from "@/lib/gallery";
-import { PhotoGrid, type GalleryStrings } from "./PhotoGrid";
+import { PhotoGrid, type GalleryStrings, type MoreSource } from "./PhotoGrid";
 import { consentFor, type ConsentTexts, type ConsentView } from "@/lib/consentView";
 import { ConsentText } from "./ConsentText";
 
@@ -27,6 +27,8 @@ export type FaceStrings = {
 
 type Subject = { id: string; label: string };
 type Result = { subject: string; photos: PhotoDTO[] };
+/** First page of previously matched photos plus where the rest comes from. */
+export type PreviousFeed = { photos: PhotoDTO[]; more: MoreSource };
 
 type Props = {
   strings: FaceStrings;
@@ -35,7 +37,7 @@ type Props = {
   subjects: Subject[];
   canRemember: boolean;
   canFavorite: boolean;
-  previous: { me: PhotoDTO[]; family: Array<{ guestId: string; name: string; photos: PhotoDTO[] }> };
+  previous: { me: PreviousFeed; family: Array<{ guestId: string; name: string } & PreviousFeed> };
 };
 
 export function FaceSearch({ strings: S, consentTexts, gallery, subjects, canRemember, canFavorite, previous }: Props) {
@@ -152,10 +154,10 @@ export function FaceSearch({ strings: S, consentTexts, gallery, subjects, canRem
         </section>
       )}
 
-      {!result && previous.me.length > 0 && (
+      {!result && previous.me.photos.length > 0 && (
         <section>
           <h2 className="eyebrow mb-4">{S.previous}</h2>
-          <PhotoGrid photos={previous.me} strings={gallery} canFavorite={canFavorite} />
+          <PhotoGrid photos={previous.me.photos} more={previous.me.more} strings={gallery} canFavorite={canFavorite} />
         </section>
       )}
 
@@ -168,7 +170,7 @@ export function FaceSearch({ strings: S, consentTexts, gallery, subjects, canRem
               .map((f) => (
                 <div key={f.guestId}>
                   <h3 className="mb-3 font-display text-xl">{f.name}</h3>
-                  <PhotoGrid photos={f.photos} strings={gallery} canFavorite={canFavorite} />
+                  <PhotoGrid photos={f.photos} more={f.more} strings={gallery} canFavorite={canFavorite} />
                 </div>
               ))}
           </div>
