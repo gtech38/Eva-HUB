@@ -18,6 +18,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import time
 from collections.abc import Iterator
@@ -46,10 +47,17 @@ def _env_file_value(name: str) -> str | None:
     return None
 
 
+def _unavailable(reason: str) -> None:
+    """Skip locally when the stack is down; fail under CI, where skipping would pass vacuously."""
+    if os.environ.get("CI"):
+        raise RuntimeError(f"restore-drill tests cannot run in CI: {reason}")
+    pytest.skip(reason, allow_module_level=True)
+
+
 def _source_url() -> str:
     url = os.environ.get("DATABASE_URL") or _env_file_value("DATABASE_URL")
     if not url:
-        pytest.skip("DATABASE_URL is not set and there is no .env")
+        _unavailable("DATABASE_URL is not set and there is no .env")
     parts = urlsplit(url)
     return urlunsplit(parts._replace(query=""))  # drop Prisma's ?schema=… for libpq
 
@@ -80,7 +88,8 @@ def _reachable() -> str | None:
 
 
 SKIP_REASON = _reachable()
-pytestmark = pytest.mark.skipif(SKIP_REASON is not None, reason=SKIP_REASON or "")
+if SKIP_REASON is not None:
+    _unavailable(SKIP_REASON)
 
 
 def _scratch_name() -> str:
@@ -263,11 +272,11 @@ def typed_source() -> Iterator[str]:
         with psycopg.connect(url, autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
-                'CREATE TABLE "Face" (id text PRIMARY KEY, embedding vector(3), meta jsonb, raw bytea,'
+                'CREATE TABLE "TypedColumns" (id text PRIMARY KEY, embedding vector(3), meta jsonb, raw bytea,'
                 ' at timestamptz, score double precision, tags text[], note text)'
             )
             conn.execute(
-                """INSERT INTO "Face" VALUES
+                """INSERT INTO "TypedColumns" VALUES
                 ('a', '[0.1,0.2,0.30000001]', '{"b": 1, "a": [1, 2]}', '\\x00ff', '2026-10-08 12:00:00.123456+05:30', 0.1 + 0.2, '{x,"y z"}', 'తెలుగు'),
                 ('b', NULL, NULL, NULL, NULL, NULL, NULL, NULL)"""
             )
@@ -285,7 +294,7 @@ def test_vector_json_bytea_and_time_columns_restore_with_identical_checksums(typ
     proc = _server_drill(out, _scratch_name(), DRILL_SKIP_PRISMA="1")
 
     assert proc.returncode == 0, _out(proc)
-    assert _reported_counts(proc.stdout)["Face"] == (2, 2)
+    assert _reported_counts(proc.stdout)["TypedColumns"] == (2, 2)
 
 
 def _s3() -> dict[str, str] | None:
@@ -326,9 +335,11 @@ def test_backup_upload_copies_dump_and_manifest_under_backup_prefix(tmp_path: Pa
         assert proc.returncode == 0, _out(proc)
 
         listing = _aws(cfg, "s3", "ls", f"s3://{cfg['S3_BUCKET']}/{prefix}/")
-        day = time.strftime("%Y-%m-%d", time.gmtime())
-        names = {line.split()[-1] for line in listing.stdout.splitlines() if line.strip()}
-        assert names == {f"{day}.dump", f"{day}.dump.manifest"}, listing.stdout + listing.stderr
+        names = sorted(line.split()[-1] for line in listing.stdout.splitlines() if line.strip())
+        # time-of-day key: two backups on one day must not overwrite each other
+        stamp = r"\d{4}-\d{2}-\d{2}T\d{6}Z"
+        assert len(names) == 2 and re.fullmatch(rf"{stamp}\.dump", names[0]), listing.stdout + listing.stderr
+        assert names[1] == f"{names[0]}.manifest", listing.stdout + listing.stderr
     finally:
         _aws(cfg, "s3", "rm", "--recursive", f"s3://{cfg['S3_BUCKET']}/{prefix}/")
 
@@ -340,3 +351,242 @@ def test_drill_without_manifest_or_source_url_refuses_to_guess(dump: Path, tmp_p
 
     assert proc.returncode == 2, _out(proc)
     assert "manifest" in _out(proc)
+
+
+# ── review fixes (PR #135) ────────────────────────────────────────────────────────────────────
+
+
+def _copy_with_manifest(dump: Path, tmp_path: Path, manifest: str | None = None, name: str = "copy.dump") -> Path:
+    copy = tmp_path / name
+    shutil.copyfile(dump, copy)
+    text = manifest if manifest is not None else Path(f"{dump}.manifest").read_text()
+    Path(f"{copy}.manifest").write_text(text)
+    return copy
+
+
+def _manifest_lines(dump: Path) -> list[str]:
+    return Path(f"{dump}.manifest").read_text().splitlines()
+
+
+@pytest.fixture
+def make_source() -> Iterator[object]:
+    """Factory for scratch source databases: make_source(*statements) -> url. Dropped afterwards."""
+    created: list[str] = []
+
+    def _make(*statements: str) -> str:
+        name = f"{SOURCE_DB}_restore_src{secrets.token_hex(3)}"
+        with psycopg.connect(ADMIN, autocommit=True) as conn:
+            conn.execute(f'CREATE DATABASE "{name}"')
+        created.append(name)
+        url = _with_db(SOURCE, name)
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            for stmt in statements:
+                conn.execute(stmt)
+        return url
+
+    yield _make
+    with psycopg.connect(ADMIN, autocommit=True) as conn:
+        for name in created:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+def test_drill_refuses_a_database_name_with_an_embedded_newline(dump: Path) -> None:
+    # a line-oriented grep would accept this: its first line is a perfectly good throwaway name
+    proc = _server_drill(dump, f"{SOURCE_DB}_restore_ok\nanything")
+
+    assert proc.returncode == 2, _out(proc)
+    assert "RESTORE_DB_NAME" in _out(proc)
+    assert _database_exists(SOURCE_DB)
+
+
+def test_drill_fails_when_the_manifest_is_empty_instead_of_comparing_nothing(dump: Path, tmp_path: Path) -> None:
+    empty = _copy_with_manifest(dump, tmp_path, manifest="")
+    proc = _server_drill(empty, _scratch_name())
+
+    assert proc.returncode != 0, _out(proc)
+    assert "manifest is empty" in _out(proc)
+    assert "PASS" not in proc.stdout
+
+
+def test_drill_fails_when_the_manifest_does_not_cover_prisma_migrations(dump: Path, tmp_path: Path) -> None:
+    lines = [ln for ln in _manifest_lines(dump) if not ln.startswith("_prisma_migrations\t")]
+    bad = _copy_with_manifest(dump, tmp_path, manifest="\n".join(lines) + "\n")
+    proc = _server_drill(bad, _scratch_name())
+
+    assert proc.returncode != 0, _out(proc)
+    assert "_prisma_migrations" in _out(proc)
+    assert "PASS" not in proc.stdout
+
+
+def test_drill_fails_on_a_truncated_dump(dump: Path, tmp_path: Path) -> None:
+    cut = _copy_with_manifest(dump, tmp_path, name="cut.dump")
+    cut.write_bytes(dump.read_bytes()[: dump.stat().st_size // 2])
+    name = _scratch_name()
+    proc = _server_drill(cut, name)
+
+    assert proc.returncode != 0, _out(proc)
+    assert "PASS" not in proc.stdout
+    assert not _database_exists(name)
+
+
+def test_drill_fails_when_the_dump_belongs_to_a_different_database(dump: Path, tmp_path: Path, make_source) -> None:  # type: ignore[no-untyped-def]
+    other = make_source('CREATE TABLE "Other" (id text PRIMARY KEY)', "INSERT INTO \"Other\" VALUES ('x')")
+    other_dump = tmp_path / "other.dump"
+    assert _run(BACKUP, str(other_dump), DATABASE_URL=other).returncode == 0
+    mixed = _copy_with_manifest(dump, tmp_path, manifest=Path(f"{other_dump}.manifest").read_text())
+    proc = _server_drill(mixed, _scratch_name(), DRILL_SKIP_PRISMA="1")
+
+    assert proc.returncode != 0, _out(proc)
+    assert "MISMATCH" in proc.stdout
+    assert "missing after restore" in proc.stdout
+
+
+def test_drill_fails_when_a_table_in_the_restore_is_missing_from_the_manifest(dump: Path, tmp_path: Path) -> None:
+    lines = [ln for ln in _manifest_lines(dump) if not ln.startswith("Guest\t")]
+    bad = _copy_with_manifest(dump, tmp_path, manifest="\n".join(lines) + "\n")
+    proc = _server_drill(bad, _scratch_name())
+
+    assert proc.returncode != 0, _out(proc)
+    assert re.search(r"^\s*Guest\s+-\s+\d+\s+MISMATCH \(not in source\)", proc.stdout, re.M), _out(proc)
+
+
+@pytest.mark.skipif(shutil.which("pnpm") is None, reason="pnpm is not installed")
+def test_drill_fails_when_prisma_migrate_status_fails(tmp_path: Path, make_source) -> None:  # type: ignore[no-untyped-def]
+    # Prisma's bookkeeping table exists but no migration is recorded as applied
+    url = make_source(
+        'CREATE TABLE "_prisma_migrations" (id varchar(36) PRIMARY KEY, checksum varchar(64) NOT NULL,'
+        " finished_at timestamptz, migration_name varchar(255) NOT NULL, logs text, rolled_back_at timestamptz,"
+        " started_at timestamptz NOT NULL DEFAULT now(), applied_steps_count integer NOT NULL DEFAULT 0)"
+    )
+    out = tmp_path / "nomig.dump"
+    assert _run(BACKUP, str(out), DATABASE_URL=url).returncode == 0
+    proc = _server_drill(out, _scratch_name())
+
+    assert proc.returncode != 0, _out(proc)
+    assert "prisma migrate status: FAILED" in proc.stdout
+
+
+def test_backup_and_manifest_are_private_to_the_owner(dump: Path) -> None:
+    for f in (dump, Path(f"{dump}.manifest")):
+        assert stat.S_IMODE(f.stat().st_mode) == 0o600, f"{f.name} is {oct(stat.S_IMODE(f.stat().st_mode))}"
+
+
+def test_dumps_manifests_and_restore_dirs_are_gitignored() -> None:
+    for path in ("hub.dump", "restore/hub.dump", "x/hub.dump.manifest", "restore/verify.dump"):
+        proc = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT)
+        assert proc.returncode == 0, f"{path} is not ignored"
+
+
+def test_container_drill_removes_its_data_volume(dump: Path) -> None:
+    name = _scratch_name()
+    proc = _drill(dump, RESTORE_DB_NAME=name)
+
+    assert proc.returncode == 0, _out(proc)
+    volumes = subprocess.run(
+        ["docker", "volume", "ls", "-q", "--filter", f"name=hub-restore-drill-{name}"], capture_output=True, text=True
+    ).stdout.split()
+    assert volumes == []
+
+
+def test_face_and_facecluster_rows_are_left_out_of_the_dump_and_the_drill_still_passes(
+    tmp_path: Path, make_source  # type: ignore[no-untyped-def]
+) -> None:
+    url = make_source(
+        'CREATE TABLE "FaceCluster" (id text PRIMARY KEY, label text)',
+        'CREATE TABLE "Face" (id text PRIMARY KEY, "clusterId" text REFERENCES "FaceCluster"(id), embedding vector(3))',
+        'CREATE TABLE "FaceProfile" (id text PRIMARY KEY, embedding vector(3))',
+        "INSERT INTO \"FaceCluster\" VALUES ('c1', 'Bride')",
+        "INSERT INTO \"Face\" VALUES ('f1', 'c1', '[1,2,3]'), ('f2', NULL, '[4,5,6]')",
+        "INSERT INTO \"FaceProfile\" VALUES ('p1', '[7,8,9]')",
+    )
+    out = tmp_path / "faces.dump"
+    backup = _run(BACKUP, str(out), DATABASE_URL=url)
+    assert backup.returncode == 0, _out(backup)
+    manifest = {ln.split("\t")[0]: int(ln.split("\t")[1]) for ln in _manifest_lines(out)}
+    # reproducible gallery face index is not copied; the non-reproducible profile embedding is
+    assert manifest == {"Face": 0, "FaceCluster": 0, "FaceProfile": 1}
+
+    proc = _server_drill(out, _scratch_name(), DRILL_SKIP_PRISMA="1")
+    assert proc.returncode == 0, _out(proc)  # restored Face/FaceCluster really are empty, tables exist
+    assert _reported_counts(proc.stdout) == {"Face": (0, 0), "FaceCluster": (0, 0), "FaceProfile": (1, 1)}
+
+    full = tmp_path / "faces-full.dump"
+    assert _run(BACKUP, str(full), DATABASE_URL=url, BACKUP_EXCLUDE_DATA="").returncode == 0
+    full_manifest = {ln.split("\t")[0]: int(ln.split("\t")[1]) for ln in _manifest_lines(full)}
+    assert full_manifest == {"Face": 2, "FaceCluster": 1, "FaceProfile": 1}
+
+
+def _docker_shim(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """A `docker` wrapper that logs every argv, so tests can prove no password is passed on a command line."""
+    log = tmp_path / "docker-argv.log"
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    real = shutil.which("docker")
+    assert real
+    shim = shim_dir / "docker"
+    shim.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{log}"\nexec "{real}" "$@"\n')
+    shim.chmod(0o755)
+    return {"PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}", "PG_TOOLS": "docker"}, log
+
+
+def test_passwords_never_appear_on_a_command_line(tmp_path: Path) -> None:
+    env, log = _docker_shim(tmp_path)
+    out = tmp_path / "pw.dump"
+    backup = _run(BACKUP, str(out), **env)
+    assert backup.returncode == 0, _out(backup)
+    drill = _server_drill(out, _scratch_name(), **env)
+    assert drill.returncode == 0, _out(drill)
+    container = _drill(out, RESTORE_DB_NAME=_scratch_name(), **env)
+    assert container.returncode == 0, _out(container)
+
+    argv = log.read_text()
+    assert "://" in argv, "the shim saw the tool invocations"
+    assert not re.search(r"://[^/@\s]*:[^@\s]+@", argv), "a URL with an inline password reached a command line"
+    assert "PGPASSWORD=" not in argv, "the password value itself must not be on the command line either"
+
+
+def _runbook_sql_blocks() -> list[str]:
+    text = (ROOT / "docs" / "ops" / "runbook-restore.md").read_text()
+    return re.findall(r"```sql\n(.*?)```", text, re.S)
+
+
+@pytest.mark.skipif(
+    SOURCE_DB == "hub" and not os.environ.get("CI"),
+    reason="never run write-then-rollback SQL on the shared local hub database (CI's is a disposable service container)",
+)
+def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue(make_source) -> None:  # type: ignore[no-untyped-def]
+    blocks = _runbook_sql_blocks()
+    purge = next(b for b in blocks if "PURGE_FACE_INDEX" in b)
+    with psycopg.connect(SOURCE) as conn:
+        try:
+            events = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 2').fetchall()]
+            assert len(events) == 2
+            conn.execute(
+                'UPDATE "Event" SET "faceIndexPurgeAt" = now() - interval \'1 day\', "faceIndexPurgedAt" = NULL WHERE id = ANY(%s)',
+                (events,),
+            )
+            for eid, status in zip(events, ("RUNNING", "DEAD")):
+                conn.execute(
+                    'INSERT INTO "Job"(type, payload, status, attempts, "lockedBy", "lockedAt", "lastError", "dedupeKey")'
+                    " VALUES ('PURGE_FACE_INDEX', %s::jsonb, %s::\"JobStatus\", 3, 'w1', now(), 'boom', %s)",
+                    (f'{{"eventId": "{eid}"}}', status, f"purge-face:{eid}:restore"),
+                )
+            conn.execute(purge)
+            rows = {
+                r[0]: r[1:]
+                for r in conn.execute(
+                    'SELECT payload->>\'eventId\', status::text, attempts, "lockedBy", "lastError" FROM "Job"'
+                    " WHERE type = 'PURGE_FACE_INDEX' AND payload->>'eventId' = ANY(%s)",
+                    (events,),
+                ).fetchall()
+            }
+            # RUNNING rows belong to a live worker: untouched (same rule as jobs.enqueue)
+            assert rows[events[0]] == ("RUNNING", 3, "w1", "boom")
+            # finished/dead rows are reset: requeued with attempts 0 and no stale lock or error
+            assert rows[events[1]] == ("QUEUED", 0, None, None)
+            for block in blocks:
+                if block is not purge:
+                    conn.execute(block)  # every other runbook SQL block is valid against the real schema
+        finally:
+            conn.rollback()

@@ -13,7 +13,10 @@
 #                       (default hub_restore_<UTC timestamp>). An existing database is never reused.
 # Expected data:
 #   <backup.dump>.manifest (written by scripts/backup-db.sh from the dump's own snapshot), or
-#   SOURCE_DATABASE_URL    count/checksum a live database instead (it may have moved on since the dump).
+#   SOURCE_DATABASE_URL    count/checksum a live database instead (it may have moved on since the dump;
+#                          tables whose rows backup-db.sh leaves out, BACKUP_EXCLUDE_DATA, count as empty).
+#   The run refuses (exit 2) when the manifest is empty or, unless DRILL_SKIP_PRISMA=1, has no
+#   _prisma_migrations line, and fails when it compares zero tables: it cannot pass vacuously.
 # Other: DRILL_SKIP_PRISMA=1 skips `prisma migrate status` (no node toolchain);
 #        PG_TOOLS=native|docker|auto, PG_TOOLS_IMAGE (see scripts/lib/pg.sh).
 #
@@ -27,7 +30,10 @@ LOG_TAG=restore-drill
 DUMP=$1
 NAME=${RESTORE_DB_NAME:-hub_restore_$(date -u +%Y%m%d%H%M%S)}
 
-printf '%s' "$NAME" | grep -Eq '^[a-z][a-z0-9_]*_restore_[a-z0-9_]+$' && [ ${#NAME} -le 63 ] ||
+# Matches the WHOLE string: a line-oriented grep would accept "ok_restore_x<newline>anything".
+# The name is interpolated into CREATE / DROP DATABASE, so it must be a plain identifier.
+case $NAME in *[!a-z0-9_]*) die "RESTORE_DB_NAME is not a throwaway name: only lowercase letters, digits and _ are allowed" 2 ;; esac
+[[ $NAME =~ ^[a-z][a-z0-9_]*_restore_[a-z0-9_]+$ && ${#NAME} -le 63 ]] ||
   die "RESTORE_DB_NAME '$NAME' is not a throwaway name: use lowercase <name>_restore_<suffix> (max 63 chars)" 2
 [ -r "$DUMP" ] || die "cannot read $DUMP" 2
 
@@ -49,7 +55,9 @@ CREATED=0
 # shellcheck disable=SC2329 # invoked by the EXIT trap below
 teardown() {
   if [ -n "$CONTAINER" ]; then
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || log "warning: could not remove container $CONTAINER"
+    # -v removes the container's anonymous volumes; the named data volume is removed explicitly
+    docker rm -fv "$CONTAINER" >/dev/null 2>&1 || log "warning: could not remove container $CONTAINER"
+    docker volume rm -f "$CONTAINER" >/dev/null 2>&1 || log "warning: could not remove volume $CONTAINER"
   fi
   if [ "$CREATED" = 1 ]; then
     pg_run psql "$(tool_url "$ADMIN")" -X -q -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS \"$NAME\" WITH (FORCE)" </dev/null >/dev/null ||
@@ -62,12 +70,14 @@ trap 'exit 130' INT TERM
 
 # target_run TOOL ARGS… -> run a client tool against the restore target
 target_run() {
-  if [ -n "$CONTAINER" ]; then docker exec -i "$CONTAINER" "$@"; else pg_run "$@"; fi
+  if [ -n "$CONTAINER" ]; then pg_exec "$CONTAINER" "$@"; else pg_run "$@"; fi
 }
 
 provision_container() {
+  # CONTAINER doubles as the name of its data volume, so teardown can remove exactly that volume
   CONTAINER="hub-restore-drill-$NAME"
   docker run -d --rm --name "$CONTAINER" --label "hub.restore-drill=$NAME" \
+    -v "$CONTAINER:/var/lib/postgresql/data" \
     -e POSTGRES_USER=drill -e POSTGRES_PASSWORD=drill -e POSTGRES_DB="$NAME" \
     -p 127.0.0.1::5432 "$PG_TOOLS_IMAGE" >/dev/null
   local i
@@ -113,7 +123,14 @@ log "dump: $DUMP ($(wc -c <"$DUMP" | tr -d ' ') bytes), expected data from: $EXP
 if [ "$EXPECTED_FROM" = manifest ]; then
   LC_ALL=C sort "$DUMP.manifest" >"$WORK/expected"
 else
-  pg_manifest pg_run "$(tool_url "$(libpq_url "$SOURCE_DATABASE_URL")")" >"$WORK/expected" </dev/null
+  # same exclusion rule as backup-db.sh: the dump does not contain those tables' rows
+  pg_manifest pg_run "$(tool_url "$(libpq_url "$SOURCE_DATABASE_URL")")" "" "${BACKUP_EXCLUDE_DATA-$DEFAULT_EXCLUDE_DATA}" >"$WORK/expected" </dev/null
+fi
+# A drill that compares nothing must not pass: an empty or truncated manifest is a failure, and
+# so is one that does not cover Prisma's own table (it proves the schema came back, not just rows).
+[ -s "$WORK/expected" ] || die "the manifest is empty, so there is nothing to verify the restore against" 2
+if [ "${DRILL_SKIP_PRISMA:-0}" != 1 ] && ! grep -q "^_prisma_migrations${TAB}" "$WORK/expected"; then
+  die "the manifest has no _prisma_migrations line, so it cannot prove the schema was restored (is it truncated?)" 2
 fi
 
 if [ -n "${RESTORE_SERVER_URL:-}" ]; then provision_database; else provision_container; fi

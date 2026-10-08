@@ -18,3 +18,7 @@ workers/media/models/*.onnx
 coverage/
 .tsbuildinfo-hook
 .claude/.touched/
+# database backups hold everyone's personal data (and embeddings): never committed (DOC-003)
+*.dump
+*.dump.manifest
+restore/
