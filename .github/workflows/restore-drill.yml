@@ -1,0 +1,83 @@
+name: Restore drill
+
+# Weekly proof that a logical backup restores (DOC-003, docs/ops/backups.md). Needs no secrets
+# and no cloud resources: it migrates and seeds a fresh Postgres service container, backs it up
+# with scripts/backup-db.sh and restores it into throwaway targets with scripts/restore-drill.sh,
+# which fails the job when any table's row count or checksum differs from the source.
+# Also runs on PRs that change the scripts or the schema, so a migration that breaks restores
+# is caught before it merges.
+
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays 06:23 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/backup-db.sh
+      - scripts/restore-drill.sh
+      - scripts/lib/**
+      - scripts/tests/**
+      - packages/db/prisma/**
+      - .github/workflows/restore-drill.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: restore-drill-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drill:
+    name: restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: hub
+          POSTGRES_PASSWORD: hub
+          POSTGRES_DB: hub
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hub -d hub"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://hub:hub@localhost:5433/hub
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Migrate and seed the source database
+        working-directory: packages/db
+        run: |
+          pnpm exec prisma generate
+          pnpm exec prisma migrate deploy
+          pnpm exec tsx prisma/seed.ts
+
+      - name: Back up (pg_dump -Fc + manifest)
+        run: ./scripts/backup-db.sh "$RUNNER_TEMP/hub.dump"
+
+      - name: Drill into a throwaway container
+        run: ./scripts/restore-drill.sh "$RUNNER_TEMP/hub.dump"
+
+      - name: Drill into a throwaway database on the service Postgres
+        env:
+          RESTORE_SERVER_URL: postgresql://hub:hub@localhost:5433/postgres
+          RESTORE_DB_NAME: hub_ci_restore_${{ github.run_id }}
+        run: ./scripts/restore-drill.sh "$RUNNER_TEMP/hub.dump"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Drill tests (tampered manifests must fail, unsafe names are refused)
+        run: |
+          python -m pip install -q pytest "psycopg[binary]"
+          python -m pytest -q -p no:cacheprovider scripts/tests
