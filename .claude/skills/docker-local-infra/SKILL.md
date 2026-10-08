@@ -82,8 +82,9 @@ RESTORE_SERVER_URL=postgresql://hub:hub@localhost:5433/postgres RESTORE_DB_NAME=
 python -m pytest -q scripts/tests                    # the drill's own tests (needs this stack up; fails, not skips, when CI is set)
 ```
 - No `pg_dump` on the host is fine: the scripts fall back to the `pgvector/pgvector:pg16` image (`PG_TOOLS=native|docker|auto`) and reach compose through `host.docker.internal` on Docker Desktop.
-- The drill only ever creates and drops databases named `<name>_restore_<suffix>` and containers/volumes `hub-restore-drill-<db>`. Agents and tests must use `RESTORE_DB_NAME=<their db>_restore_*`, never the shared `hub` database. If a run is killed, remove leftovers with `docker ps -a --filter label=hub.restore-drill` and `docker volume ls --filter name=hub-restore-drill-`, or `DROP DATABASE … WITH (FORCE)` on the name you chose.
-- Dumps contain everyone's data; `*.dump`, `*.dump.manifest` and `restore/` are gitignored. Face/FaceCluster rows are deliberately left out of dumps (docs/ops/backups.md §4, §7).
+- The drill only ever creates and drops databases named `<name>_restore_<suffix>` and containers/volumes `hub-restore-drill-<db>-<random>` (it refuses a name that exists, and claims a container only after `docker run` succeeds). Agents and tests must use `RESTORE_DB_NAME=<their db>_restore_*`, never the shared `hub` database. If a run is killed, remove leftovers with `docker ps -a --filter label=hub.restore-drill` and `docker volume ls --filter name=hub-restore-drill-`, or `DROP DATABASE … WITH (FORCE)` on the name you chose.
+- Dumps contain everyone's data, embeddings included; `*.dump`, `*.dump.manifest` and the repo-root `/restore/` are gitignored. Every table is dumped in full: `FaceCluster.suppressed` ("remove me") and host labels can't be recomputed, so the face index must not be left out (docs/ops/backups.md §7).
+- The drill tests that write-then-roll-back (runbook SQL, replay) skip on any database named `hub`; CI's service database is `hub_ci`, and your own `hub_t<N>` works locally.
 - New `.sh` files need the executable bit in git (`git update-index --chmod=+x`): this checkout has `core.fileMode=false`, so `chmod +x` alone is not recorded and CI fails with exit 126.
 
 ### Add a compose service (e.g. `stripe listen`)

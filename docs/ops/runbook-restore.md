@@ -15,13 +15,13 @@ Keep a timestamped log of every step in the incident note. The timings go into
 - [ ] **Pick the restore point *T*** (UTC): the last moment before the damage. To find it, use the deploy time of the bad migration, the first error in the logs, or the `AuditLog.createdAt` of the destructive action.
 - [ ] **Pick the path:**
   - **A. Provider PITR.** The default. RPO is minutes.
-  - **B. Logical dump.** Use it when the provider or account is unavailable. RPO is up to 24 h, because you restore the latest `backup/pg/<timestamp>.dump` taken before *T*. The gallery face index is not in the dumps (backups.md §4); step 6 rebuilds it.
+  - **B. Logical dump.** Use it when the provider or account is unavailable. RPO is up to 24 h, because you restore the latest `backup/pg/<timestamp>.dump` taken before *T*.
 
 ## 1. Freeze writes (≈ 5 min)
 
 - [ ] Stop the worker so no jobs run against either database. **It stays stopped until step 7**: the restored `Job`, `ReminderRule` and opt-out state is *T*'s, and a worker that starts early re-sends messages and re-runs work.
 - [ ] Put web and admin into maintenance: scale to zero, or route to a static "back soon" page at the proxy (Caddy/Traefik). Every service reads the same `DATABASE_URL`, so leaving any one running keeps writing to the damaged instance.
-- [ ] Record the current `DATABASE_URL` (the old instance) in the incident note. Don't delete it.
+- [ ] Record the current `DATABASE_URL` (the old instance) in the incident note as `OLD_URL`. Don't delete the instance: step 6c replays from its `AuditLog`. Run every command below from the repo root.
 
 ## 2A. Restore with provider PITR (≈ 15–60 min, provider-dependent)
 
@@ -39,10 +39,11 @@ Keep a timestamped log of every step in the incident note. The timings go into
 2. Download the dump and its manifest. You need platform-admin credentials for `backup/`.
 
    ```bash
+   umask 077                                                             # everything below is readable by you only
+   mkdir -p ./restore
    aws s3 ls s3://hub-media/backup/pg/                                   # pick a <timestamp>.dump that has its .manifest: the manifest is uploaded last
    aws s3 cp s3://hub-media/backup/pg/<timestamp>.dump ./restore/hub.dump        # add --endpoint-url for R2/B2
    aws s3 cp s3://hub-media/backup/pg/<timestamp>.dump.manifest ./restore/hub.dump.manifest
-   chmod 600 ./restore/hub.dump ./restore/hub.dump.manifest
    ```
 
 3. Prove the dump is good before touching `NEW_URL`. This restores a throwaway copy and checks every table against the manifest:
@@ -75,7 +76,7 @@ Keep a timestamped log of every step in the incident note. The timings go into
     diff <(sort ./restore/hub.dump.manifest) <(sort ./restore/verify.dump.manifest) && echo IDENTICAL
     ```
 
-  - Path A: there is no manifest for an arbitrary *T*. Take one of the new instance anyway (`BACKUP_EXCLUDE_DATA="" ./scripts/backup-db.sh …` so `Face` is counted too), and sanity-check `Event`, `Guest`, `Rsvp`, `Photo`, `Order` against what you expect: yesterday's dump manifest, plus what the hosts told you.
+  - Path A: there is no manifest for an arbitrary *T*. Take one of the new instance anyway (`DATABASE_URL="$NEW_URL" ./scripts/backup-db.sh ./restore/verify.dump`), and sanity-check `Event`, `Guest`, `Rsvp`, `Photo`, `Order` against what you expect: yesterday's dump manifest, plus what the hosts told you.
 - [ ] **Spot-check** the specific records the incident was about. For example, the event whose guests were deleted.
 
 ## 4. Re-point `DATABASE_URL` (≈ 10 min)
@@ -131,7 +132,7 @@ you review before committing.
 ### 6b. Consent and opt-outs
 
 - [ ] **SMS opt-outs** (`ContactPoint.smsOptOut`) recorded after *T* are lost. Re-apply them from the SMS provider's opt-out (STOP) list, which the provider keeps independently of our database. Until that's done, do not start the worker: sending to an opted-out number is a compliance violation (10DLC / TCPA).
-- [ ] **Face-search opt-outs and consent revokes after *T*** (`Guest.faceSearchOptOut`, `BiometricConsent.revokedAt`, deleted `FaceProfile` rows) can only be replayed from a record outside this database. That record doesn't exist yet (LEG-008). Until it does, list them from confirmation emails or tickets, and re-apply each by hand following `docs/compliance/runbook-biometric-deletion.md` (LEG-005). Do this **before** rebuilding the face index below, so a suppressed person is not re-indexed.
+- [ ] **Per-person face-search opt-outs and consent revokes after *T*** (`Guest.faceSearchOptOut`, `FaceCluster.suppressed`, `BiometricConsent.revokedAt`, deleted `FaceProfile` rows) are rolled back too. Today no code path writes an audit row for them that the replay in 6c can use (the controls arrive with WEB-006 / WEB-021), so they can only be re-applied from a record outside this database. That record doesn't exist yet (LEG-008). Until it does, list them from confirmation emails or tickets, and re-apply each by hand following `docs/compliance/runbook-biometric-deletion.md` (LEG-005). This is the gap that makes the post-restore biometric bound best effort (backups.md §7).
 
 ### 6c. Biometric purges that are due
 
@@ -155,6 +156,25 @@ you review before committing.
   WHERE "Job".status <> 'RUNNING'::"JobStatus";
   ```
 
+- [ ] **Purges and face-search switches made after *T* (replay from the old instance).** The SQL above only finds purges that are due by date. A "Purge now" from the admin, a purge the worker ran after *T*, and "face search off" on an event are all rolled back by the restore, and the restored database has no trace of them. The **old instance's** `AuditLog` still does (`faceindex.purge`, `faceindex.purge.request`, `event.facesearch.disable` / `enable`). That is why step 1 keeps it. Export those rows from `OLD_URL`, load them next to the restored data in one transaction, and run [`replay-after-restore.sql`](replay-after-restore.sql). It sets `faceSearchEnabled` to the last value toggled after *T*, parks face-indexing jobs that were queued for events purged after *T*, and re-queues their purges with the same upsert as above.
+
+  ```bash
+  umask 077
+  T='2026-10-08T12:00:00Z'   # the restore point from step 0, UTC
+  psql "$OLD_URL" -X -v ON_ERROR_STOP=1 -c "\copy (SELECT action, \"eventId\", \"createdAt\" FROM \"AuditLog\" WHERE \"createdAt\" > '$T' AND action IN ('faceindex.purge', 'faceindex.purge.request', 'event.facesearch.disable', 'event.facesearch.enable') ORDER BY \"createdAt\") TO './restore/replay-audit.csv' CSV"
+  wc -l ./restore/replay-audit.csv           # note the count in the incident log
+  psql "$NEW_URL" -X -v ON_ERROR_STOP=1 <<'PSQL'
+  BEGIN;
+  CREATE TEMP TABLE replay_audit (action text, "eventId" text, "createdAt" timestamptz) ON COMMIT DROP;
+  \copy replay_audit FROM './restore/replay-audit.csv' CSV
+  \i docs/ops/replay-after-restore.sql
+  SELECT id, "faceSearchEnabled" FROM "Event" WHERE id IN (SELECT "eventId" FROM replay_audit);
+  COMMIT;
+  PSQL
+  ```
+
+  If the old instance is gone or its `AuditLog` is part of the damage, this replay cannot be done. Then the post-restore bound in backups.md §7 is **best effort**: list purges and switches from admin audit exports, studio emails and the incident note, and apply them by hand. LEG-008 removes this dependency on the old instance.
+
 - [ ] **Face profiles past `purgeAfter`.** Delete them (or let the scheduled purge, WRK-012, do it), then check: `SELECT count(*) FROM "FaceProfile" WHERE "purgeAfter" <= now()` must be 0.
 
 ### 6d. Work that already happened must not happen twice
@@ -173,49 +193,14 @@ you review before committing.
   UPDATE "ReminderRule" SET "firedAt" = now() WHERE "firedAt" IS NULL AND "sendAt" <= now();
   ```
 
-### 6e. Rebuild what the dumps leave out (Path B only)
-
-Logical dumps do not contain the gallery face index (backups.md §4). After a dump restore `Face`
-and `FaceCluster` are empty, yet photos still say they were indexed. Reset them and re-queue
-indexing; the `INDEX_FACES` handler skips events with face search off and schedules `CLUSTER_FACES`
-itself. Skip this block after a PITR restore, where the rows came back.
-
-```sql
-UPDATE "Photo" p SET "facesIndexedAt" = NULL
-FROM "Event" e
-WHERE e.id = p."eventId" AND e."faceSearchEnabled" AND e."faceIndexPurgedAt" IS NULL
-  AND p."facesIndexedAt" IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM "Face" f WHERE f."photoId" = p.id);
-
-INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
-SELECT 'INDEX_FACES', jsonb_build_object('photoId', p.id), 'QUEUED'::"JobStatus", now(), 5, 'faces:' || p.id
-FROM "Photo" p JOIN "Event" e ON e.id = p."eventId"
-WHERE p."facesIndexedAt" IS NULL AND p.status = 'READY'::"PhotoStatus"
-  AND e."faceSearchEnabled" AND e."faceIndexPurgedAt" IS NULL
-  AND (e."faceIndexPurgeAt" IS NULL OR e."faceIndexPurgeAt" > now())
-ON CONFLICT ("dedupeKey") DO UPDATE SET
-  payload     = EXCLUDED.payload,
-  status      = 'QUEUED'::"JobStatus",
-  "runAt"     = CASE WHEN "Job".status = 'QUEUED'::"JobStatus"
-                     THEN GREATEST("Job"."runAt", EXCLUDED."runAt") ELSE EXCLUDED."runAt" END,
-  attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
-  "lastError" = NULL,
-  "lockedBy"  = NULL,
-  "lockedAt"  = NULL
-WHERE "Job".status <> 'RUNNING'::"JobStatus";
-```
-
-Face search results are incomplete until the queue drains (about 0.5 s of CPU per photo, so a
-2,000-photo event takes 20–30 minutes on a 4-vCPU worker, docs/01 §5). Tell studios.
-
-### 6f. The bucket
+### 6e. The bucket
 
 - [ ] **Bucket orphans.** Originals uploaded after *T* exist in the bucket but have no `Photo` row. List them and decide with the studio whether to re-import. Deletions made after *T* left `Photo` rows pointing at deleted objects; restore those objects from versioning (below) or delete the rows. The tooling for this is WRK-005.
 
 ## 7. Unfreeze
 
 - [ ] Everything in step 6 is ticked. In particular, 6b (opt-outs) is done before any message can be sent.
-- [ ] **Start the worker.** It picks up the purge and indexing jobs from step 6. Check `GET http://<worker-host>:8010/health`, and watch the admin jobs page until `PURGE_FACE_INDEX` has succeeded and wrote its `faceindex.purge` audit rows.
+- [ ] **Start the worker.** It picks up the purge jobs from step 6c. Check `GET http://<worker-host>:8010/health`, and watch the admin jobs page until `PURGE_FACE_INDEX` has succeeded and wrote its `faceindex.purge` audit rows.
 - [ ] Verify the purge: `SELECT count(*) FROM "Face" f JOIN "Event" e ON e.id = f."eventId" WHERE e."faceIndexPurgedAt" IS NOT NULL` is 0.
 - [ ] Send one test email and confirm it arrives (the step 5 smoke test that needs the worker).
 - [ ] Remove the maintenance page.
@@ -240,8 +225,10 @@ versions; restore from the second copy chosen in DOC-006.
 
 ## 9. Close out
 
-- [ ] Keep the old instance for **at most 7 days**, for investigation, then delete it. It contains embeddings that may already have been purged from the live data, and §7 of backups.md budgets their lifetime.
-- [ ] Delete local copies of dumps (`./restore/`).
+- [ ] Keep the old instance for **at most 7 days**, for investigation, then delete it. It contains embeddings that may already have been purged from the live data, and §7 of backups.md budgets their lifetime. Delete it **without** a final snapshot and **without** retaining its automated backups, or the deletion just moves the embeddings somewhere longer-lived:
+  - RDS: `aws rds delete-db-instance --db-instance-identifier <old> --skip-final-snapshot --delete-automated-backups`;
+  - Neon: delete the old branch (and its history); Supabase: delete the old project; Crunchy: delete the old cluster and confirm no retained backups remain in its console.
+- [ ] Delete local copies of dumps and the replay export (`./restore/`).
 - [ ] Record in the incident note, and copy the timings to [backups.md §8](backups.md#8-the-restore-drill-scriptsrestore-drillsh):
   - *T*, and the path taken;
   - the time for each step;

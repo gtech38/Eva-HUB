@@ -14,6 +14,7 @@ docs/ops/backups.md §7 (DOC-003): a restore to time *T* brings back every embed
 - On every person-level deletion (`faceprofile.revoke`, `faceSearchOptOut`, `dsar.completed`, `PhotoMatch` deletions on request), append a minimal record to a store outside the primary Postgres. The record holds the action, subject ids, time and actor, and **no biometric data**. The store could be an append-only object under `ledger/` in the bucket, or the logging backend with long retention; decide in this ticket.
 - `scripts/compliance/replay-deletions.mjs --since <T>`: reads the ledger and re-applies each deletion idempotently against `DATABASE_URL`. It prints PASS/FAIL per record.
 - Add the replay to docs/ops/runbook-restore.md step 6, and to `docs/compliance/runbook-biometric-deletion.md` (LEG-005).
+- Today the runbook replays only event-level actions (`faceindex.purge`, `faceindex.purge.request`, `event.facesearch.disable`/`enable`) from the **old instance's** `AuditLog` via `docs/ops/replay-after-restore.sql` (DOC-003). Extend that file, or replace it with the ledger replay, for the per-person actions, so the post-restore bound in docs/ops/backups.md §7 stops being best effort.
 
 ## Out of scope
 - Event-level purges, which are already recomputable from `faceIndexPurgeAt`.
