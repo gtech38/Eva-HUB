@@ -5,28 +5,29 @@ kind: FACE_PROFILE
 locale: en
 status: DRAFT — pending attorney review (LEG-006)
 reviewed_by:
+label: Remember my face (optional)
+summary: Keep only your face signature on your account so it can be compared with the photos of future events you are on the guest list for. Adults only.
 ---
 
 ## Remember my face (optional)
 
-If you choose this, we keep your face signature on your account so that photos of you are found automatically in future galleries you are invited to. It is separate from the one-time search and you can say no and still search.
+If you choose this, we keep your face signature on your account so it can be compared with the photos of future events you are on the guest list for. It is separate from the one-time search: you can say no and still search.
 
 ## What we collect
 
 - We keep the face signature computed from your selfie: a list of numbers that describes the geometry of your face. This is a biometric identifier.
-- Your selfie itself is never stored. Only the signature is kept.
-- We record that you agreed, when, and which version of this text you saw.
+- Your selfie is processed temporarily to compute the signature and then deleted. It is never saved. Only the signature is kept.
+- We record that you agreed, when, which version of this text you saw, and in which language.
 - Adults only. A face profile is never created for a child.
 
 ## Why we use it
 
-When a gallery is published for an event you are a guest at, we compare your face signature with that event's photos and tell you when we find photos of you. Your profile is only ever compared with events you are a guest or member of. It is never used to identify you in other events, and studios and hosts cannot search with it.
+Your face profile is compared only with the photos of events where you are on the guest list, to find photos of you there. It is never used to identify you in other events, and studios and hosts cannot search with it.
 
 ## How long we keep it
 
-- Until you turn it off. Turning it off in Account settings deletes your face profile immediately.
-- If your profile is not used for 3 years, it is deleted automatically.
-- If we change the face recognition model, your profile is marked out of date and we ask you for a new selfie; the old signature is replaced.
+- Until you ask us to delete it.
+- Our retention policy is to delete a face profile no later than 3 years after you last saved it.
 
 ## We do not sell it
 
@@ -34,9 +35,8 @@ We never sell, rent or trade your face signature or any other biometric data, an
 
 ## Changing your mind
 
-- Turn off "Remember my face" in Account settings at any time. Your face profile is deleted immediately.
-- Photo lists already found for you are kept on your account; they contain no face data and you can delete them from Account settings.
-- If you have questions, contact the studio that photographed the event.
+- To have your face profile deleted, contact the studio that photographed the event where you saved it. Self-service controls for this are planned but not available yet.
+- Photo matches already found for you are kept on your account. They contain no face data, and you can ask the studio to delete them too.
 
 ## Your agreement
 

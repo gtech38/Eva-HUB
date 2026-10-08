@@ -2,61 +2,110 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ConsentKind as PrismaConsentKind } from "@hub/db";
-import { LOCALES } from "./i18n.ts";
+import { LOCALES, type Locale } from "./i18n.ts";
 import {
   CONSENT_FILE_STEMS,
   CONSENT_KINDS,
-  CONSENT_TEXT_VERSION,
+  CONSENT_VERSIONS,
+  CURRENT_CONSENT_VERSION,
+  buildConsentVersion,
   consentBlocks,
   consentRecordVersion,
   consentText,
   parseConsentFile,
+  parseConsentRecordVersion,
   singleVersion,
+  unreviewedConsentDocs,
+  type ConsentKind,
 } from "./consent.ts";
 
-const V1 = fileURLToPath(new URL("../../../legal/consent/v1/", import.meta.url));
+const ROOT = fileURLToPath(new URL("../../../legal/consent/", import.meta.url));
+const versionDirs = () => readdirSync(ROOT).filter((d) => /^v\d+$/.test(d)).sort();
+const fileName = (kind: ConsentKind, locale: Locale) => `${CONSENT_FILE_STEMS[kind]}.${locale}.md`;
 
-// Compile-time: the loader's kinds are exactly the Prisma enum.
-const kindsAreThePrismaEnum: PrismaConsentKind[] = [...CONSENT_KINDS];
-const prismaEnumIsCovered: (typeof CONSENT_KINDS)[number] = "SEARCH_SELF" as PrismaConsentKind;
+// Compile-time check, enforced by `tsc` (pnpm typecheck), not by vitest: the loader's kinds and the
+// Prisma `ConsentKind` enum are the same union. If either side gains a kind, this line stops compiling.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const kindsMatchPrisma: Same<ConsentKind, PrismaConsentKind> = true;
+void kindsMatchPrisma;
 
-describe("consent text files (legal/consent/v1)", () => {
-  it("covers every ConsentKind", () => {
-    expect([...kindsAreThePrismaEnum].sort()).toStrictEqual(["FACE_PROFILE", "SEARCH_GUARDIAN", "SEARCH_SELF"]);
-    expect(prismaEnumIsCovered).toBe("SEARCH_SELF");
+describe("consent text files (legal/consent/v*)", () => {
+  it("bundles exactly the version directories on disk, current one included", () => {
+    expect(CONSENT_VERSIONS.map((v) => v.dir).sort()).toStrictEqual(versionDirs());
+    expect(new Set(CONSENT_VERSIONS.map((v) => v.version)).size).toBe(CONSENT_VERSIONS.length);
+    expect(CONSENT_VERSIONS.map((v) => v.version)).toContain(CURRENT_CONSENT_VERSION);
+    expect(CURRENT_CONSENT_VERSION).toBe("v1-2026-10");
   });
 
-  it("has exactly one file per kind x locale and nothing else", () => {
-    const expected = CONSENT_KINDS.flatMap((k) => LOCALES.map((l) => `${CONSENT_FILE_STEMS[k]}.${l}.md`)).sort();
-    expect(expected).toHaveLength(9);
-    const onDisk = readdirSync(V1).filter((f) => !f.startsWith("._")).sort();
-    expect(onDisk).toStrictEqual(expected);
-  });
+  for (const dir of versionDirs()) {
+    it(`${dir}: has exactly one file per kind x locale and nothing else`, () => {
+      const expected = CONSENT_KINDS.flatMap((k) => LOCALES.map((l) => fileName(k, l))).sort();
+      expect(expected).toHaveLength(9);
+      expect(readdirSync(ROOT + dir).filter((f) => !f.startsWith("._")).sort()).toStrictEqual(expected);
+    });
 
-  for (const kind of CONSENT_KINDS) {
-    for (const locale of LOCALES) {
-      const file = `${CONSENT_FILE_STEMS[kind]}.${locale}.md`;
-      it(`${file} exists with complete front matter and a non-empty body`, () => {
-        const path = V1 + file;
-        expect(existsSync(path), `${file} is missing`).toBe(true);
-        const doc = parseConsentFile(readFileSync(path, "utf8"));
-        expect(doc.meta.kind).toBe(kind);
-        expect(doc.meta.locale).toBe(locale);
-        expect(doc.meta.version).toBe(CONSENT_TEXT_VERSION);
-        expect(doc.meta.effective).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-        expect(doc.meta).toHaveProperty("reviewed_by");
-        expect(doc.meta.status).toBe("DRAFT — pending attorney review (LEG-006)");
-        expect(doc.body.trim().length).toBeGreaterThan(200);
-      });
-    }
+    it(`${dir}: every file has complete front matter, one shared version, and is bundled into its own slot`, () => {
+      const bundled = CONSENT_VERSIONS.find((v) => v.dir === dir);
+      expect(bundled, `${dir} is not bundled in consent.ts`).toBeDefined();
+      const versions: string[] = [];
+      for (const kind of CONSENT_KINDS) {
+        for (const locale of LOCALES) {
+          const path = `${ROOT}${dir}/${fileName(kind, locale)}`;
+          expect(existsSync(path), `${path} is missing`).toBe(true);
+          const onDisk = parseConsentFile(readFileSync(path, "utf8"));
+          expect(onDisk.meta.kind).toBe(kind);
+          expect(onDisk.meta.locale).toBe(locale);
+          expect(onDisk.meta.effective).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+          expect(onDisk.meta).toHaveProperty("reviewed_by");
+          expect(onDisk.meta.label?.length).toBeGreaterThan(10);
+          expect(onDisk.meta.summary?.length).toBeGreaterThan(20);
+          expect(onDisk.body.length).toBeGreaterThan(200);
+          versions.push(onDisk.meta.version);
+          // Slot wiring: what the loader returns for (kind, locale) is this file, not a neighbour.
+          const doc = bundled!.docs[kind][locale];
+          expect(doc.body).toBe(onDisk.body);
+          expect(doc.label).toBe(onDisk.meta.label);
+          expect(doc.summary).toBe(onDisk.meta.summary);
+        }
+      }
+      expect(new Set(versions)).toStrictEqual(new Set([bundled!.version]));
+    });
   }
 
-  it("every file carries the same version", () => {
-    const versions = readdirSync(V1)
-      .filter((f) => f.endsWith(".md") && !f.startsWith("._"))
-      .map((f) => parseConsentFile(readFileSync(V1 + f, "utf8")).meta.version);
-    expect(new Set(versions)).toStrictEqual(new Set(["v1-2026-10"]));
-    expect(CONSENT_TEXT_VERSION).toBe("v1-2026-10");
+  it("v1 is a draft pending attorney review; te/hi are flagged as machine-drafted", () => {
+    for (const kind of CONSENT_KINDS) {
+      for (const locale of LOCALES) {
+        const d = consentText(kind, locale, "v1-2026-10");
+        expect(d.status).toBe("DRAFT — pending attorney review (LEG-006)");
+        expect(d.translation !== "").toBe(locale !== "en");
+      }
+    }
+  });
+});
+
+describe("buildConsentVersion", () => {
+  const file = (kind: string, locale: string, version = "v9-2030-01") =>
+    `---\nversion: ${version}\neffective: 2030-01-01\nkind: ${kind}\nlocale: ${locale}\nstatus: DRAFT\nreviewed_by:\nlabel: I agree to a thing\nsummary: A short summary of the thing.\n---\n\nBody`;
+  const raws = (override?: { kind: ConsentKind; locale: Locale; raw: string }) =>
+    Object.fromEntries(
+      CONSENT_KINDS.map((k) => [k, Object.fromEntries(LOCALES.map((l) => [l, override && override.kind === k && override.locale === l ? override.raw : file(k, l)]))]),
+    ) as Record<ConsentKind, Record<Locale, string>>;
+
+  it("builds a version from nine well-formed files", () => {
+    const v = buildConsentVersion("v9", raws());
+    expect(v.version).toBe("v9-2030-01");
+    expect(v.docs.SEARCH_GUARDIAN.te.label).toBe("I agree to a thing");
+  });
+
+  it("throws when a file is wired into the wrong kind or locale slot", () => {
+    expect(() => buildConsentVersion("v9", raws({ kind: "SEARCH_SELF", locale: "hi", raw: file("SEARCH_GUARDIAN", "hi") }))).toThrow(/SEARCH_SELF\.hi.*SEARCH_GUARDIAN\.hi/);
+    expect(() => buildConsentVersion("v9", raws({ kind: "SEARCH_SELF", locale: "hi", raw: file("SEARCH_SELF", "te") }))).toThrow(/slot/);
+  });
+
+  it("throws when versions diverge or label/summary is missing", () => {
+    expect(() => buildConsentVersion("v9", raws({ kind: "FACE_PROFILE", locale: "en", raw: file("FACE_PROFILE", "en", "v9-2030-02") }))).toThrow(/diverge/);
+    const noLabel = file("FACE_PROFILE", "en").replace(/^label:.*\n/m, "");
+    expect(() => buildConsentVersion("v9", raws({ kind: "FACE_PROFILE", locale: "en", raw: noLabel }))).toThrow(/label/);
   });
 });
 
@@ -85,38 +134,54 @@ describe("singleVersion", () => {
 });
 
 describe("consentText", () => {
-  it("returns the bundled text for every kind x locale", () => {
+  it("defaults to the current version and accepts an explicit one", () => {
+    expect(consentText("SEARCH_SELF", "en").version).toBe(CURRENT_CONSENT_VERSION);
+    expect(consentText("SEARCH_SELF", "te", "v1-2026-10").locale).toBe("te");
+  });
+
+  it("throws for an unknown version", () => {
+    expect(() => consentText("SEARCH_SELF", "en", "v0-1999-01")).toThrow(/unknown consent version/);
+  });
+
+  it("says the selfie is never saved, in English, for every kind", () => {
+    for (const kind of CONSENT_KINDS) expect(consentText(kind, "en").body).toMatch(/never saved/i);
+  });
+
+  it("the guardian label carries the parent/guardian attestation", () => {
+    expect(consentText("SEARCH_GUARDIAN", "en").label).toMatch(/parent or legal guardian/i);
+    expect(consentText("SEARCH_GUARDIAN", "en").summary).not.toMatch(/your selfie/i);
+  });
+
+  it("does not promise controls or automation that do not exist yet", () => {
     for (const kind of CONSENT_KINDS) {
       for (const locale of LOCALES) {
-        const doc = consentText(kind, locale);
-        expect(doc.kind).toBe(kind);
-        expect(doc.locale).toBe(locale);
-        expect(doc.version).toBe(CONSENT_TEXT_VERSION);
-        expect(doc.body.length).toBeGreaterThan(200);
+        const d = consentText(kind, locale);
+        const text = `${d.label} ${d.summary} ${d.body}`;
+        expect(text).not.toMatch(/in memory only|automatically|Remove me from face search|Account settings/i);
       }
     }
-  });
-
-  it("says the selfie is never stored, in English, for every kind", () => {
-    for (const kind of CONSENT_KINDS) expect(consentText(kind, "en").body).toMatch(/never stored/i);
-  });
-
-  it("the guardian text contains the parent/guardian attestation", () => {
-    expect(consentText("SEARCH_GUARDIAN", "en").body).toMatch(/parent or legal guardian/i);
-  });
-
-  it("names the withdrawal routes and the 3-year profile purge", () => {
-    expect(consentText("SEARCH_SELF", "en").body).toMatch(/remove me from face search/i);
-    expect(consentText("FACE_PROFILE", "en").body).toMatch(/account settings/i);
-    expect(consentText("FACE_PROFILE", "en").body).toMatch(/3 years/);
+    expect(consentText("SEARCH_SELF", "en").body).toMatch(/contact the studio/i);
   });
 });
 
-describe("consentRecordVersion", () => {
-  it("is kind:version so the three texts are distinguishable", () => {
+describe("consent record versions", () => {
+  it("consentRecordVersion is kind:version so the three texts are distinguishable", () => {
     expect(consentRecordVersion("SEARCH_SELF")).toBe("SEARCH_SELF:v1-2026-10");
     expect(consentRecordVersion("SEARCH_GUARDIAN")).toBe("SEARCH_GUARDIAN:v1-2026-10");
-    expect(consentRecordVersion("FACE_PROFILE")).toBe("FACE_PROFILE:v1-2026-10");
+    expect(consentRecordVersion("FACE_PROFILE", "v1-2026-10")).toBe("FACE_PROFILE:v1-2026-10");
+  });
+
+  it("parseConsentRecordVersion reads a stored value back", () => {
+    expect(parseConsentRecordVersion("SEARCH_GUARDIAN:v1-2026-10")).toStrictEqual({ kind: "SEARCH_GUARDIAN", version: "v1-2026-10" });
+    expect(parseConsentRecordVersion("v1-2026-10")).toBe(null);
+    expect(parseConsentRecordVersion("NOPE:v1-2026-10")).toBe(null);
+    expect(parseConsentRecordVersion("SEARCH_SELF:")).toBe(null);
+  });
+});
+
+describe("unreviewedConsentDocs", () => {
+  it("lists every current doc while reviewed_by is empty (v1 is unreviewed)", () => {
+    expect(unreviewedConsentDocs()).toHaveLength(9);
   });
 });
 
@@ -129,5 +194,25 @@ describe("consentBlocks", () => {
       { type: "list", items: ["one", "two that wraps"] },
       { type: "paragraph", text: "Last." },
     ]);
+  });
+
+  it("splits a heading directly followed by a list or paragraph without a blank line", () => {
+    expect(consentBlocks("## Heading\n- a\n- b\n## Next\nText")).toStrictEqual([
+      { type: "heading", text: "Heading" },
+      { type: "list", items: ["a", "b"] },
+      { type: "heading", text: "Next" },
+      { type: "paragraph", text: "Text" },
+    ]);
+  });
+
+  it("no rendered block of any bundled text still starts with markdown syntax", () => {
+    for (const v of CONSENT_VERSIONS) {
+      for (const kind of CONSENT_KINDS) {
+        for (const locale of LOCALES) {
+          const texts = consentBlocks(v.docs[kind][locale].body).flatMap((b) => (b.type === "list" ? b.items : [b.text]));
+          for (const t of texts) expect(t, `${v.dir} ${kind}.${locale}`).not.toMatch(/^(#|[-*] )/);
+        }
+      }
+    }
   });
 });
