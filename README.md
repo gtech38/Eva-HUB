@@ -10,15 +10,18 @@ Everything runs on this machine; nothing is deployed. See [CLAUDE.md](CLAUDE.md)
 cp .env.example .env
 pnpm install
 pnpm infra:up                         # Postgres+pgvector :5433, S3 (RustFS) :9000, Mailpit :8025
-pnpm db:migrate && pnpm db:seed
+pnpm db:migrate && pnpm db:seed          # on an existing dev DB use `pnpm db:reset` first: the seed only adds, never rewrites
 pnpm dev                              # event sites on :3000, admin on :3001
 cd workers/media && make models && make dev
 ```
 
 | URL | What |
 |---|---|
-| http://priya-arjun.localhost:3000 | Sample event site (Hindu Traditional theme) |
-| http://sofia-james.localhost:3000 · http://emma-liam.localhost:3000 | Luxury · Romantic themes |
+| http://priya-arjun.localhost:3000 | Hindu Traditional wedding |
+| http://sofia-james.localhost:3000 · http://emma-liam.localhost:3000 | Luxury · Romantic weddings |
+| http://baby-reddy.localhost:3000 | Nursery Sage baby shower |
+| http://reddy-gruhapravesam.localhost:3000 | Telugu Traditional gruhapravesam (en/te/hi) |
+| http://ravi-50.localhost:3000 | Midnight Gala 50th birthday |
 | http://localhost:3001 | Admin — sign in as `admin@localhost` |
 | http://localhost:8025 | Mailpit — magic links and invitations land here |
 | http://localhost:9001 | S3 console (minio / minio12345) |
@@ -39,7 +42,7 @@ cd workers/media && make models && make dev
 |---|---|
 | Tenancy | One platform and one database. Hierarchy is **Studio → Event**. Every tenant row is scoped. |
 | Domains | `{event-slug}.yourstudio.com` (wildcard subdomain). Admin at `app.yourstudio.com`. `yourstudio.com` is a placeholder until the real domain is chosen; keep it in one config value (`ROOT_DOMAIN`). |
-| Templates | Three themes: **Luxury**, **High-Class Romantic**, **Elegant Hindu Traditional**. All three ship in the MVP. |
+| Templates | Six themes: **Luxury**, **High-Class Romantic**, **Elegant Hindu Traditional** (weddings) and **Nursery Sage** (baby showers), **Telugu Traditional** (ceremonies), **Midnight Gala** (parties). Each reads `Event.kind` for its wording. See [docs/05-theme-references.md](docs/05-theme-references.md). |
 | Branding | The event site footer shows a "Photography by {Studio}" credit. Sites are not white-labelled. |
 | Hosting | Provider-agnostic: Docker containers, Postgres + pgvector, S3-compatible storage, CDN |
 | Stack | Next.js (TypeScript, App Router), Prisma, Postgres, Python worker for media and faces, S3/R2 |

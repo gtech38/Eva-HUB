@@ -12,6 +12,8 @@ export default {
         accent: "var(--accent)",
         "accent-fg": "var(--accent-fg)",
         line: "var(--line)",
+        "accent-2": "var(--accent-2)",
+        "accent-3": "var(--accent-3)",
       },
       fontFamily: {
         display: ["var(--font-display)", "var(--font-telugu)", "var(--font-devanagari)", "serif"],

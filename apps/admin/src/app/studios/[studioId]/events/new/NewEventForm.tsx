@@ -8,9 +8,10 @@ import { slugify } from "@/lib/format";
 import { createEvent, searchStudioContacts } from "../../actions";
 import { ThemePicker } from "@/components/ThemePicker";
 
+
 type Contact = { id: string; name: string; contact: string };
 
-export function NewEventForm({ studioId, themes, rootDomain }: { studioId: string; themes: Array<{ key: string; label: string; swatch: string[] }>; rootDomain: string }) {
+export function NewEventForm({ studioId, themes, kinds, rootDomain }: { studioId: string; themes: Array<{ key: string; label: string; swatch: string[]; suits?: string }>; kinds: Array<{ key: string; label: string }>; rootDomain: string }) {
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
@@ -39,6 +40,10 @@ export function NewEventForm({ studioId, themes, rootDomain }: { studioId: strin
         </Field>
         <Field label="Date" name="startsOn"><input id="startsOn" name="startsOn" type="date" className="input" /><FieldError name="startsOn" /></Field>
         <Field label="Timezone" name="timezone"><input id="timezone" name="timezone" className="input" defaultValue="America/Chicago" /><FieldError name="timezone" /></Field>
+        <Field label="Kind of event" name="kind" help="Themes read this to choose their wording (e.g. no 'getting married' on a birthday).">
+          <select id="kind" name="kind" className="input" defaultValue="WEDDING">{kinds.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
+          <FieldError name="kind" />
+        </Field>
         <div className="sm:col-span-2">
           <span className="label">Theme</span>
           <ThemePicker themes={themes} name="theme" defaultValue="LUXURY" />
