@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { prisma } from "@hub/db";
 import { t, type Locale, type LocalizedText } from "@hub/shared/i18n";
 import { requireViewer } from "@/lib/site";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
-import { FaceSearch, type FaceStrings } from "@/components/gallery/FaceSearch";
+import { FaceSearch, type FaceStrings, type PreviousFeed } from "@/components/gallery/FaceSearch";
 import { galleryStrings } from "@/lib/gallery-strings";
-import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs, type PhotoDTO } from "@/lib/gallery";
+import type { Page } from "@/lib/gallery";
+import { encodeScoreCursor, type ScoreCursor } from "@/lib/galleryCursor";
+import { previousMatchFeeds } from "@/lib/galleryFeed";
 import { fullName } from "@/lib/format";
 import { consentTextsFor } from "@/lib/consentTexts";
 import { FACE_PROFILE_ENROLMENT, faceSearchAllowed } from "@/lib/faceConsent";
@@ -100,29 +101,18 @@ export default async function MyPhotosPage() {
     );
   }
 
+  // Previously matched photos, best match first (PhotoMatch survives the face-index purge), for the
+  // viewer and for the children they may search for. Only the first page is rendered here;
+  // PhotoGrid fetches the rest from /api/gallery/me.
+  const previous = await previousMatchFeeds({ event, viewer, faceSearchAllowed: faceSearchAllowed(process.env.NODE_ENV) });
+  const feed = (page: Page<ScoreCursor>, subject: string): PreviousFeed => ({
+    photos: page.photos,
+    more: { endpoint: `/api/gallery/me?subject=${encodeURIComponent(subject)}`, nextCursor: page.nextCursor && encodeScoreCursor(page.nextCursor) },
+  });
+  const me = feed(previous.me, "me");
+  const family = previous.family.map(({ child, page }) => ({ guestId: child.id, name: fullName(child), ...feed(page, child.id) }));
   // Children in the viewer's household → guardian search subjects.
-  const children = viewer.guest
-    ? await prisma.guest.findMany({ where: { eventId: event.id, householdId: viewer.guest.householdId, isChild: true, deletedAt: null, faceSearchOptOut: false }, orderBy: { createdAt: "asc" } })
-    : [];
-  const subjects = [{ id: "me", label: F.me }, ...children.map((c) => ({ id: c.id, label: fullName(c) }))];
-
-  // Previously matched photos (PhotoMatch survives the face-index purge).
-  const entitled = await isEntitledFullRes(event.id, viewer.principal.userId);
-  const withScores = async (matches: Array<{ photoId: string; score: number }>): Promise<PhotoDTO[]> => {
-    if (matches.length === 0) return [];
-    const scores = new Map(matches.map((m) => [m.photoId, m.score]));
-    const photos = await prisma.photo.findMany({ where: visiblePhotoWhere(event.id, viewer, { id: { in: [...scores.keys()] } }) });
-    photos.sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
-    return toPhotoDTOs(photos, viewer, { entitled, scores });
-  };
-  const me = await withScores(await prisma.photoMatch.findMany({ where: { userId: viewer.principal.userId, photo: { eventId: event.id } }, select: { photoId: true, score: true } }));
-  const family = await Promise.all(
-    children.map(async (c) => ({
-      guestId: c.id,
-      name: fullName(c),
-      photos: await withScores(await prisma.photoMatch.findMany({ where: { subjectGuestId: c.id }, select: { photoId: true, score: true } })),
-    })),
-  );
+  const subjects = [{ id: "me", label: F.me }, ...previous.family.map(({ child }) => ({ id: child.id, label: fullName(child) }))];
 
   // Hidden until face profiles can be revoked by their owner (WEB-006); the route ignores `remember` too.
   const canRemember = FACE_PROFILE_ENROLMENT && !!viewer.guest && !viewer.guest.isChild;

@@ -18,6 +18,9 @@ const S = {
   backToGallery: { en: "All albums", te: "అన్ని ఆల్బమ్‌లు", hi: "सभी एल्बम" },
   hostsOnly: { en: "Hosts only", te: "హోస్ట్‌లకు మాత్రమే", hi: "केवल मेज़बान" },
   hidden: { en: "Hidden", te: "దాచబడింది", hi: "छिपा हुआ" },
+  loadingMore: { en: "Loading more photos…", te: "మరిన్ని ఫోటోలు లోడ్ అవుతున్నాయి…", hi: "और तस्वीरें लोड हो रही हैं…" },
+  loadFailed: { en: "Couldn't load more photos.", te: "మరిన్ని ఫోటోలను లోడ్ చేయలేకపోయాము.", hi: "और तस्वीरें लोड नहीं हो सकीं।" },
+  retry: { en: "Try again", te: "మళ్ళీ ప్రయత్నించండి", hi: "फिर से कोशिश करें" },
 } satisfies Record<string, LocalizedText>;
 
 export type GalleryPageStrings = GalleryStrings & { [K in keyof typeof S]: string } & { myPhotos: string; findMe: string; gallery: string };
