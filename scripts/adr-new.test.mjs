@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,6 +70,12 @@ describe("createAdr", () => {
     expect(b.endsWith("0002-two.md")).toBe(true);
   });
 
+  it("keeps replacement patterns in the title literal ($&, $1) and collapses whitespace", () => {
+    const file = createAdr({ dir, title: "Costs $& and $1\n  more\t", date: "2026-10-08" });
+    const heading = readFileSync(file, "utf8").split("\n")[0];
+    expect(heading).toBe("# ADR-0001: Costs $& and $1 more");
+  });
+
   it("fails clearly when the template is missing", () => {
     rmSync(join(dir, "0000-template.md"));
     expect(() => createAdr({ dir, title: "x", date: "2026-10-08" })).toThrow(/template/i);
@@ -98,6 +104,14 @@ describe("CLI", () => {
   it("joins multiple words into one title", () => {
     run("two", "words");
     expect(readdirSync(dir)).toContain("0001-two-words.md");
+  });
+
+  it("works when invoked through a symlink (e.g. /tmp -> /private/tmp)", () => {
+    const link = join(dir, "adr-new-link.mjs");
+    symlinkSync(SCRIPT, link);
+    const r = spawnSync("node", [link, "via", "link"], { env: { ...process.env, ADR_DIR: dir }, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(readdirSync(dir)).toContain("0001-via-link.md");
   });
 
   it("exits 1 with usage when no title is given", () => {

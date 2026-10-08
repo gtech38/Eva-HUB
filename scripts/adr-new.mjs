@@ -4,7 +4,7 @@
  *   node scripts/adr-new.mjs "Use a Postgres job table"   # -> docs/adr/0009-use-a-postgres-job-table.md
  * ADR_DIR overrides the target directory (used by tests). Process: docs/adr/README.md.
  */
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,9 +33,11 @@ export function createAdr({ dir = DEFAULT_DIR, title, date = new Date().toISOStr
   if (!existsSync(templatePath)) throw new Error(`ADR template not found: ${templatePath}`);
   const slug = slugify(title);
   const id = String(nextNumber(readdirSync(dir))).padStart(4, "0");
+  // Function replacers: a title like "costs $& more" must not be read as a replacement pattern.
+  const heading = `# ADR-${id}: ${title.replace(/\s+/g, " ").trim()}`;
   const body = readFileSync(templatePath, "utf8")
-    .replace("# ADR-NNNN: <Title>", `# ADR-${id}: ${title.trim()}`)
-    .replace("- Date: YYYY-MM-DD", `- Date: ${date}`);
+    .replace("# ADR-NNNN: <Title>", () => heading)
+    .replace("- Date: YYYY-MM-DD", () => `- Date: ${date}`);
   const file = join(dir, `${id}-${slug}.md`);
   writeFileSync(file, body, { flag: "wx" });
   return file;
@@ -56,6 +58,7 @@ function main(argv) {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// realpath on both sides: argv[1] keeps symlinks (/tmp), import.meta.url does not (/private/tmp).
+if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   process.exitCode = main(process.argv.slice(2));
 }
