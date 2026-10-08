@@ -25,10 +25,12 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-type Cell = string | number | null | undefined;
+export type Cell = string | number | null | undefined;
 
 /** Text that a spreadsheet would evaluate as a formula (OWASP "CSV injection"). Numbers are never text. */
 const FORMULA_START = /^[=+\-@\t\r]/;
+/** Strictly phone-shaped (E.164-ish with separators): a spreadsheet reads it as a number, not a formula, and it must stay importable. */
+const PHONE = /^\+[\d\s().-]+$/;
 
 /**
  * RFC-4180 CSV. Text cells that start with = + - @ (or tab/CR) get a leading apostrophe so Excel,
@@ -38,7 +40,7 @@ const FORMULA_START = /^[=+\-@\t\r]/;
 export function toCsv(rows: Array<Array<Cell>>): string {
   const esc = (v: Cell) => {
     let s = v == null ? "" : String(v);
-    if (typeof v === "string" && FORMULA_START.test(s)) s = `'${s}`;
+    if (typeof v === "string" && FORMULA_START.test(s) && !PHONE.test(s)) s = `'${s}`;
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return rows.map((r) => r.map(esc).join(",")).join("\r\n") + "\r\n";

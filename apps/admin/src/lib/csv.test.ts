@@ -7,13 +7,23 @@ describe("toCsv()", () => {
   });
 
   it("neutralises spreadsheet formulas: cells starting with = + - @ get a leading apostrophe", () => {
-    const out = parseCsv(toCsv([["=HYPERLINK(\"http://evil\",\"x\")", "+1 555 0100", "-2+3", "@SUM(A1)", "Rao", "a=b"]]))[0];
-    expect(out).toEqual(["'=HYPERLINK(\"http://evil\",\"x\")", "'+1 555 0100", "'-2+3", "'@SUM(A1)", "Rao", "a=b"]);
+    const out = parseCsv(toCsv([["=HYPERLINK(\"http://evil\",\"x\")", "+SUM(1)", "-2+3", "@SUM(A1)", "Rao", "a=b"]]))[0];
+    expect(out).toEqual(["'=HYPERLINK(\"http://evil\",\"x\")", "'+SUM(1)", "'-2+3", "'@SUM(A1)", "Rao", "a=b"]);
   });
 
   it("also neutralises tab and carriage-return prefixes (OWASP CSV injection list)", () => {
     const out = parseCsv(toCsv([["\t=1", "\r=1"]]))[0];
     expect(out).toEqual(["'\t=1", "'\r=1"]);
+  });
+
+  it("leaves strictly phone-shaped strings alone so phones stay importable and dialable", () => {
+    const out = parseCsv(toCsv([["+15125550101", "+1 (512) 555-0101", "+91 98765 43210", "+44.20.7946.0958"]]))[0];
+    expect(out).toEqual(["+15125550101", "+1 (512) 555-0101", "+91 98765 43210", "+44.20.7946.0958"]);
+  });
+
+  it("still prefixes formulas that merely begin like a phone number or contain operators", () => {
+    const out = parseCsv(toCsv([["=HYPERLINK(\"http://evil\",\"x\")", "@SUM(A1)", "+1+cmd|' /C calc'!A0", "+1 555;=1+1", "-15125550101", "+"]]))[0];
+    expect(out).toEqual(["'=HYPERLINK(\"http://evil\",\"x\")", "'@SUM(A1)", "'+1+cmd|' /C calc'!A0", "'+1 555;=1+1", "'-15125550101", "'+"]);
   });
 
   it("leaves numbers alone, including negative ones", () => {
