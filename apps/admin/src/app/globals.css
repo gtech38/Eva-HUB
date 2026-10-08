@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { @apply text-[13px] antialiased; }
+  body { @apply bg-neutral-50 text-neutral-900; }
+  h1 { @apply text-lg font-semibold tracking-tight; }
+  h2 { @apply text-sm font-semibold; }
+  a { @apply text-neutral-900; }
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-[13px] text-neutral-900 shadow-sm outline-none placeholder:text-neutral-400 focus:border-neutral-500 focus:ring-1 focus:ring-neutral-400 disabled:bg-neutral-100 disabled:text-neutral-500;
+  }
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-[13px] font-medium leading-none shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary { @apply btn border-neutral-900 bg-neutral-900 text-white hover:bg-neutral-800; }
+  .btn-secondary { @apply btn border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50; }
+  .btn-danger { @apply btn border-red-700 bg-red-700 text-white hover:bg-red-800; }
+  .btn-ghost { @apply btn border-transparent bg-transparent text-neutral-700 shadow-none hover:bg-neutral-100; }
+  .btn-sm { @apply px-2 py-1 text-xs; }
+  .card { @apply rounded border border-neutral-200 bg-white shadow-sm; }
+  .table { @apply w-full border-collapse text-left text-[13px]; }
+  .table th { @apply border-b border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-medium uppercase tracking-wide text-neutral-500; }
+  .table td { @apply border-b border-neutral-100 px-3 py-2 align-top; }
+  .table tr:last-child td { @apply border-b-0; }
+  .label { @apply mb-1 block text-xs font-medium text-neutral-600; }
+  .help { @apply mt-1 text-xs text-neutral-500; }
+  .error { @apply mt-1 text-xs text-red-700; }
+  .badge { @apply inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium leading-none; }
+}

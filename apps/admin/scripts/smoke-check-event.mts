@@ -1,0 +1,10 @@
+import { config } from "dotenv";
+config({ path: new URL("../../../.env", import.meta.url).pathname });
+import { prisma } from "@hub/db";
+const slug = process.argv[2] ?? "nina-and-dev";
+const ev = await prisma.event.findFirst({ where: { slug }, include: { domains: true, pages: { orderBy: { sortOrder: "asc" } }, albums: true, members: { include: { user: { include: { contactPoints: true } } } } } });
+if (!ev) throw new Error("event not found");
+console.log(JSON.stringify({ id: ev.id, status: ev.status, theme: ev.theme, startsOn: ev.startsOn, themeOverrides: ev.themeOverrides, domains: ev.domains.map((d) => d.hostname), pages: ev.pages.map((p) => `${p.type}:${p.sortOrder}:${JSON.stringify(p.content)}`), albums: ev.albums.map((a) => a.title), members: ev.members.map((m) => `${m.role}:${m.user.contactPoints[0]?.value}`) }, null, 1));
+const audit = await prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 5 });
+console.log("recent audit:", audit.map((a) => `${a.action} ${a.target ?? ""}`).join(" | "));
+await prisma.$disconnect();

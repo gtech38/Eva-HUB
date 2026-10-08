@@ -1,0 +1,12 @@
+import { config } from "dotenv";
+config({ path: new URL("../../../.env", import.meta.url).pathname });
+import { prisma } from "@hub/db";
+import { createSession } from "@hub/shared";
+const email = process.argv[2] ?? "admin@localhost";
+const cp = await prisma.contactPoint.findUnique({ where: { kind_value: { kind: "EMAIL", value: email } } });
+if (!cp) throw new Error("no user " + email);
+const { cookie } = await createSession(cp.userId, "EMAIL_LINK");
+const studio = await prisma.studio.findUnique({ where: { slug: "studio" } });
+const ev = await prisma.event.findFirst({ where: { slug: "priya-arjun" } });
+console.log(JSON.stringify({ cookie, studioId: studio!.id, eventId: ev!.id, userId: cp.userId }));
+await prisma.$disconnect();

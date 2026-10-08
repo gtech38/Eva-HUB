@@ -1,0 +1,746 @@
+// DRAFT schema. Planning artifact, not yet migrated.
+// Conventions:
+//   - ids are cuid2 strings
+//   - every tenant-owned table carries studioId (+ eventId where event-owned)
+//   - LocalizedText = Json shaped { en?: string, te?: string, hi?: string }
+//   - soft delete via deletedAt where user-facing data may need recovery
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, citext]
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+enum UserStatus {
+  UNCLAIMED // created by an invitation click; no second factor / passkey
+  CLAIMED
+  DISABLED
+}
+
+model User {
+  id          String     @id @default(cuid())
+  displayName String?
+  locale      String     @default("en")
+  status      UserStatus @default(UNCLAIMED)
+  isPlatformAdmin Boolean @default(false)
+  mergedIntoId String?   // set when merged into another user (soft)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  deletedAt   DateTime?
+
+  contactPoints  ContactPoint[]
+  studioMembers  StudioMember[]
+  eventMembers   EventMember[]
+  guests         Guest[]
+  sessions       Session[]
+  favorites      Favorite[]
+  photoMatches   PhotoMatch[]
+  consents       BiometricConsent[]
+  faceProfile    FaceProfile?
+  orders         Order[]
+}
+
+enum ContactKind {
+  EMAIL
+  PHONE
+}
+
+model ContactPoint {
+  id         String      @id @default(cuid())
+  userId     String
+  kind       ContactKind
+  value      String      @db.Citext // emails lowercased; phones E.164
+  verifiedAt DateTime?
+  smsOptOut  Boolean     @default(false)
+  isPrimary  Boolean     @default(false)
+  user       User        @relation(fields: [userId], references: [id])
+
+  // a verified contact belongs to exactly one user
+  @@unique([kind, value])
+}
+
+enum AuthMethod {
+  INVITE_LINK // guest-scoped only, can never perform elevated actions
+  EMAIL_LINK
+  EMAIL_OTP
+  SMS_OTP
+  PASSKEY
+}
+
+model Session {
+  id         String     @id @default(cuid())
+  userId     String
+  authMethod AuthMethod
+  authedAt   DateTime   @default(now())
+  expiresAt  DateTime
+  guestScopeEventId String? // set for INVITE_LINK sessions
+  user       User       @relation(fields: [userId], references: [id])
+}
+
+// ───────────────────────────── Tenancy ─────────────────────────────
+
+model Studio {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  brandJson       Json?    // logo, "Photography by" footer credit + link, default watermark
+  stripeAccountId String?  // Stripe Connect
+  faceIndexRetentionDays Int @default(365) // admin-only; app enforces 30..730
+  createdAt       DateTime @default(now())
+
+  members    StudioMember[]
+  events     Event[]
+  domains    Domain[]
+  priceSheets PriceSheet[]
+}
+
+enum StudioRole {
+  OWNER
+  STAFF
+}
+
+model StudioMember {
+  id       String     @id @default(cuid())
+  studioId String
+  userId   String
+  role     StudioRole
+  studio   Studio     @relation(fields: [studioId], references: [id])
+  user     User       @relation(fields: [userId], references: [id])
+
+  @@unique([studioId, userId])
+}
+
+model Domain {
+  id        String   @id @default(cuid())
+  hostname  String   @unique // priya-arjun.yourstudio.com
+  studioId  String
+  eventId   String?  // null = studio-level domain (e.g. portfolio/app)
+  isPrimary Boolean  @default(true)
+  verifiedAt DateTime?
+  studio    Studio   @relation(fields: [studioId], references: [id])
+  event     Event?   @relation(fields: [eventId], references: [id])
+}
+
+// ───────────────────────────── Event ─────────────────────────────
+
+enum ThemeKey {
+  LUXURY
+  ROMANTIC
+  HINDU_TRADITIONAL
+}
+
+enum EventStatus {
+  DRAFT
+  LIVE        // site visible to invited guests
+  COMPLETED   // event date passed
+  ARCHIVED
+}
+
+model Event {
+  id            String      @id @default(cuid())
+  studioId      String
+  slug          String      // also first label of default hostname
+  title         Json        // LocalizedText
+  startsOn      DateTime?
+  timezone      String      @default("America/Chicago")
+  status        EventStatus @default(DRAFT)
+  theme         ThemeKey
+  themeOverrides Json?      // accent colors, hero image key, monogram
+  defaultLocale String      @default("en")
+  enabledLocales String[]   @default(["en"])
+  faceSearchEnabled Boolean @default(true)
+  faceIndexRetentionDays Int? // admin-only override of Studio default; app enforces 30..730
+  galleryPublishedAt DateTime?
+  faceIndexPurgeAt   DateTime? // computed: galleryPublishedAt + studio retention
+  faceIndexPurgedAt  DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  studio     Studio        @relation(fields: [studioId], references: [id])
+  domains    Domain[]
+  members    EventMember[]
+  pages      EventPage[]
+  subEvents  SubEvent[]
+  households Household[]
+  guests     Guest[]
+  albums     Album[]
+  photos     Photo[]
+  registryItems RegistryItem[]
+  cashFunds  CashFund[]
+  reminderRules ReminderRule[]
+
+  @@unique([studioId, slug])
+}
+
+enum EventRole {
+  HOST
+  COHOST
+  PLANNER
+  VENDOR
+  STAFF // studio staff assigned to this event
+}
+
+model EventMember {
+  id      String    @id @default(cuid())
+  eventId String
+  userId  String
+  role    EventRole
+  vendorCategory String? // "decor", "catering", ...
+  event   Event     @relation(fields: [eventId], references: [id])
+  user    User      @relation(fields: [userId], references: [id])
+
+  @@unique([eventId, userId, role])
+}
+
+enum PageType {
+  HOME
+  ABOUT
+  SCHEDULE
+  TRAVEL
+  WEDDING_PARTY
+  FAQ
+  REGISTRY
+  GALLERY
+  RSVP
+}
+
+model EventPage {
+  id        String   @id @default(cuid())
+  eventId   String
+  type      PageType
+  enabled   Boolean  @default(true)
+  sortOrder Int      @default(0)
+  content   Json     // typed per PageType, validated by Zod; strings are LocalizedText
+  updatedAt DateTime @updatedAt
+  event     Event    @relation(fields: [eventId], references: [id])
+
+  @@unique([eventId, type])
+}
+
+model SubEvent {
+  id          String   @id @default(cuid())
+  eventId     String
+  name        Json     // LocalizedText: "Sangeet"
+  description Json?
+  startsAt    DateTime
+  endsAt      DateTime?
+  venueName   String?
+  venueAddress String?
+  mapUrl      String?
+  dressCode   Json?
+  rsvpDeadline DateTime?
+  servesMeal  Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  event       Event    @relation(fields: [eventId], references: [id])
+
+  mealOptions MealOption[]
+  invites     SubEventInvite[]
+  rsvps       Rsvp[]
+}
+
+model MealOption {
+  id         String   @id @default(cuid())
+  subEventId String
+  label      Json     // LocalizedText
+  isKidsMeal Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  subEvent   SubEvent @relation(fields: [subEventId], references: [id])
+  rsvps      Rsvp[]
+}
+
+// ───────────────────────────── Guests & RSVP ─────────────────────────────
+
+model Household {
+  id          String   @id @default(cuid())
+  studioId    String
+  eventId     String
+  name        String   // "The Rao Family"
+  plusOnesAllowed Int  @default(0)
+  side        String?  // "bride" | "groom" | free text
+  tags        String[]
+  notes       String?  // host-private
+  importSource String? // "csv:2026-10-07" | "google"
+  createdAt   DateTime @default(now())
+  event       Event    @relation(fields: [eventId], references: [id])
+  guests      Guest[]
+  messages    Message[]
+}
+
+model Guest {
+  id          String   @id @default(cuid())
+  studioId    String
+  eventId     String
+  householdId String
+  userId      String?  // linked ONLY via verified contact (see 02-users-and-roles)
+  firstName   String?
+  lastName    String?
+  email       String?  @db.Citext // host-entered, unverified
+  phone       String?  // host-entered, E.164, unverified
+  isChild     Boolean  @default(false)
+  isPlusOne   Boolean  @default(false) // placeholder slot, name filled at RSVP
+  isPrimaryContact Boolean @default(false)
+  galleryOnly Boolean  @default(false) // gallery access, no sub-event invites
+  faceSearchOptOut Boolean @default(false)
+  createdAt   DateTime @default(now())
+  deletedAt   DateTime?
+
+  event       Event     @relation(fields: [eventId], references: [id])
+  household   Household @relation(fields: [householdId], references: [id])
+  user        User?     @relation(fields: [userId], references: [id])
+  invites     SubEventInvite[]
+  rsvps       Rsvp[]
+  inviteTokens InviteToken[]
+
+  @@unique([eventId, userId]) // one guest row per user per event
+}
+
+model SubEventInvite {
+  guestId    String
+  subEventId String
+  guest      Guest    @relation(fields: [guestId], references: [id])
+  subEvent   SubEvent @relation(fields: [subEventId], references: [id])
+
+  @@id([guestId, subEventId])
+}
+
+enum RsvpStatus {
+  PENDING
+  ATTENDING
+  DECLINED
+}
+
+model Rsvp {
+  id           String     @id @default(cuid())
+  guestId      String
+  subEventId   String
+  status       RsvpStatus @default(PENDING)
+  mealOptionId String?
+  respondedAt  DateTime?
+  respondedByUserId String?
+  guest        Guest      @relation(fields: [guestId], references: [id])
+  subEvent     SubEvent   @relation(fields: [subEventId], references: [id])
+  mealOption   MealOption? @relation(fields: [mealOptionId], references: [id])
+
+  @@unique([guestId, subEventId])
+}
+
+model InviteToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique // store hash only
+  guestId   String
+  channel   ContactKind
+  sentTo    String   // the address/number the link was delivered to
+  expiresAt DateTime
+  revokedAt DateTime?
+  lastUsedAt DateTime?
+  guest     Guest    @relation(fields: [guestId], references: [id])
+}
+
+// ───────────────────────────── Messaging ─────────────────────────────
+
+enum MessagePurpose {
+  INVITATION
+  REMINDER
+  MAGIC_LINK
+  OTP
+  GALLERY_READY
+  RECEIPT
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  FAILED
+  SUPPRESSED // opted out
+}
+
+model Message {
+  id          String         @id @default(cuid())
+  studioId    String
+  eventId     String?
+  householdId String?
+  guestId     String?
+  channel     ContactKind
+  purpose     MessagePurpose
+  to          String
+  locale      String
+  providerId  String?
+  status      MessageStatus  @default(QUEUED)
+  error       String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  household   Household?     @relation(fields: [householdId], references: [id])
+}
+
+model ReminderRule {
+  id          String    @id @default(cuid())
+  eventId     String
+  sendAt      DateTime  // host-chosen; fires for households with any PENDING invited sub-event
+  channel     ContactKind @default(PHONE)
+  subEventIds String[]  // empty = all
+  firedAt     DateTime?
+  event       Event     @relation(fields: [eventId], references: [id])
+}
+
+// ───────────────────────────── Registry ─────────────────────────────
+
+model RegistryItem {
+  id          String   @id @default(cuid())
+  eventId     String
+  title       Json     // LocalizedText
+  storeName   String?  // "Amazon", "Zola"
+  url         String
+  imageUrl    String?
+  quantity    Int      @default(1)
+  sortOrder   Int      @default(0)
+  event       Event    @relation(fields: [eventId], references: [id])
+  claims      RegistryClaim[]
+}
+
+model RegistryClaim {
+  id        String   @id @default(cuid())
+  itemId    String
+  userId    String?
+  guestName String?
+  quantity  Int      @default(1)
+  claimedAt DateTime @default(now())
+  item      RegistryItem @relation(fields: [itemId], references: [id])
+}
+
+enum CashFundKind {
+  STRIPE   // tracked contributions
+  EXTERNAL // Venmo/Zelle handle, display only
+}
+
+model CashFund {
+  id          String       @id @default(cuid())
+  eventId     String
+  title       Json
+  description Json?
+  kind        CashFundKind
+  externalHandle String?
+  goalCents   Int?
+  event       Event        @relation(fields: [eventId], references: [id])
+}
+
+// ───────────────────────────── Media ─────────────────────────────
+
+enum AlbumVisibility {
+  GUESTS
+  HOSTS_ONLY
+  HIDDEN // studio only
+}
+
+model Album {
+  id         String          @id @default(cuid())
+  studioId   String
+  eventId    String
+  subEventId String?         // optional link: "Sangeet" album
+  title      Json
+  visibility AlbumVisibility @default(GUESTS)
+  vendorVisible Boolean      @default(false)
+  sortOrder  Int             @default(0)
+  coverPhotoId String?
+  event      Event           @relation(fields: [eventId], references: [id])
+  photos     Photo[]
+}
+
+enum PhotoStatus {
+  UPLOADING
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Photo {
+  id          String      @id @default(cuid())
+  studioId    String
+  eventId     String
+  albumId     String?
+  originalKey String
+  originalBytes BigInt
+  checksum    String      // sha256, dedupe re-uploads
+  filename    String
+  width       Int?
+  height      Int?
+  capturedAt  DateTime?
+  derivatives Json?       // { thumb: key, web: key, webWm: key }
+  hidden      Boolean     @default(false)
+  status      PhotoStatus @default(UPLOADING)
+  facesIndexedAt DateTime?
+  sortKey     String?     // capture-time based, overridable
+  createdAt   DateTime    @default(now())
+
+  event      Event        @relation(fields: [eventId], references: [id])
+  album      Album?       @relation(fields: [albumId], references: [id])
+  faces      Face[]
+  favorites  Favorite[]
+  matches    PhotoMatch[]
+
+  @@unique([eventId, checksum])
+  @@index([eventId, albumId, sortKey])
+}
+
+model FaceCluster {
+  id        String  @id @default(cuid())
+  eventId   String
+  label     String? // optional host label, e.g. "Bride"
+  suppressed Boolean @default(false) // "remove me from face search"
+  faces     Face[]
+}
+
+model Face {
+  id           String   @id @default(cuid())
+  eventId      String   // denormalized for filtered exact scan
+  photoId      String
+  clusterId    String?
+  bbox         Json     // {x,y,w,h} normalized 0..1
+  quality      Float
+  modelVersion String   // "sface-2021dec" | "arcface-r100-commercial"
+  embedding    Unsupported("vector(128)")
+  photo        Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  cluster      FaceCluster? @relation(fields: [clusterId], references: [id])
+
+  @@index([eventId])
+}
+
+enum ConsentKind {
+  SEARCH_SELF     // one-off selfie search, embedding discarded
+  SEARCH_GUARDIAN // adult searching for a child guest in own household
+  FACE_PROFILE    // "remember my face" across events (adults only)
+}
+
+model BiometricConsent {
+  id                 String      @id @default(cuid())
+  kind               ConsentKind
+  consentedByUserId  String      // the adult who clicked consent
+  subjectGuestId     String?     // set for SEARCH_GUARDIAN (the child)
+  eventId            String?     // null for FACE_PROFILE (cross-event)
+  consentTextVersion String
+  grantedAt          DateTime    @default(now())
+  revokedAt          DateTime?
+  ipHash             String?
+  user               User        @relation(fields: [consentedByUserId], references: [id])
+}
+
+// Opt-in, cross-event. Embedding only, never the image.
+model FaceProfile {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  consentId    String    @unique
+  modelVersion String
+  embedding    Unsupported("vector(128)")
+  stale        Boolean   @default(false) // model changed → ask for fresh selfie
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime  @default(now())
+  purgeAfter   DateTime  // lastUsedAt + 3y, refreshed on use
+  user         User      @relation(fields: [userId], references: [id])
+}
+
+enum MatchSource {
+  SELFIE
+  PROFILE_AUTO
+  GUARDIAN
+}
+
+// Result of a face search. Not biometric: survives face-index purge.
+// Subject is a user (adults) or a guest row (children searched by a guardian).
+model PhotoMatch {
+  id             String      @id @default(cuid())
+  photoId        String
+  userId         String?
+  subjectGuestId String?
+  source         MatchSource
+  score          Float
+  matchedAt      DateTime    @default(now())
+  user           User?       @relation(fields: [userId], references: [id])
+  photo          Photo       @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, photoId])
+  @@unique([subjectGuestId, photoId])
+  // CHECK (num_nonnulls(user_id, subject_guest_id) = 1) via raw migration
+}
+
+model Favorite {
+  userId    String
+  photoId   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  photo     Photo    @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  @@id([userId, photoId])
+}
+
+model ProofingList {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String   // "Album selects", "Parents album"
+  maxSelections Int?
+  lockedAt  DateTime? // submitted to studio
+  photoIds  String[] // ordered selection
+  createdByUserId String
+  updatedAt DateTime @updatedAt
+}
+
+model ZipExport {
+  id        String   @id @default(cuid())
+  eventId   String
+  scopeHash String   // hash of (photo ids, visibility state); reuse when unchanged
+  partKeys  String[]
+  status    String   // QUEUED|BUILDING|READY|FAILED
+  bytes     BigInt?
+  createdAt DateTime @default(now())
+}
+
+// ───────────────────────────── Commerce ─────────────────────────────
+
+model PriceSheet {
+  id       String    @id @default(cuid())
+  studioId String
+  name     String
+  currency String    @default("usd")
+  studio   Studio    @relation(fields: [studioId], references: [id])
+  products Product[]
+}
+
+enum ProductKind {
+  GALLERY_UNLOCK  // host package / full-res for all
+  DIGITAL_PHOTO   // single full-res download
+  PRINT
+}
+
+model Product {
+  id           String      @id @default(cuid())
+  priceSheetId String
+  kind         ProductKind
+  name         String
+  priceCents   Int
+  labSku       String?     // print lab product code
+  active       Boolean     @default(true)
+  priceSheet   PriceSheet  @relation(fields: [priceSheetId], references: [id])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  REFUNDED
+  CANCELED
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  studioId      String
+  eventId       String
+  userId        String
+  status        OrderStatus @default(PENDING)
+  totalCents    Int
+  currency      String
+  stripeCheckoutId String?  @unique
+  stripePaymentIntentId String?
+  shippingJson  Json?
+  createdAt     DateTime    @default(now())
+  user          User        @relation(fields: [userId], references: [id])
+  items         OrderItem[]
+  fulfillments  PrintFulfillment[]
+}
+
+model OrderItem {
+  id         String  @id @default(cuid())
+  orderId    String
+  productId  String
+  photoId    String?
+  quantity   Int     @default(1)
+  unitCents  Int
+  cropJson   Json?   // print crop
+  order      Order   @relation(fields: [orderId], references: [id])
+}
+
+enum EntitlementScope {
+  GALLERY_FULLRES // everyone with gallery access gets clean + downloads
+  PHOTO_FULLRES
+  GALLERY_ZIP
+}
+
+model Entitlement {
+  id        String           @id @default(cuid())
+  eventId   String
+  scope     EntitlementScope
+  userId    String?          // null = applies to all viewers of event
+  photoId   String?
+  orderId   String?          // null = comped by studio
+  grantedAt DateTime         @default(now())
+  revokedAt DateTime?
+}
+
+model PrintFulfillment {
+  id          String  @id @default(cuid())
+  orderId     String
+  lab         String  // "whcc"
+  externalId  String?
+  status      String  // SUBMITTED|IN_PRODUCTION|SHIPPED|DELIVERED|ERROR
+  trackingUrl String?
+  order       Order   @relation(fields: [orderId], references: [id])
+}
+
+model Contribution {
+  id         String   @id @default(cuid())
+  cashFundId String
+  userId     String?
+  name       String?
+  message    String?
+  amountCents Int
+  stripePaymentIntentId String @unique
+  createdAt  DateTime @default(now())
+}
+
+// ───────────────────────────── Infrastructure ─────────────────────────────
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+model Job {
+  id        BigInt    @id @default(autoincrement())
+  type      String    // PROCESS_PHOTO | INDEX_FACES | CLUSTER_FACES | BUILD_ZIP | SEND_MESSAGE | FIRE_REMINDER | PURGE_FACE_INDEX | PRINT_SUBMIT
+  payload   Json
+  status    JobStatus @default(QUEUED)
+  runAt     DateTime  @default(now())
+  attempts  Int       @default(0)
+  maxAttempts Int     @default(5)
+  lockedBy  String?
+  lockedAt  DateTime?
+  lastError String?
+  dedupeKey String?   @unique
+  createdAt DateTime  @default(now())
+
+  @@index([status, runAt])
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  studioId  String?
+  eventId   String?
+  actorUserId String?
+  action    String   // "photo.hide", "user.merge", "consent.grant", "faceindex.purge"
+  target    String?
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([studioId, createdAt])
+}

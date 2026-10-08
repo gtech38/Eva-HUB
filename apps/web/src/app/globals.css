@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Neutral defaults; each theme Shell overrides these via inline style. */
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --fg: #1c1b19;
+  --muted: #6b675f;
+  --accent: #8a6d3b;
+  --accent-fg: #ffffff;
+  --line: #e4e0d8;
+  --radius: 4px;
+  --font-display: var(--font-lora);
+  --font-body: var(--font-inter);
+  --font-script: var(--font-great-vibes);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body), var(--font-telugu), var(--font-devanagari), system-ui, sans-serif;
+  line-height: 1.55;
+}
+
+/* ─── Shared primitives ─── */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium tracking-wide transition-colors disabled:opacity-50;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.btn:hover { filter: brightness(1.08); }
+.btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm transition-colors;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  background: transparent;
+}
+.btn-ghost:hover { background: var(--surface); }
+.input {
+  @apply w-full px-3 py-2.5 text-base outline-none;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--fg);
+}
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.card {
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.eyebrow { @apply text-xs uppercase tracking-[0.2em]; color: var(--accent); }
+.prose-site p + p { margin-top: 1em; }
+.nav-link { @apply text-sm tracking-wide transition-opacity hover:opacity-70; }
+.nav-link[aria-current="page"] { color: var(--accent); }
+
+/* ─── Hindu Traditional ornaments (pure CSS, no images) ─── */
+.rangoli-band {
+  height: 14px;
+  background-image:
+    radial-gradient(circle at 7px 7px, var(--accent) 2.5px, transparent 3px),
+    radial-gradient(circle at 21px 7px, var(--accent-2) 1.5px, transparent 2px);
+  background-size: 28px 14px;
+  background-repeat: repeat-x;
+}
+.paisley-frame {
+  position: relative;
+}
+.paisley-frame::before,
+.paisley-frame::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 10px;
+  background-image: repeating-linear-gradient(90deg, var(--accent) 0 10px, transparent 10px 14px, var(--accent-2) 14px 18px, transparent 18px 28px);
+  opacity: 0.85;
+}
+.paisley-frame::before { top: 0; }
+.paisley-frame::after { bottom: 0; }
+.scallop {
+  height: 12px;
+  background-image: radial-gradient(circle at 10px -4px, transparent 10px, var(--accent) 11px, var(--accent) 12px, transparent 13px);
+  background-size: 20px 12px;
+  background-repeat: repeat-x;
+}
+
+/* ─── Luxury ornaments ─── */
+.hairline {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+
+/* ─── Romantic ornaments ─── */
+.blush-glow {
+  background: radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+    radial-gradient(ellipse at 90% 100%, color-mix(in srgb, var(--accent-2) 30%, transparent), transparent 55%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in { animation: fade-in 500ms ease-out both; }
+}
+@keyframes fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

@@ -1,0 +1,18 @@
+import type { NextConfig } from "next";
+import { config as loadEnv } from "dotenv";
+import path from "node:path";
+
+// Every service reads the single root .env.
+loadEnv({ path: path.resolve(__dirname, "../../.env") });
+
+const nextConfig: NextConfig = {
+  transpilePackages: ["@hub/db", "@hub/shared"],
+  serverExternalPackages: ["@prisma/client", "nodemailer", "@aws-sdk/client-s3"],
+  experimental: {
+    serverActions: { bodySizeLimit: "4mb" },
+  },
+  typescript: { ignoreBuildErrors: false },
+  eslint: { ignoreDuringBuilds: true },
+};
+
+export default nextConfig;

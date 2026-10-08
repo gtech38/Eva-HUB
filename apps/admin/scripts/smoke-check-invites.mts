@@ -1,0 +1,11 @@
+import { config } from "dotenv";
+config({ path: new URL("../../../.env", import.meta.url).pathname });
+import { prisma } from "@hub/db";
+const ev = await prisma.event.findFirstOrThrow({ where: { slug: "priya-arjun" } });
+const msgs = await prisma.message.groupBy({ by: ["channel", "status"], _count: { _all: true }, where: { eventId: ev.id, purpose: "INVITATION" } });
+console.log("Message rows:", msgs.map((m) => `${m.channel}/${m.status}=${m._count._all}`).join(" "));
+const toks = await prisma.inviteToken.findMany({ where: { guest: { eventId: ev.id } }, include: { guest: { select: { firstName: true } } }, orderBy: { expiresAt: "desc" }, take: 20 });
+console.log("InviteTokens:", toks.length, toks.slice(0, 6).map((t) => `${t.guest.firstName}:${t.channel}:${t.sentTo}:hash=${t.tokenHash.slice(0, 8)}…:exp=${t.expiresAt.toISOString().slice(0, 10)}:revoked=${!!t.revokedAt}`));
+const audit = await prisma.auditLog.findMany({ where: { action: { in: ["invites.send", "guests.import", "event.create"] } }, orderBy: { createdAt: "desc" }, take: 3 });
+console.log("Audit:", audit.map((a) => `${a.action} ${JSON.stringify(a.data)}`));
+await prisma.$disconnect();

@@ -1,0 +1,32 @@
+[project]
+name = "hub-media-worker"
+version = "0.1.0"
+description = "Job consumer (photo derivatives, face indexing/clustering, zips) and face-embedding HTTP service for the Event & Photo Delivery Hub"
+requires-python = ">=3.11"
+dependencies = [
+  "opencv-contrib-python-headless>=4.9",
+  "numpy>=1.26",
+  "pillow>=10.1",
+  "psycopg[binary]>=3.1",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "python-multipart>=0.0.9",
+  "boto3>=1.34",
+  "python-dotenv>=1.0",
+  "scikit-learn>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hub_worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]
