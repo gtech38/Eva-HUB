@@ -107,6 +107,8 @@ A studio sees a **Contacts** list: every user who has a guest or member relation
 
 This is implemented as a single `can(user, action, resource)` policy function in `packages/shared`, used by both server actions and the UI. Every check is unit-tested against this table.
 
+The vendor's "meal counts only" cell is two actions: `rsvp.report` (headcounts and meal totals; vendors included) and `rsvp.report.names` (guest names in the report and name-level CSV exports; owner, staff, host, co-host, planner, never vendor).
+
 ## 5. Site and gallery access
 
 **The entire event site, including the gallery, is for invited guests only.** A viewer must have one of these:
