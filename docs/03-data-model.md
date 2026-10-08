@@ -81,7 +81,7 @@ erDiagram
 
 - **Faces:** search is an exact cosine scan filtered by `eventId`, which covers up to about 15,000 faces per event using the `@@index([eventId])` btree. No HNSW index is needed until cross-event search exists, and it may never be needed.
 - **Photos:** the composite index on `(eventId, albumId, sortKey)` serves gallery pagination. Paginate with keyset cursors, not offsets.
-- **RSVP reports:** `Rsvp(subEventId, status)`. Add the index once the counts appear on dashboards.
+- **RSVP reports:** `Rsvp(subEventId, status)`. Done (ADM-009, migration `rsvp_index`); the report page and CSV exports use it.
 - **Messages:** an index on `(providerId)` for webhook lookups.
 
 ## 4. What is not modelled yet (deliberately)
