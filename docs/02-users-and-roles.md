@@ -107,6 +107,8 @@ A studio sees a **Contacts** list: every user who has a guest or member relation
 
 This is implemented as a single `can(user, action, resource)` policy function in `packages/shared`, used by both server actions and the UI. Every check is unit-tested against this table.
 
+The "◐" cells in the RSVP row are two actions: `rsvp.report` (the report without names; everyone in the row) and `rsvp.report.names` (guest names in the report and name-level CSV exports). `rsvp.report.names` goes to the studio owner, staff **assigned to the event**, host, co-host and planner, never to a vendor or to unassigned staff. A vendor sees "meal counts only": per sub-event, the attending headcount (adults and children) and the meal table, with no names, no invited/declined/pending counts and no household figures. Unassigned staff get the same limited view.
+
 ## 5. Site and gallery access
 
 **The entire event site, including the gallery, is for invited guests only.** A viewer must have one of these:

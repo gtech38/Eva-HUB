@@ -366,6 +366,7 @@ model Rsvp {
   mealOption   MealOption? @relation(fields: [mealOptionId], references: [id])
 
   @@unique([guestId, subEventId])
+  @@index([subEventId, status]) // RSVP report headcounts (docs/03 §3)
 }
 
 model InviteToken {
