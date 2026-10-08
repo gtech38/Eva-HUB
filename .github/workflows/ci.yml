@@ -84,6 +84,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Env docs in sync (docs/deploy/env.md, .env.example)
+        run: node scripts/env-docs.mjs --check
+
       - name: Prisma generate + migrate + drift check
         working-directory: packages/db
         run: |
@@ -97,6 +100,15 @@ jobs:
 
       - name: Unit tests (TypeScript)
         run: pnpm -r test
+
+      # next build runs with NODE_ENV=production and the placeholder CI env above. env() must not apply its
+      # production checks then (NEXT_PHASE=phase-production-build), or every build without real secrets fails.
+      - name: Build apps (next build with the CI env)
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          pnpm --filter @hub/web build
+          pnpm --filter @hub/admin build
 
       - uses: actions/setup-python@v5
         with:

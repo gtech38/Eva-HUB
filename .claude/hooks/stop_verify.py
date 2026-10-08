@@ -7,7 +7,8 @@ absent (e.g. hooks were added mid-session) do we fall back to `git status`, whic
 pre-existing WIP.
 
 Runs typecheck + tests for every workspace package with touched source (and pytest for the
-worker). `packages/db` tests need Postgres, so they are skipped with a note when :5433 is closed.
+worker). Edits under `scripts/` or `docs/adr/` (not "source", no TDD gate) run the `scripts`
+package tests (`@hub/scripts`). `packages/db` tests need Postgres, so they are skipped with a note when :5433 is closed.
 If anything fails, the stop is blocked once with the failure output so Claude finishes the job
 instead of handing back red code. `stop_hook_active` prevents loops.
 
@@ -19,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import ROOT, SRC_EXT, Deadline, bootstrap_problem, checkout_env, port_open, read_payload, read_touched, rel, repo_root, run, tail, venv_python
+from _common import ROOT, SRC_EXT, Deadline, bootstrap_problem, checkout_env, is_tooling, port_open, read_payload, read_touched, rel, repo_root, run, tail, venv_python
 
 TOTAL_BUDGET_S = 540
 POSTGRES_PORT = 5433
@@ -38,12 +39,22 @@ if changed is None:
 # `git status` (fallback when there is no ledger) only sees ROOT; worktree edits reach us via the ledger.
 paths = [(Path(c) if Path(c).is_absolute() else ROOT / c).resolve() for c in changed]
 src = [f for f in paths if f.exists() and str(f).endswith(VERIFY_EXT) and rel(f).startswith(("apps/", "packages/", "workers/"))]
-if not src:
+# scripts/** and docs/adr/** are not "source" (no TDD gate) but @hub/scripts tests lint them.
+tooling = [f for f in paths if f.exists() and is_tooling(f)]
+if not src and not tooling:
     sys.exit(0)
 
 pkgs: set[Path] = set()
 py_roots: set[Path] = set()
 notes = []
+for path in tooling:
+    top = repo_root(path)
+    why = bootstrap_problem(path)
+    if why:
+        if why not in notes:
+            notes.append(why)
+    elif top and (top / "scripts" / "package.json").exists():
+        pkgs.add(top / "scripts")
 for path in src:
     top = repo_root(path)
     why = bootstrap_problem(path)

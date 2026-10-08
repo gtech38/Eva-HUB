@@ -40,7 +40,7 @@ description: Use when sending or tracking email/SMS: packages/shared/src/email.t
 
 ### Add an email provider (e.g. Resend)
 1. Test first: `packages/shared/src/email.test.ts` (vitest) -- construct `ResendSender` with an injected `fetch` stub, assert the request body (`from`, `to`, `subject`, `text`, `html`) and that `providerId` is taken from the response id. Also assert `email()` returns `ResendSender` when `EMAIL_PROVIDER=resend` (set `process.env` before import; the singleton caches so test in isolation).
-2. Implement `class ResendSender implements EmailSender` in `email.ts`; extend the `EMAIL_PROVIDER` enum in `env.ts` with `"resend"` and add `RESEND_API_KEY` to the schema and `.env.example`.
+2. Implement `class ResendSender implements EmailSender` in `email.ts`; extend the `EMAIL_PROVIDER` enum in `env.ts` with `"resend"` and add `RESEND_API_KEY` to the schema and to `scripts/env-meta.mjs` (`secret: true`), then `pnpm env:docs` regenerates `.env.example`. In production `env()` rejects `EMAIL_PROVIDER=console`.
 3. Webhook: `apps/web/src/app/api/webhooks/email/route.ts` (`force-dynamic`, POST, verify the provider signature, map events to `MessageStatus`, `prisma.message.updateMany({ where: { providerId }, data: { status } })`). Test the mapper as a pure function first.
 4. Add `WEB_ORIGIN/api/webhooks/email` to the provider dashboard. Keep `smtp` as the local default.
 

@@ -15,6 +15,8 @@ pnpm dev                              # event sites on :3000, admin on :3001
 cd workers/media && make models && make dev
 ```
 
+Environment variables, which ones are secrets and what production must set are in [docs/deploy/env.md](docs/deploy/env.md); `.env.example` is generated (`pnpm env:docs`). A production build (`next build`) works with the dev `.env`, but to *run* one locally (`next start`) set `APP_ENV=development`, otherwise `env()` rejects the dev secrets exactly as it would in production.
+
 | URL | What |
 |---|---|
 | http://priya-arjun.localhost:3000 | Hindu Traditional wedding |
@@ -35,6 +37,7 @@ cd workers/media && make models && make dev
 | [docs/03-data-model.md](docs/03-data-model.md) | Entity overview, ERD, key modelling decisions |
 | [docs/schema.draft.prisma](docs/schema.draft.prisma) | Draft Prisma schema (not yet migrated) |
 | [docs/04-plan.md](docs/04-plan.md) | Phased delivery, MVP scope, long-lead items, open questions, risks |
+| [docs/adr/README.md](docs/adr/README.md) | Architecture decision records: what we chose and why (queue, storage, tenancy, face model, auth) |
 
 ## Decisions so far (2026-10-07)
 

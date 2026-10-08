@@ -71,7 +71,7 @@ Logs go to stdout of that terminal; look for `job <id> <TYPE> succeeded in N ms`
 Edit constants in `imaging.py` (`THUMB_EDGE`, `WEB_EDGE`, qualities; `watermark(opacity=0.28, angle=30)`), update `test_fit_long_edge_and_variants` expectations first, run `make test`. Re-process existing photos by enqueueing `PROCESS_PHOTO` with `dedupeKey process:{photoId}` (admin has no button yet; use `prisma db execute` or a small tsx script).
 
 ### Add an env setting
-Add a field to `Settings` in `config.py` + `load_settings()` with a default, document in README env table and `.env.example`. Note `_float()` strips inline `# comments` because `.env.example` has `FACE_MATCH_THRESHOLD=0.363   # ...`.
+Add a field to `Settings` in `config.py`: put the key and its literal local default (or `None` if derived) in `DEFAULTS`, read it with `get("KEY")` in `load_settings()`, add metadata to `scripts/env-meta.mjs`, then `pnpm env:docs` regenerates `.env.example` and `docs/deploy/env.md` (`node scripts/env-docs.mjs --check` fails otherwise). If the setting is wrong-by-default in production, add it to `PRODUCTION_REQUIRED` so `load_settings()` warns. `_float()` still strips inline `# comments` for hand-written `.env` files.
 
 ### Write a Postgres-backed test
 Use the `conn` and `queue` fixtures from `tests/conftest.py` (module-scoped `connect(autocommit=True)`, `pytest.skip` on `OperationalError`; `queue` gives a private job type, `queue.run_job(handlers, job_id)` asserts the claimed id, and every `jobs.enqueue` during the test is tracked and deleted at teardown). Use unique ids (`uuid4`) and `TEST_*` types/keys so parallel dev traffic is unaffected.
