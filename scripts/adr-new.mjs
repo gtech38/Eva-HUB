@@ -14,11 +14,19 @@ const NUMBERED = /^(\d{4})-.+\.md$/;
 /** "Postgres `Job` table!" -> "postgres-job-table" */
 export function slugify(title) {
   const slug = title
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "") // drop combining accents: "café" -> "cafe"
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!slug) throw new Error("ADR title must contain at least one letter or digit");
   return slug;
+}
+
+/** YYYY-MM-DD in the local timezone (toISOString would give the UTC day, wrong in the evening). */
+export function localDate(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /** One past the highest NNNN-*.md; the 0000 template and non-ADR files do not count. */
@@ -28,7 +36,7 @@ export function nextNumber(fileNames) {
 }
 
 /** Writes the new file and returns its path. Never overwrites: the number is always unused. */
-export function createAdr({ dir = DEFAULT_DIR, title, date = new Date().toISOString().slice(0, 10) }) {
+export function createAdr({ dir = DEFAULT_DIR, title, date = localDate() }) {
   const templatePath = join(dir, "0000-template.md");
   if (!existsSync(templatePath)) throw new Error(`ADR template not found: ${templatePath}`);
   const slug = slugify(title);

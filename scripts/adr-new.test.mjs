@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAdr, nextNumber, slugify } from "./adr-new.mjs";
+import { createAdr, localDate, nextNumber, slugify } from "./adr-new.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./adr-new.mjs", import.meta.url));
 const REAL_TEMPLATE = fileURLToPath(new URL("../docs/adr/0000-template.md", import.meta.url));
@@ -32,6 +32,9 @@ describe("slugify", () => {
   it("lowercases, hyphenates and strips punctuation", () => {
     expect(slugify("Postgres `Job` table: SKIP LOCKED!")).toBe("postgres-job-table-skip-locked");
   });
+  it("folds accents instead of dropping the letters (NFKD)", () => {
+    expect(slugify("Café résumé: Zürich")).toBe("cafe-resume-zurich");
+  });
   it("rejects a title with no letters or digits", () => {
     expect(() => slugify("  ?!  ")).toThrow(/title/i);
   });
@@ -43,6 +46,20 @@ describe("nextNumber", () => {
   });
   it("is one past the highest numbered ADR, ignoring other files", () => {
     expect(nextNumber(["0000-template.md", "0001-a.md", "0008-b.md", "README.md", "notes.md"])).toBe(9);
+  });
+});
+
+describe("localDate", () => {
+  it("is the author's calendar day, not the UTC day", () => {
+    const tz = process.env.TZ;
+    process.env.TZ = "America/Chicago";
+    try {
+      // 03:30 UTC on the 9th is 22:30 on the 8th in Chicago (CDT).
+      expect(localDate(new Date("2026-10-09T03:30:00Z"))).toBe("2026-10-08");
+    } finally {
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    }
   });
 });
 
@@ -86,6 +103,8 @@ describe("createAdr", () => {
     writeFileSync(join(dir, "real", "0000-template.md"), readFileSync(REAL_TEMPLATE, "utf8"));
     const text = readFileSync(createAdr({ dir: join(dir, "real"), title: "Smoke", date: "2026-10-08" }), "utf8");
     expect(text).toContain("# ADR-0001: Smoke");
+    expect(text).toMatch(/^- Date: \d{4}-\d{2}-\d{2}$/m);
+    expect(text).not.toMatch(/NNNN|YYYY|<Title>/);
     for (const section of ["Context", "Decision", "Consequences", "Alternatives", "References"]) {
       expect(text).toContain(`## ${section}`);
     }
