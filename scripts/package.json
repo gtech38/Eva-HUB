@@ -1,0 +1,13 @@
+{
+  "name": "@hub/scripts",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Repo tooling (ADR scaffolding, docs checks). Plain Node ESM; no build step.",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
+  }
+}

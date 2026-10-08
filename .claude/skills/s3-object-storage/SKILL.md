@@ -93,7 +93,7 @@ Policy lives in `docs/ops/backups.md` §5 (exact S3 and R2 lifecycle JSON) and t
 - Local RustFS accepts `put-bucket-versioning` and the lifecycle JSON from the docs (verified on a scratch bucket); whether it later expires anything was not tested, and lifecycle runs on a days-long clock, so treat expiry behaviour as unverifiable locally.
 
 ## Gotchas
-- `.env.example` still says "MinIO locally"; compose uses **RustFS** because MinIO's public images were withdrawn. Same API, same creds.
+- Compose uses **RustFS** because MinIO's public images were withdrawn; the `minio`/`minio12345` creds and `S3_*` names are unchanged. `S3_PUBLIC_ENDPOINT` is optional locally but `env()` rejects production without it (docs/deploy/env.md).
 - RustFS has no CORS configured, so presigned PUTs from the browser fail with a bare network error -- expected locally; the proxy fallback handles it. Do not "fix" this by making the bucket public.
 - A presigned URL includes `Content-Type` in the signature when `ContentType` was passed to `PutObjectCommand`; the browser must send exactly that header (the `Uploader` does).
 - `headObject` swallows all errors and returns `null` -- a wrong endpoint looks like "object missing".

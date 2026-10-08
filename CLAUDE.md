@@ -1,6 +1,6 @@
 # CLAUDE.md — Event & Photo Delivery Hub
 
-Multi-tenant event-site + photo-delivery platform. Planning docs in `docs/` are the source of design intent; `packages/db/prisma/schema.prisma` is the source of truth for data.
+Multi-tenant event-site + photo-delivery platform. Planning docs in `docs/` are the source of design intent; `packages/db/prisma/schema.prisma` is the source of truth for data. Architecture decisions and their reasons: [docs/adr/README.md](docs/adr/README.md) (new one: `node scripts/adr-new.mjs "<title>"`).
 
 ## Layout
 
@@ -43,7 +43,9 @@ Sites: `http://priya-arjun.localhost:3000`, admin `http://localhost:3001` (sign 
 ```bash
 pnpm typecheck                       # all TS packages
 pnpm test                            # policy tests etc.
-pnpm --filter @hub/web build
+pnpm --filter @hub/web build         # next build; skips the production env checks unless APP_ENV is set (docs/deploy/env.md)
+pnpm lint                            # env-docs --check, then next lint
+pnpm env:docs                        # regenerate .env.example + docs/deploy/env.md after editing env.ts, config.py DEFAULTS or scripts/env-meta.mjs
 cd workers/media && make test        # pytest (needs local postgres)
 cd packages/db && pnpm exec prisma studio
 ```

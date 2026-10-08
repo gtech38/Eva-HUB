@@ -18,6 +18,7 @@ Auth is a self-contained implementation in `packages/shared/src/auth.ts` (signed
 - WEB-007 "My events" cross-event dashboard
 - SHR-004 Duplicate-user merge flow
 - WEB-008 Passkeys (WebAuthn)
+- SHR-018 Dual-key `AUTH_SECRET` so rotation does not sign everyone out
 
 ## Definition of Done
 - [ ] A guest can sign in with a 6-digit code on either channel and the response never reveals guest-list membership.

@@ -16,13 +16,15 @@ description: Use when adding or wiring packages, changing root/package scripts, 
 | Path | What |
 |---|---|
 | `package.json` (root) | `packageManager: pnpm@9.15.9`; all cross-cutting scripts |
-| `pnpm-workspace.yaml` | `packages: [apps/*, packages/*]` (the Python worker is NOT a workspace member) |
+| `pnpm-workspace.yaml` | `packages: [apps/*, packages/*, scripts]` (the Python worker is NOT a workspace member) |
+| `scripts` `@hub/scripts` | repo tooling as plain Node ESM (`adr-new.mjs`, `adr-lint.mjs`) with `*.test.mjs` beside them; only `vitest` as a dependency, `test` script only (no typecheck). other scripts (`backlog-sync.mjs`, `env-docs.mjs`) live here too; this package only runs `*.test.mjs` files |
 | `apps/web` `@hub/web` | Next 15 guest sites, port 3000 |
 | `apps/admin` `@hub/admin` | Next 15 admin, port 3001 |
 | `packages/db` `@hub/db` | Prisma schema/client, `scoped()`, `enqueue()` |
 | `packages/shared` `@hub/shared` | env, i18n, pages, policy, storage, email, sms, auth |
 | `workers/media` | Python; own `Makefile`, `.venv`, `pyproject.toml` |
 | `scripts/backlog-sync.mjs` | `pnpm backlog:sync` (gh CLI) |
+| `scripts/env-docs.mjs`, `scripts/env-meta.mjs` | `pnpm env:docs` / `--check`: env reference generator and per-variable metadata |
 | `.env` | Single root env file; `apps/web/.env` and `packages/db/.env` are symlinks to it |
 
 ## Conventions in this repo
@@ -41,7 +43,10 @@ description: Use when adding or wiring packages, changing root/package scripts, 
 | `pnpm dev` | `pnpm -r --parallel --filter ./apps/* dev` (web :3000 + admin :3001) |
 | `pnpm dev:web` / `pnpm dev:admin` | one app |
 | `pnpm typecheck` | `tsc --noEmit` in every package |
-| `pnpm test` | `pnpm -r test` (`vitest run` in shared, db, web, admin) |
+| `pnpm test` | `pnpm -r test` (`vitest run` in shared, db, web, admin, scripts) |
+| `node scripts/adr-new.mjs "<title>"` | creates the next `docs/adr/NNNN-slug.md` from the template (see `docs/adr/README.md`) |
+| `pnpm lint` | `node scripts/env-docs.mjs --check && pnpm -r lint` (the env docs drift check runs first, then `next lint` in each app) |
+| `pnpm env:docs` | `node scripts/env-docs.mjs`: regenerates `.env.example` and the table in `docs/deploy/env.md` from `env.ts`, the worker's `DEFAULTS` and `scripts/env-meta.mjs`; run it after touching any of them |
 | `pnpm verify` | `typecheck && test && cd workers/media && make test` -- run before any PR |
 | `pnpm db:generate|migrate|seed|reset` | delegates to `@hub/db` (`prisma generate`, `prisma migrate dev`, `tsx prisma/seed.ts`, `prisma migrate reset --force`) |
 | `pnpm infra:up|down|nuke` | `docker compose -f infra/docker-compose.yml up -d|down|down -v` |

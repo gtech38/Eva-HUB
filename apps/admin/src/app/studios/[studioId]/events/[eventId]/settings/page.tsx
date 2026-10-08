@@ -1,5 +1,5 @@
 import { prisma } from "@hub/db";
-import { can } from "@hub/shared";
+import { can, env } from "@hub/shared";
 import { getEvent, getStudio, THEMES, EVENT_KINDS } from "@/lib/data";
 import { requireAdmin } from "@/lib/auth";
 import { Card, Field, LocalizedInputs } from "@/components/ui";
@@ -18,7 +18,7 @@ export default async function EventSettingsPage({ params }: { params: Promise<{ 
   const faces = await prisma.face.count({ where: { eventId } });
   const title = (event.title ?? {}) as Record<string, string>;
   const overrides = (event.themeOverrides ?? {}) as { monogram?: string | null };
-  const rootDomain = process.env.ROOT_DOMAIN ?? "localhost";
+  const rootDomain = env().ROOT_DOMAIN;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
