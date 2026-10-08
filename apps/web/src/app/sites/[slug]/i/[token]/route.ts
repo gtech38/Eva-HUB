@@ -4,12 +4,15 @@ import { hashToken, resolveUserForVerifiedContact, createSession } from "@hub/sh
 import { getSite, siteOrigin } from "@/lib/site";
 import { setSessionCookie } from "@/lib/session";
 import { fullName } from "@/lib/format";
+import { checkInvite, INVITE_EXPIRED_PATH } from "@/lib/inviteLink";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Personal invitation link. Creates/resolves the user for the address the invite was
- * delivered to, links the Guest row, and opens a guest-scoped INVITE_LINK session.
+ * delivered to, links the Guest row, and opens a guest-scoped INVITE_LINK session that ends no
+ * later than the token. A dead link (expired, revoked, unknown) shows the sign-in form with an
+ * expiry explanation so the guest can request a fresh link.
  */
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: string }> }) {
   const site = await getSite();
@@ -19,8 +22,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: str
 
   const invite = await prisma.inviteToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { guest: true } });
   const now = new Date();
-  if (!invite || invite.revokedAt || invite.expiresAt < now || invite.guest.eventId !== site.event.id || invite.guest.deletedAt) {
-    return NextResponse.redirect(`${origin}/?error=invite`);
+  if (!invite || checkInvite(invite, site.event.id, now) !== "ok") {
+    return NextResponse.redirect(`${origin}${INVITE_EXPIRED_PATH}`);
   }
 
   await prisma.inviteToken.update({ where: { id: invite.id }, data: { lastUsedAt: now } });
@@ -34,7 +37,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: str
     if (!clash) await prisma.guest.update({ where: { id: guest.id }, data: { userId: user.id } });
   }
 
-  const { session, cookie } = await createSession(user.id, "INVITE_LINK", site.event.id);
+  const { session, cookie } = await createSession(user.id, "INVITE_LINK", site.event.id, invite.expiresAt);
   await prisma.auditLog.create({
     data: { studioId: site.event.studioId, eventId: site.event.id, actorUserId: user.id, action: "auth.invite_link", target: guest.id, data: { channel: invite.channel } },
   });
