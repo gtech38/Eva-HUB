@@ -13,6 +13,7 @@ Auth is a self-contained implementation in `packages/shared/src/auth.ts` (signed
 - WEB-005 Re-authentication and "Not you?" flows on guest site and admin
 - SHR-003 Rate limiting and lockout for sign-in, OTP, invite and selfie endpoints
 - ADM-005 Invite-token expiry aligned to event end + 90 days
+- SHR-016 Revoking an invitation token ends the INVITE_LINK sessions opened with it
 - WEB-006 Account settings: contact points, verification, face profile, delete my data
 - WEB-007 "My events" cross-event dashboard
 - SHR-004 Duplicate-user merge flow
