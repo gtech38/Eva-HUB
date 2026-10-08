@@ -15,7 +15,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Title follows "<ID>: summary" or "<type>(<scope>): summary"
+      - name: "Title follows <ID>: summary or <type>(<scope>): summary"
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
@@ -24,7 +24,7 @@ jobs:
           else
             echo "::error::PR title must be '<BACKLOG-ID>: summary' or '<type>(<scope>): summary' — got '$TITLE'"; exit 1
           fi
-      - name: Body references an issue (Closes/Refs #n)
+      - name: "Body references an issue (Closes/Refs #n)"
         env:
           BODY: ${{ github.event.pull_request.body }}
         run: |
