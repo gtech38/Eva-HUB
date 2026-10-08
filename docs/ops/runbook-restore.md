@@ -223,24 +223,52 @@ you review before committing.
 
 - [ ] Everything in step 6 is ticked. In particular, 6b (opt-outs) is done before any message can be sent.
 - [ ] Review the jobs parked in 6c and 6d on the admin jobs page; requeue only what is truly pending.
-- [ ] **Start the worker.** It picks up the purge jobs from step 6c. Check `GET http://<worker-host>:8010/health`, and watch the admin jobs page until `PURGE_FACE_INDEX` has succeeded and wrote its `faceindex.purge` audit rows.
-- [ ] **Verify the purges, once nothing can re-index those events.** `index_faces.py` does not check `faceIndexPurgedAt`, so a `PROCESS_PHOTO` (which enqueues `INDEX_FACES`) or an `INDEX_FACES` job still pending for a purged event can re-create `Face` rows after its purge. Wait until the first query returns no rows. Then the second must return no rows. If it doesn't, re-run the purge for those events (the 6c replay, or the due-purge SQL) and check again.
+- [ ] **Record when the worker starts, then start it.** The checks below compare against this moment, not a fixed window, so they stay correct however long the queue takes to drain:
+
+  ```bash
+  WORKER_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ); echo "$WORKER_STARTED"   # note it in the incident log
+  ```
+
+  It picks up the purge jobs from step 6c. Check `GET http://<worker-host>:8010/health`, and watch the admin jobs page until `PURGE_FACE_INDEX` has succeeded and wrote its `faceindex.purge` audit rows.
+- [ ] **Verify the purges, once nothing can re-index those events.** `index_faces.py` does not check `faceIndexPurgedAt`, so a `PROCESS_PHOTO` (which enqueues `INDEX_FACES`) or an `INDEX_FACES` job still pending for a purged event can re-create `Face` rows after its purge. Run these with `psql "$NEW_URL" -v WORKER_STARTED="$WORKER_STARTED"`. Wait until the first query returns no rows. Then the second must return no rows.
 
   ```sql
-  -- 1. indexing still in flight for events purged since the worker started (must be empty before step 2)
+  -- 1. indexing still in flight for events purged since the worker started (must be empty before query 2)
   SELECT j.id, j.type, j.status, p."eventId"
   FROM "Job" j
   JOIN "Photo" p ON p.id = j.payload->>'photoId'
   JOIN "Event" e ON e.id = p."eventId"
   WHERE j.type IN ('PROCESS_PHOTO', 'INDEX_FACES')
     AND j.status IN ('QUEUED'::"JobStatus", 'RUNNING'::"JobStatus")
-    AND e."faceIndexPurgedAt" > now() - interval '6 hours';
+    AND e."faceIndexPurgedAt" > (:'WORKER_STARTED'::timestamptz AT TIME ZONE 'UTC');
 
   -- 2. events purged since the worker started that still have Face rows (must be empty)
   SELECT e.id, count(*) AS faces
   FROM "Face" f JOIN "Event" e ON e.id = f."eventId"
-  WHERE e."faceIndexPurgedAt" > now() - interval '6 hours'
+  WHERE e."faceIndexPurgedAt" > (:'WORKER_STARTED'::timestamptz AT TIME ZONE 'UTC')
   GROUP BY e.id;
+  ```
+
+- [ ] **If query 2 returned rows, purge those events again** and repeat both queries. Neither 6c block can do this: the due-purge SQL skips events whose `faceIndexPurgedAt` is already set (the first purge set it), and the replay only covers actions from before the restore. This block re-queues exactly query 2's events with the same upsert, under its own key:
+
+  ```sql
+  INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
+  SELECT 'PURGE_FACE_INDEX', jsonb_build_object('eventId', e.id), 'QUEUED'::"JobStatus", now(), 5,
+         'purge-face:' || e.id || ':verify'
+  FROM "Event" e
+  WHERE e."faceIndexPurgedAt" > (:'WORKER_STARTED'::timestamptz AT TIME ZONE 'UTC')
+    AND EXISTS (SELECT 1 FROM "Face" f WHERE f."eventId" = e.id)
+  ON CONFLICT ("dedupeKey") DO UPDATE SET
+    payload     = EXCLUDED.payload,
+    status      = 'QUEUED'::"JobStatus",
+    "runAt"     = CASE WHEN "Job".status = 'QUEUED'::"JobStatus"
+                       THEN GREATEST("Job"."runAt", EXCLUDED."runAt") ELSE EXCLUDED."runAt" END,
+    attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
+    "lastError" = NULL,
+    "finishedAt" = NULL,
+    "lockedBy"  = NULL,
+    "lockedAt"  = NULL
+  WHERE "Job".status <> 'RUNNING'::"JobStatus";
   ```
 - [ ] Send one test email and confirm it arrives (the step 5 smoke test that needs the worker).
 - [ ] Remove the maintenance page.

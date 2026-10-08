@@ -19,11 +19,24 @@ WORKFLOW = ROOT / ".github" / "workflows" / "restore-drill.yml"
 OBS_SKILL = ROOT / ".claude" / "skills" / "observability-logging" / "SKILL.md"
 LEG_008 = ROOT / "backlog" / "legal" / "LEG-008-deletion-ledger-outside-db.md"
 
-UPSERT = re.compile(r'ON CONFLICT \("dedupeKey"\) DO UPDATE SET(.*?)WHERE "Job"\.status <> \'RUNNING\'::"JobStatus"', re.S)
+CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
+
+# The whole dedupe upsert: the INSERT column list, and everything from ON CONFLICT through the
+# RUNNING guard. The row source in between (VALUES with parameters vs SELECT) legitimately differs.
+UPSERT = re.compile(
+    r'INSERT INTO "Job"\s*\(([^)]*)\)'
+    r"(?:(?!INSERT INTO).)*?"
+    r'(ON CONFLICT \("dedupeKey"\) DO UPDATE SET.*?WHERE "Job"\.status <> \'RUNNING\'::"JobStatus")',
+    re.S,
+)
 
 
-def _upserts(text: str) -> list[str]:
-    return [re.sub(r"\s+", " ", m).strip() for m in UPSERT.findall(text)]
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _upserts(text: str) -> list[tuple[str, str]]:
+    return [(_norm(cols), _norm(clause)) for cols, clause in UPSERT.findall(text)]
 
 
 def _exported_actions() -> list[str]:
@@ -35,10 +48,52 @@ def _exported_actions() -> list[str]:
 def test_every_copy_of_the_job_upsert_matches_the_worker() -> None:
     worker = _upserts(JOBS_PY.read_text())
     assert len(worker) == 1, "jobs.enqueue has exactly one dedupe upsert"
-    copies = _upserts(REPLAY_SQL.read_text()) + _upserts(RUNBOOK.read_text())
-    assert len(copies) >= 2, "the replay and the runbook's due-purge block both carry a copy"
-    for copy in copies:
-        assert copy == worker[0]
+    # exact counts: a copy that is added, dropped or half-edited (so the regex misses it) fails here
+    expected = {REPLAY_SQL: 1, RUNBOOK: 2}  # runbook: 6c due purges, step 7 re-purge after verification
+    for path, count in expected.items():
+        copies = _upserts(path.read_text())
+        assert len(copies) == count, f"{path.name}: {len(copies)} upsert copies, expected {count}"
+        for cols, clause in copies:
+            assert cols == worker[0][0], f"{path.name}: INSERT column list differs from jobs.py"
+            assert clause == worker[0][1], f"{path.name}: ON CONFLICT … WHERE clause differs from jobs.py"
+
+
+WRITER_SHAPE = {
+    # action: fields the replay reads from the AuditLog row, which the writer must set
+    "faceindex.purge": ("eventId",),
+    "faceindex.purge.request": ("eventId",),
+    "event.facesearch.disable": ("eventId",),
+    "event.facesearch.enable": ("eventId",),
+    "photo.delete": ("eventId", "target"),
+}
+
+
+def test_replayed_actions_are_written_with_the_fields_the_replay_reads() -> None:
+    writers = {
+        "faceindex.purge": ROOT / "workers" / "media" / "hub_worker" / "handlers" / "purge_face_index.py",
+        "faceindex.purge.request": ROOT / "apps" / "admin" / "src" / "app" / "studios" / "[studioId]" / "events" / "[eventId]" / "actions.ts",
+        "event.facesearch.disable": ROOT / "apps" / "admin" / "src" / "app" / "studios" / "[studioId]" / "events" / "[eventId]" / "actions.ts",
+        "event.facesearch.enable": ROOT / "apps" / "admin" / "src" / "app" / "studios" / "[studioId]" / "events" / "[eventId]" / "actions.ts",
+        "photo.delete": ROOT / "apps" / "admin" / "src" / "app" / "studios" / "[studioId]" / "events" / "[eventId]" / "gallery" / "actions.ts",
+    }
+    assert set(writers) == set(WRITER_SHAPE) == set(_exported_actions())
+    for action, path in writers.items():
+        text = path.read_text()
+        # the statement that writes the row: the audit({...}) call or the INSERT around the literal
+        at = text.index(f"'{action}'") if f"'{action}'" in text else text.index(f'"{action}"')
+        start = max(text.rfind("audit(", 0, at), text.rfind('INSERT INTO "AuditLog"', 0, at))
+        assert start != -1, f"{action}: no audit( call or AuditLog INSERT before the literal in {path.name}"
+        end = text.find(";", at) if path.suffix == ".ts" else text.find(")\n", at + 200)
+        statement = text[start:end if end != -1 else at + 400]
+        for field in WRITER_SHAPE[action]:
+            assert re.search(rf'\b"?{field}"?\b', statement), f"{action}: writer in {path.name} does not set {field}"
+        if action == "photo.delete":
+            assert re.search(r"target:\s*id\b", statement), "photo.delete must audit target = the photo id"
+
+
+def test_ci_runs_the_contract_tests_on_every_pr() -> None:
+    # the drill workflow is path-filtered; a rename in apps/ or workers/ must still be caught
+    assert "scripts/tests/test_restore_contracts.py" in CI_YML.read_text()
 
 
 def test_every_replayed_audit_action_is_still_written_by_the_code() -> None:

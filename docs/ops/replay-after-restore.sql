@@ -30,8 +30,10 @@ WHERE e.id = t."eventId";
 
 -- 2. Photos deleted after T come back with a restore, and with them their Face and PhotoMatch rows.
 --    Delete them again; the foreign keys cascade exactly as for the app's prisma.photo.delete.
-DELETE FROM "Photo"
-WHERE id IN (SELECT target FROM replay_audit WHERE action = 'photo.delete' AND target IS NOT NULL);
+--    The audit row's eventId must match the photo's: the admin action only deletes within its event.
+DELETE FROM "Photo" p
+USING replay_audit r
+WHERE r.action = 'photo.delete' AND p.id = r.target AND p."eventId" = r."eventId";
 
 -- 3. Indexing work for an event purged after T must not run and re-create the embeddings the
 --    purge removed. Park it (DEAD, with a reason), QUEUED *and* RUNNING: the worker is stopped, so

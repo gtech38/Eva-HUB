@@ -28,8 +28,10 @@ EXPORT_SQL = ROOT / "docs" / "ops" / "replay-export.sql"
 VEC = "[" + ",".join(["0"] * 128) + "]"
 
 
-def _runbook_sql_blocks() -> list[str]:
-    return re.findall(r"```sql\n(.*?)```", RUNBOOK.read_text(), re.S)
+def _runbook_sql_blocks(worker_started: str = "now() - interval '1 hour'") -> list[str]:
+    """The runbook's sql blocks, with psql's :'WORKER_STARTED' bound the way psql would bind it."""
+    blocks = re.findall(r"```sql\n(.*?)```", RUNBOOK.read_text(), re.S)
+    return [b.replace(":'WORKER_STARTED'", f"({worker_started})") for b in blocks]
 
 
 def _jobs(conn, type_: str, key: str, ids: list[str]) -> dict[str, tuple]:  # type: ignore[no-untyped-def]
@@ -50,7 +52,7 @@ def _status(conn, dedupe_key: str) -> tuple | None:  # type: ignore[no-untyped-d
 def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue() -> None:
     require_not_shared_hub()
     blocks = _runbook_sql_blocks()
-    purge = next(b for b in blocks if "PURGE_FACE_INDEX" in b)
+    purge = next(b for b in blocks if "PURGE_FACE_INDEX" in b and ":restore'" in b)
     with psycopg.connect(SOURCE) as conn:
         try:
             events = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 3').fetchall()]
@@ -90,6 +92,88 @@ def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue() -> None:
             conn.rollback()
 
 
+def test_step_7_re_purges_events_that_still_have_faces_after_their_purge() -> None:
+    require_not_shared_hub()
+    verify = next(b for b in _runbook_sql_blocks() if ":verify'" in b)
+    assert "WORKER_STARTED" in next(
+        b for b in re.findall(r"```sql\n(.*?)```", RUNBOOK.read_text(), re.S) if ":verify'" in b
+    ), "step 7 compares against the recorded worker start, not a fixed window"
+    with psycopg.connect(SOURCE) as conn:
+        try:
+            leaked, clean, old = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 3').fetchall()]
+            studio = conn.execute('SELECT "studioId" FROM "Event" WHERE id = %s', (leaked,)).fetchone()[0]
+            # leaked: purged after the worker started, yet a late INDEX_FACES re-created a Face row;
+            # this is a date-driven purge, so faceIndexPurgedAt is already set and 6c's SQL would skip it
+            conn.execute('UPDATE "Event" SET "faceIndexPurgedAt" = now() WHERE id = ANY(%s)', ([leaked, clean],))
+            conn.execute('UPDATE "Event" SET "faceIndexPurgedAt" = now() - interval \'30 days\' WHERE id = %s', (old,))
+            for eid in (leaked, old):
+                conn.execute(
+                    'INSERT INTO "Photo"(id, "studioId", "eventId", "originalKey", "originalBytes", checksum, filename)'
+                    " VALUES (%s, %s, %s, 'k', 1, %s, 'f.jpg')",
+                    (f"p_{eid}", studio, eid, f"p_{eid}"),
+                )
+                conn.execute(
+                    'INSERT INTO "Face"(id, "eventId", "photoId", bbox, quality, "modelVersion", embedding)'
+                    " VALUES (%s, %s, %s, '{}', 1, 'm', %s)",
+                    (f"f_{eid}", eid, f"p_{eid}", VEC),
+                )
+            conn.execute(
+                'INSERT INTO "Job"(type, payload, status, attempts, "dedupeKey") VALUES'
+                " ('PURGE_FACE_INDEX', %s::jsonb, 'SUCCEEDED'::\"JobStatus\", 1, %s)",
+                (f'{{"eventId": "{leaked}"}}', f"purge-face:{leaked}:verify"),
+            )
+
+            conn.execute(verify)
+
+            jobs = _jobs(conn, "PURGE_FACE_INDEX", "eventId", [leaked, clean, old])
+            # only the event purged since the worker started that still has Face rows, via the same upsert
+            assert set(jobs) == {leaked}
+            assert jobs[leaked][:4] == ("QUEUED", 0, None, None)
+            assert _status(conn, f"purge-face:{leaked}:verify") == ("QUEUED", 0)
+        finally:
+            conn.rollback()
+
+
+def test_runbook_replay_finish_variable_really_rolls_back_then_commits(tmp_path: Path) -> None:
+    """Run the runbook's own heredoc through psql: FINISH=ROLLBACK changes nothing, FINISH=COMMIT applies."""
+    require_not_shared_hub()
+    text = RUNBOOK.read_text()
+    body = re.search(r"<<'PSQL'\n(.*?)\n\s*PSQL\n", text, re.S)
+    assert body, "the runbook's replay heredoc"
+    script = "\n".join(line[2:] if line.startswith("  ") else line for line in body.group(1).splitlines()) + "\n"
+    with psycopg.connect(SOURCE, autocommit=True) as conn:
+        event = conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 1').fetchone()[0]
+        before = conn.execute('SELECT "faceSearchEnabled" FROM "Event" WHERE id = %s', (event,)).fetchone()[0]
+        conn.execute('UPDATE "Event" SET "faceSearchEnabled" = true WHERE id = %s', (event,))
+    restore_dir = tmp_path / "restore"
+    restore_dir.mkdir()
+    (restore_dir / "replay-audit.csv").write_text(f"1,event.facesearch.disable,{event},{event},2026-10-08 12:00:00\n")
+    parts = urlsplit(SOURCE)
+    net, host = docker_net_and_host(parts.hostname or "localhost")
+
+    def run(finish: str) -> bool:
+        proc = subprocess.run(
+            ["docker", "run", "--rm", "-i", *net, "-e", "PGPASSWORD",
+             # the runbook runs from the repo root: ./docs/ops/… for \i and ./restore/… for \copy
+             "-v", f"{tmp_path}:/work", "-v", f"{ROOT / 'docs'}:/work/docs:ro", "-w", "/work",
+             "pgvector/pgvector:pg16", "psql", "-h", host, "-p", str(parts.port or 5432),
+             "-U", parts.username or "postgres", "-d", parts.path.lstrip("/"),
+             "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", f"FINISH={finish}", "-f", "-"],
+            input=script, capture_output=True, text=True,
+            env={**os.environ, "PGPASSWORD": parts.password or ""},
+        )
+        assert proc.returncode == 0, proc.stderr
+        with psycopg.connect(SOURCE) as c:
+            return c.execute('SELECT "faceSearchEnabled" FROM "Event" WHERE id = %s', (event,)).fetchone()[0]
+
+    try:
+        assert run("ROLLBACK") is True, "the dry run must not change anything"
+        assert run("COMMIT") is False, "the commit run applies the replay"
+    finally:
+        with psycopg.connect(SOURCE, autocommit=True) as conn:
+            conn.execute('UPDATE "Event" SET "faceSearchEnabled" = %s WHERE id = %s', (before, event))
+
+
 def _load_replay_audit(conn, rows: list[tuple]) -> None:  # type: ignore[no-untyped-def]
     """Same columns, order and types as the runbook's temp table and replay-export.sql's CSV."""
     conn.execute(
@@ -109,8 +193,9 @@ def test_replay_re_applies_purges_toggles_and_photo_deletions_from_the_old_audit
             disabled, toggled_back, purged, requested, photos_event = ev
             conn.execute('UPDATE "Event" SET "faceSearchEnabled" = true WHERE id = ANY(%s)', (ev,))
             conn.execute('UPDATE "Event" SET "faceSearchEnabled" = false WHERE id = %s', (toggled_back,))
-            # photos: one in the purged event (with indexing jobs in flight), one deleted after T elsewhere
-            for pid, eid in (("p_purged", purged), ("p_deleted", photos_event)):
+            # photos: one in the purged event (with indexing jobs in flight), one deleted after T elsewhere,
+            # and one whose id an audit row names under the wrong event (must survive)
+            for pid, eid in (("p_purged", purged), ("p_deleted", photos_event), ("p_other_event", disabled)):
                 conn.execute(
                     'INSERT INTO "Photo"(id, "studioId", "eventId", "originalKey", "originalBytes", checksum, filename)'
                     " VALUES (%s, %s, %s, 'k', 1, %s, 'f.jpg')",
@@ -124,13 +209,16 @@ def test_replay_re_applies_purges_toggles_and_photo_deletions_from_the_old_audit
             t0 = "2026-10-08 12:00:00"
             _load_replay_audit(conn, [
                 (1, "event.facesearch.disable", disabled, disabled, t0),
-                # same timestamp: the higher AuditLog id is the later action, so enable wins
-                (2, "event.facesearch.disable", toggled_back, toggled_back, t0),
+                # same timestamp: the higher AuditLog id is the later action, so enable wins. Loaded
+                # higher id first, so insertion order cannot be what decides it.
                 (3, "event.facesearch.enable", toggled_back, toggled_back, t0),
+                (2, "event.facesearch.disable", toggled_back, toggled_back, t0),
                 (4, "faceindex.purge", purged, purged, t0),
                 (5, "faceindex.purge.request", requested, requested, t0),
                 (6, "faceindex.purge", purged, purged, t0),
                 (7, "photo.delete", photos_event, "p_deleted", t0),
+                # eventId does not match the photo's event: not this photo's deletion, leave it alone
+                (8, "photo.delete", photos_event, "p_other_event", t0),
             ])
             # indexing work in flight at T for a purged event, QUEUED *and* RUNNING (the worker is
             # stopped, so a RUNNING row would come back via requeue_stale and re-create Face rows)
@@ -160,6 +248,7 @@ def test_replay_re_applies_purges_toggles_and_photo_deletions_from_the_old_audit
             # the deleted photo is gone again, and its Face row with it (same cascade as the app's delete)
             assert conn.execute('SELECT count(*) FROM "Photo" WHERE id = %s', ("p_deleted",)).fetchone() == (0,)
             assert conn.execute('SELECT count(*) FROM "Face" WHERE id = %s', ("f_deleted",)).fetchone() == (0,)
+            assert conn.execute('SELECT count(*) FROM "Photo" WHERE id = %s', ("p_other_event",)).fetchone() == (1,)
             # its own indexing job can no longer find the photo; parking it is not the replay's business
             assert _status(conn, "faces-other")[0] == "QUEUED"
         finally:
