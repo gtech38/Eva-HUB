@@ -31,7 +31,7 @@ export const SECTIONS = [
       NODE_ENV: {
         production: "optional",
         owner: "Set by Next (`next build` / `next start`)",
-        notes: "Do not set it in `.env`; Next sets it. It is the fallback when APP_ENV is unset: `production` turns the production checks on. An empty value counts as unset.",
+        notes: "Do not set it in `.env`; Next sets it. It is the fallback when APP_ENV is unset: `production` turns the production checks on. An empty value counts as unset; anything other than `development`, `test` or `production` stops web/admin and makes the worker warn.",
       },
       APP_ENV: {
         production: "required",
@@ -256,7 +256,7 @@ export const SECTIONS = [
       FACE_MATCH_THRESHOLD: {
         production: "optional",
         owner: "Face pipeline tuning",
-        notes: "SFace cosine similarity for a match. web and worker must agree.",
+        notes: "SFace cosine similarity for a match. web and worker must agree. Must be greater than 0 and at most 1 in both (a value <= 0 would match every face); anything else fails at startup.",
         hint: "SFace cosine; OpenCV's recommended default",
         example: "0.363",
       },

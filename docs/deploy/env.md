@@ -32,9 +32,10 @@ when metadata names a key nobody reads, or when either generated file differs fr
 - **Read by**: `web, admin` = parsed by `env.ts`; `worker` = parsed by `config.py`; others read it directly
   (`prisma` CLI, `db` = packages/db, `seed` = prisma/seed.ts).
 - **Default**: what applies when the variable is unset. When the parsers disagree, both are shown. Secret
-  defaults are never printed. A blank value (`KEY=` or whitespace only) means unset everywhere, in `env()` and
-  in the worker alike: the default applies, or a required variable is reported as missing. (A blank
-  `FACE_MATCH_THRESHOLD` is 0.363, never 0.)
+  defaults are never printed. A blank value (`KEY=` or whitespace only) means unset everywhere (`env()`, the
+  worker, the web middleware, the seed): the default applies, or a required variable is reported as missing.
+  Other values are trimmed. (A blank `FACE_MATCH_THRESHOLD` is 0.363, never 0; an explicit value outside
+  (0, 1] is rejected.)
 - **Local**: the value in `.env.example`. Secret values are dev placeholders that only work against the local
   compose stack.
 - **Production**: **required** = the local value is wrong in production and must be set deliberately;
@@ -92,7 +93,7 @@ that way. To smoke-test a production build locally with the dev `.env`, start it
 
 | Variable | Read by | Default | Local (`.env.example`) | Production | Secret | Source / owner | Notes |
 |---|---|---|---|---|---|---|---|
-| `NODE_ENV` | web, admin, worker | web/admin: `development`; worker: unset | commented out (default applies) | optional | no | Set by Next (`next build` / `next start`) | Do not set it in `.env`; Next sets it. It is the fallback when APP_ENV is unset: `production` turns the production checks on. An empty value counts as unset. |
+| `NODE_ENV` | web, admin, worker | web/admin: `development`; worker: unset | commented out (default applies) | optional | no | Set by Next (`next build` / `next start`) | Do not set it in `.env`; Next sets it. It is the fallback when APP_ENV is unset: `production` turns the production checks on. An empty value counts as unset; anything other than `development`, `test` or `production` stops web/admin and makes the worker warn. |
 | `APP_ENV` | web, admin, worker | unset | commented out (default applies) | **required** | no | Deploy config (DOC-006) | Set `production` on every service, including the worker (which has no NODE_ENV). Wins over NODE_ENV: `production` turns on the production checks, `development` lets you `next start` locally with the dev `.env`. Must be exactly `development`, `test` or `production` (an empty value counts as unset): web/admin refuse to start on anything else, the worker warns and ignores it. A warning is logged when NODE_ENV=production and APP_ENV is not `production`. |
 
 ### Domains
@@ -154,7 +155,7 @@ that way. To smoke-test a production build locally with the dev `.env`, start it
 | `WORKER_INTERNAL_URL` | web, admin | `http://localhost:8010` | `http://localhost:8010` | **required** · checked by env() | no | Deploy topology (DOC-006) | Where web calls the worker API (`/embed-selfie`). Private network only; never public. env() requires it to be set explicitly in production (a loopback address is allowed for a single-host deploy). |
 | `WORKER_PORT` | worker | `8010` | `8010` | optional | no | Deploy topology | Worker FastAPI port. |
 | `FACE_MODEL_DIR` | worker | `./models` | `./models` | optional | no | Worker image (`make models`) | Relative paths resolve against workers/media. |
-| `FACE_MATCH_THRESHOLD` | web, admin, worker | `0.363` | `0.363` | optional | no | Face pipeline tuning | SFace cosine similarity for a match. web and worker must agree. |
+| `FACE_MATCH_THRESHOLD` | web, admin, worker | `0.363` | `0.363` | optional | no | Face pipeline tuning | SFace cosine similarity for a match. web and worker must agree. Must be greater than 0 and at most 1 in both (a value <= 0 would match every face); anything else fails at startup. |
 | `FACE_CLUSTER_DISTANCE` | worker | derived: 1 − FACE_MATCH_THRESHOLD | commented out (default applies) | optional | no | Face pipeline tuning | Agglomerative clustering cutoff in cosine distance. |
 | `FACE_MIN_QUALITY` | worker | `0.3` | commented out (default applies) | optional | no | Face pipeline tuning | Faces below this quality score are not indexed. |
 | `WORKER_ID` | worker | derived: `<hostname>:<pid>` | commented out (default applies) | optional | no | Deploy topology | Job lock owner id. Set only to pin a stable id per replica. |
