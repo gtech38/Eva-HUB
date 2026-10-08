@@ -6,6 +6,6 @@ import { defineConfig } from "vitest/config";
 // this file: it is `pnpm -r test`, i.e. `vitest run` inside each package. Add new packages here.
 export default defineConfig({
   test: {
-    projects: ["packages/shared", "packages/db", "apps/web", "apps/admin"],
+    projects: ["packages/shared", "packages/db", "apps/web", "apps/admin", "scripts"],
   },
 });
