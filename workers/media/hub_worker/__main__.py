@@ -11,7 +11,7 @@ import logging
 import signal
 import threading
 
-from .config import settings
+from .config import log_config_warnings, settings
 
 
 def _logging() -> None:
@@ -56,6 +56,7 @@ def main() -> None:
     ap.add_argument("mode", choices=["api", "consume", "all"])
     args = ap.parse_args()
     _logging()
+    log_config_warnings()
     {"api": run_api, "consume": run_consumer, "all": run_all}[args.mode]()
 
 

@@ -57,9 +57,26 @@ DEFAULTS: dict[str, str | None] = {
 PRODUCTION_REQUIRED = ("DATABASE_URL", "S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY")
 
 
+APP_ENVS = ("development", "test", "production")
+TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
+FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
+
+
+def _value(environ: Mapping[str, str], key: str) -> str | None:
+    """The variable's value, or None when it is unset or blank (`KEY=` in a dotenv file means unset)."""
+    v = environ.get(key)
+    return v if v is not None and v.strip() != "" else None
+
+
+def _app_env(environ: Mapping[str, str]) -> str | None:
+    """APP_ENV when it is one of APP_ENVS; None when unset, blank or unrecognised (see config_warnings)."""
+    v = _value(environ, "APP_ENV")
+    return v if v in APP_ENVS else None
+
+
 def is_production(environ: Mapping[str, str]) -> bool:
     """APP_ENV wins over NODE_ENV (same rule as packages/shared/src/env.ts)."""
-    return (environ.get("APP_ENV") or environ.get("NODE_ENV")) == "production"
+    return (_app_env(environ) or _value(environ, "NODE_ENV")) == "production"
 
 
 def production_warnings(environ: Mapping[str, str]) -> list[str]:
@@ -69,19 +86,36 @@ def production_warnings(environ: Mapping[str, str]) -> list[str]:
     return [
         f"{key} is using the local development default in production; set it explicitly"
         for key in PRODUCTION_REQUIRED
-        if environ.get(key, DEFAULTS[key]) == DEFAULTS[key]
+        if (_value(environ, key) or DEFAULTS[key]) == DEFAULTS[key]
     ]
 
 
-def _bool(v: str | None, default: bool) -> bool:
-    if v is None:
-        return default
-    return v.strip().lower() in {"1", "true", "yes", "on"}
+def config_warnings(environ: Mapping[str, str]) -> list[str]:
+    """Everything worth telling the operator about the environment, without values."""
+    out: list[str] = []
+    if _value(environ, "APP_ENV") is not None and _app_env(environ) is None:
+        out.append(f"APP_ENV is not one of {', '.join(APP_ENVS)} and is ignored; the production checks follow NODE_ENV")
+    if _value(environ, "NODE_ENV") == "production" and _app_env(environ) != "production":
+        out.append("NODE_ENV=production but APP_ENV is not 'production'; set APP_ENV=production on every service (docs/deploy/env.md)")
+    return out + production_warnings(environ)
 
 
-def _float(v: str | None, default: float) -> float:
-    if v is None or v.strip() == "":
-        return default
+def log_config_warnings(environ: Mapping[str, str] | None = None) -> None:
+    """Log config_warnings(). Called from the entry point once logging is configured, never at import."""
+    for warning in config_warnings(os.environ if environ is None else environ):
+        log.warning(warning)
+
+
+def _bool(key: str, v: str) -> bool:
+    s = v.strip().lower()
+    if s in TRUE_FLAGS:
+        return True
+    if s in FALSE_FLAGS:
+        return False
+    raise ValueError(f"{key} must be one of {', '.join(sorted(TRUE_FLAGS | FALSE_FLAGS))}")
+
+
+def _float(v: str) -> float:
     # tolerate trailing inline comments that python-dotenv did not strip
     return float(v.split("#", 1)[0].strip())
 
@@ -128,15 +162,14 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if environ is None else environ
 
     def get(key: str) -> str:
-        value = env.get(key, DEFAULTS[key])
+        """The value, or the DEFAULTS literal when unset or blank. Keys whose default is None are derived below."""
+        value = _value(env, key) or DEFAULTS[key]
         if value is None:
             raise KeyError(f"{key} has no literal default; derive it at the call site")
         return value
 
-    for warning in production_warnings(env):
-        log.warning(warning)
-
-    thr = _float(get("FACE_MATCH_THRESHOLD"), 0.363)
+    thr = _float(get("FACE_MATCH_THRESHOLD"))
+    cluster = _value(env, "FACE_CLUSTER_DISTANCE")
     return Settings(
         database_url=get("DATABASE_URL"),
         s3_endpoint=get("S3_ENDPOINT"),
@@ -144,16 +177,16 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         s3_bucket=get("S3_BUCKET"),
         s3_access_key=get("S3_ACCESS_KEY"),
         s3_secret_key=get("S3_SECRET_KEY"),
-        s3_force_path_style=_bool(get("S3_FORCE_PATH_STYLE"), True),
+        s3_force_path_style=_bool("S3_FORCE_PATH_STYLE", get("S3_FORCE_PATH_STYLE")),
         worker_port=int(get("WORKER_PORT")),
         face_model_dir=_model_dir(get("FACE_MODEL_DIR")),
         face_match_threshold=thr,
         # derived default: the clustering cutoff mirrors the match threshold
-        face_cluster_distance=_float(env.get("FACE_CLUSTER_DISTANCE"), 1.0 - thr),
-        face_min_quality=_float(get("FACE_MIN_QUALITY"), 0.3),
+        face_cluster_distance=_float(cluster) if cluster else 1.0 - thr,
+        face_min_quality=_float(get("FACE_MIN_QUALITY")),
         # derived default: unique per process
-        worker_id=env.get("WORKER_ID") or f"{os.uname().nodename}:{os.getpid()}",
-        poll_interval_s=_float(get("WORKER_POLL_INTERVAL"), 1.0),
+        worker_id=_value(env, "WORKER_ID") or f"{os.uname().nodename}:{os.getpid()}",
+        poll_interval_s=_float(get("WORKER_POLL_INTERVAL")),
         zip_part_bytes=int(get("ZIP_PART_BYTES")),
         log_level=get("WORKER_LOG_LEVEL"),
     )
