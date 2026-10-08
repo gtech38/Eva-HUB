@@ -10,7 +10,7 @@ epic: EPIC-QUALITY
 `packages/shared` tests run with `node --import tsx --test`; `apps/web`, `apps/admin` and `packages/db` have no `test` script at all, so `pnpm test` silently passes for them. One runner across the monorepo lets every backlog ticket say "write the failing test in `*.test.ts`" without per-package setup.
 
 ## Scope
-- Add `vitest` (+ `@vitest/coverage-v8`) at the workspace root; add a root `vitest.workspace.ts` listing `packages/shared`, `packages/db`, `apps/web`, `apps/admin`.
+- Add `vitest` (+ `@vitest/coverage-v8`) at the workspace root; add a root `vitest.config.mts` whose `test.projects` lists `packages/shared`, `packages/db`, `apps/web`, `apps/admin` (Vitest 4 removed `vitest.workspace.ts`; 4.x is the newest line that supports Node 20).
 - Per-package `vitest.config.ts`: `environment: "node"`; for the Next apps add the `@/` alias from `tsconfig.json` and `server-only` stub.
 - Convert `packages/shared/src/policy.test.ts` from `node:test`/`node:assert` to vitest (`describe/it/expect`) without changing assertions.
 - `test` script in each package = `vitest run`; root `pnpm test` keeps working via `pnpm -r test`.
@@ -25,7 +25,7 @@ epic: EPIC-QUALITY
 - [ ] `pnpm typecheck` still passes (vitest globals typed via `types: ["vitest/globals"]` or explicit imports).
 
 ## Files
-- `package.json` (root), `vitest.workspace.ts` (new)
+- `package.json` (root), `vitest.config.mts` and `vitest.shared.mts` (new)
 - `packages/shared/package.json`, `packages/shared/vitest.config.ts` (new), `packages/shared/src/policy.test.ts`
 - `packages/db/package.json`, `apps/web/package.json`, `apps/admin/package.json` and their new `vitest.config.ts`
 - `apps/web/tsconfig.json`, `apps/admin/tsconfig.json` (alias `@/*`)

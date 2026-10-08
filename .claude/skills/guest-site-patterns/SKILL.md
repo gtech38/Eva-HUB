@@ -43,7 +43,7 @@ description: Use when building or changing the guest-facing event sites in apps/
 ## Common tasks
 
 ### Add a guest page end-to-end (Registry)
-1. Test first: `src/lib/registry.test.ts` (node:test) for a pure helper, e.g. `remainingQuantity(item, claims)` and `sortRegistry(items)`; plus `packages/shared/src/pages.test.ts` if `RegistryContent` gains fields. Add the app `test` script if missing (`pnpm-monorepo`).
+1. Test first: `src/lib/registry.test.ts` (vitest) for a pure helper, e.g. `remainingQuantity(item, claims)` and `sortRegistry(items)`; plus `packages/shared/src/pages.test.ts` if `RegistryContent` gains fields. Run with `pnpm --filter @hub/web test`.
 2. Data: `RegistryItem`, `RegistryClaim`, `CashFund` already exist; admin editor exists under `events/[eventId]/registry`. Add `lib/registry.ts` with the pure helpers and a loader `loadRegistry(eventId)`.
 3. Page `src/app/sites/[slug]/registry/page.tsx`: standard prologue; `const intro = t(parsePage("REGISTRY", page(site, "REGISTRY")?.content).intro, locale)`; list items (external links `rel="noopener noreferrer"`), cash funds (`EXTERNAL` shows the handle; `STRIPE` shows a placeholder until payments land).
 4. Action `registry/actions.ts`: `claimItem(itemId, qty)` -> `requireViewer()`, require `viewer.can("site.view")` (and add a `registry.claim` Action to `can()` per `auth-sessions-policy`), verify `item.eventId === event.id`, create `RegistryClaim { userId }`, audit `registry.claim`, `revalidatePath("/registry")`.

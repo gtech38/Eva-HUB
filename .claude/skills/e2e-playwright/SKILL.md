@@ -9,7 +9,7 @@ description: Use when planning or writing end-to-end browser tests for the guest
 - No Playwright dependency, config, or `e2e/` folder exists. `@playwright/test` shows in `pnpm-lock.yaml` only because `next` lists it as an optional peer.
 - No `data-testid` attributes exist in either app (`grep -rn data-testid apps/*/src` -> 0).
 - There is no CI workflow (`.github/workflows/` absent).
-- Current automated coverage: `packages/shared/src/policy.test.ts` (node:test), `workers/media/tests/*` (pytest), and manual smoke scripts in `apps/admin/scripts/*.mts`.
+- Current automated coverage: vitest unit tests in every TS package (`packages/*/src/*.test.ts`, `apps/*/src/lib/*.test.ts`; `pnpm test`), `workers/media/tests/*` (pytest), and manual smoke scripts in `apps/admin/scripts/*.mts`.
 Everything below is the intended setup. Update this file when it lands.
 
 ## When this applies

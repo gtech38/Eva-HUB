@@ -42,7 +42,7 @@ description: Use when adding or rendering any user-visible text or host-authored
 ## Common tasks
 
 ### Add a UI string
-1. Test first: `packages/shared/src/i18n.test.ts` (node:test): `assert.equal(ui("registryClaim", "te"), "...")` and a fallback case `t({ en: "x" }, "hi") === "x"`. Runs with `pnpm --filter @hub/shared test` (the glob is `src/*.test.ts`).
+1. Test first: `packages/shared/src/i18n.test.ts` (vitest): `expect(ui("registryClaim", "te")).toBe("...")` and a fallback case `expect(t({ en: "x" }, "hi")).toBe("x")`. Runs with `pnpm --filter @hub/shared test` or `cd packages/shared && pnpm exec vitest run src/i18n.test.ts`.
 2. Add the key to `UI` in `i18n.ts` with `en`, `te`, `hi`. If it is page-local, add it to that page's `S` table instead (keeps `UI` small).
 3. Use `ui("registryClaim", locale)` on the server; pass the result down as a prop.
 

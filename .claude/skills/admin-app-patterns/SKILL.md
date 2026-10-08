@@ -54,7 +54,7 @@ curl -s -b "hub_session=$COOKIE" http://localhost:3001/studios/$STUDIO/events/$E
 Other smoke scripts take a slug (`smoke-upload.mts <slug>`) or none; run with `pnpm exec tsx` from `apps/admin` (they load `../../../.env` themselves).
 
 ### Add an admin page end-to-end (e.g. event `/proofing` tab)
-1. Test first (pure logic): `src/lib/proofing.test.ts` with node:test asserting e.g. `summarizeSelections(lists)` counts; and a Zod schema test for the form (`ProofingListInput.parse` accepts/rejects). Add `"test": "node --import tsx --test 'src/**/*.test.ts'"` to `apps/admin/package.json` if absent.
+1. Test first (pure logic): `src/lib/proofing.test.ts` (vitest: `describe/it/expect` from `vitest`) asserting e.g. `summarizeSelections(lists)` counts; and a Zod schema test for the form (`ProofingListInput.parse` accepts/rejects). Run with `cd apps/admin && pnpm exec vitest run src/lib/proofing.test.ts` or `pnpm --filter @hub/admin test`.
 2. Schema check: `ProofingList` already exists in Prisma; add fields/migration only if needed (`prisma-postgres`).
 3. Action: in `src/app/studios/[studioId]/events/[eventId]/proofing/actions.ts` export `saveProofingList` via `act()`: `requireSignedIn` -> `authorize(p, "proofing.edit", { studioId, eventId })` -> `loadEvent` -> parse -> write -> `audit({ action: "proofing.save" })` -> `revalidatePath(base + "/proofing")`.
 4. Page: `proofing/page.tsx` (`force-dynamic`): `const p = await requireAdmin(studioId); const event = await getEvent(studioId, eventId); const canEdit = can(p, "proofing.edit", res);` render `Card` + `ActionForm` with hidden ids and `<fieldset disabled={!canEdit}>`.

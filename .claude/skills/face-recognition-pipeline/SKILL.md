@@ -62,7 +62,7 @@ Both from opencv_zoo. `*.onnx` is git-ignored; `make models` fetches. Switching 
 4. Test first if changing defaults in code: update `test_backoff`-style constants tests in `tests/test_face_synthetic.py` (e.g. `face_quality` expectations).
 
 ### Add a new search error reason
-1. Test first: unit test for the worker (`api.py`) or a node:test for a pure helper mapping reasons -> strings.
+1. Test first: unit test for the worker (`api.py`) or a vitest test (`apps/web/src/lib/<name>.test.ts`) for a pure helper mapping reasons -> strings.
 2. Worker returns `{ok:false, reason}`; web route maps it to a status (`fail(reason, 422)`); add the key to `FaceSearchReason` and to `faceStrings().errors` in `gallery/me/page.tsx` in en/te/hi.
 
 ### Change consent copy

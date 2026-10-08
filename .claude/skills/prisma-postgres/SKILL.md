@@ -57,7 +57,7 @@ Dedupe keys in use: `process:{photoId}`, `faces:{photoId}`, `cluster:{eventId}`,
 ## Common tasks
 
 ### Add a column or table
-1. Test first: in the consumer that will use it, write a `node:test` asserting the new field appears (e.g. a pure mapper in `apps/*/src/lib`), or in `workers/media/tests/` if Python reads it.
+1. Test first: in the consumer that will use it, write a vitest test asserting the new field appears (e.g. a pure mapper in `apps/*/src/lib`), or in `workers/media/tests/` if Python reads it.
 2. Edit `schema.prisma`; add `studioId`/`eventId` if tenant-owned; add `@@index` for the access path.
 3. `pnpm db:migrate` (prompts for a name -> `packages/db/prisma/migrations/<ts>_<name>/migration.sql`), which also runs `prisma generate`.
 4. If the worker reads it, update the raw SQL in `hub_worker/handlers/*.py` and the README table there.

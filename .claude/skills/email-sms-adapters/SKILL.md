@@ -38,7 +38,7 @@ description: Use when sending or tracking email/SMS: packages/shared/src/email.t
 ## Common tasks
 
 ### Add an email provider (e.g. Resend)
-1. Test first: `packages/shared/src/email.test.ts` (node:test) -- construct `ResendSender` with an injected `fetch` stub, assert the request body (`from`, `to`, `subject`, `text`, `html`) and that `providerId` is taken from the response id. Also assert `email()` returns `ResendSender` when `EMAIL_PROVIDER=resend` (set `process.env` before import; the singleton caches so test in isolation).
+1. Test first: `packages/shared/src/email.test.ts` (vitest) -- construct `ResendSender` with an injected `fetch` stub, assert the request body (`from`, `to`, `subject`, `text`, `html`) and that `providerId` is taken from the response id. Also assert `email()` returns `ResendSender` when `EMAIL_PROVIDER=resend` (set `process.env` before import; the singleton caches so test in isolation).
 2. Implement `class ResendSender implements EmailSender` in `email.ts`; extend the `EMAIL_PROVIDER` enum in `env.ts` with `"resend"` and add `RESEND_API_KEY` to the schema and `.env.example`.
 3. Webhook: `apps/web/src/app/api/webhooks/email/route.ts` (`force-dynamic`, POST, verify the provider signature, map events to `MessageStatus`, `prisma.message.updateMany({ where: { providerId }, data: { status } })`). Test the mapper as a pure function first.
 4. Add `WEB_ORIGIN/api/webhooks/email` to the provider dashboard. Keep `smtp` as the local default.
@@ -47,7 +47,7 @@ description: Use when sending or tracking email/SMS: packages/shared/src/email.t
 Same shape: `TwilioSms implements SmsSender`, `SMS_PROVIDER` enum, `TWILIO_*` env, status webhook route, plus an **inbound** webhook that handles `STOP`/`UNSTOP`/`HELP`: set `ContactPoint.smsOptOut` for the E.164 sender (create the contact point unverified if missing) and reply with the required confirmation. Do not ship before 10DLC approval (below). Use `smsSegments()` to log cost per send.
 
 ### Send a new message kind (e.g. GALLERY_READY)
-1. Test first: pure `buildGalleryReady(event, guest, link)` in `apps/admin/src/lib/` with a node:test on subject/text.
+1. Test first: pure `buildGalleryReady(event, guest, link)` in `apps/admin/src/lib/` with a vitest test on subject/text (`pnpm --filter @hub/admin test`).
 2. In the server action: `authorize(...)`, build copy, `email().send(...)`, `prisma.message.create({ purpose: "GALLERY_READY", ... })`, `audit(...)`.
 3. If it should be async/batched, enqueue `SEND_MESSAGE` with the `Message.id` and implement the worker handler (today a stub) -- or keep sending in the action for small batches.
 

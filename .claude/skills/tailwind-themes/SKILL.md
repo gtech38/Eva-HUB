@@ -41,7 +41,7 @@ description: Use when styling the guest site (apps/web/src/themes/*, tailwind.co
 ## Common tasks
 
 ### Add a theme (e.g. `GARDEN`)
-1. Test first: `apps/web/src/themes/themes.test.ts` (node:test, no DOM) asserting `Object.keys(THEMES)` equals the `ThemeKey` values and every theme's `vars` has the 12 required keys and `Shell/Hero/Divider` are functions. It fails until the map is complete.
+1. Test first: `apps/web/src/themes/themes.test.ts` (vitest, node environment, no DOM) asserting `Object.keys(THEMES)` equals the `ThemeKey` values and every theme's `vars` has the 12 required keys and `Shell/Hero/Divider` are functions. It fails until the map is complete.
 2. Schema: add `GARDEN` to `enum ThemeKey`; `pnpm db:migrate` (name `theme_garden`).
 3. `apps/web/src/themes/garden/index.tsx`: copy `romantic/index.tsx`; change `vars`, ornaments, `key: "GARDEN"`, `name`.
 4. Register in `themes/index.ts` `THEMES`.
