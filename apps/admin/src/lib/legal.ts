@@ -1,19 +1,35 @@
-import { CONSENT_KINDS, CONSENT_TEXT_VERSION, consentRecordVersion, consentText, type ConsentDoc, type ConsentKind } from "@hub/shared/consent";
+import {
+  CONSENT_KINDS,
+  CONSENT_VERSIONS,
+  CURRENT_CONSENT_VERSION,
+  consentBlocks,
+  consentRecordVersion,
+  type ConsentBlock,
+  type ConsentDoc,
+  type ConsentKind,
+} from "@hub/shared/consent";
 import { LOCALES } from "@hub/shared/i18n";
 
-export type ConsentCatalog = {
+export type ConsentCatalogVersion = {
+  dir: string;
   version: string;
-  kinds: Array<{ kind: ConsentKind; recordVersion: string; texts: ConsentDoc[] }>;
+  current: boolean;
+  kinds: Array<{ kind: ConsentKind; recordVersion: string; texts: Array<{ doc: ConsentDoc; blocks: ConsentBlock[] }> }>;
 };
 
-/** Read-only view of the bundled consent texts for /platform/legal. */
-export function consentCatalog(): ConsentCatalog {
-  return {
-    version: CONSENT_TEXT_VERSION,
+/** Read-only view of every bundled consent version (newest first) for /platform/legal. */
+export function consentCatalog(): ConsentCatalogVersion[] {
+  return [...CONSENT_VERSIONS].reverse().map((v) => ({
+    dir: v.dir,
+    version: v.version,
+    current: v.version === CURRENT_CONSENT_VERSION,
     kinds: CONSENT_KINDS.map((kind) => ({
       kind,
-      recordVersion: consentRecordVersion(kind),
-      texts: LOCALES.map((locale) => consentText(kind, locale)),
+      recordVersion: consentRecordVersion(kind, v.version),
+      texts: LOCALES.map((locale) => {
+        const doc = v.docs[kind][locale];
+        return { doc, blocks: consentBlocks(doc.body) };
+      }),
     })),
-  };
+  }));
 }
