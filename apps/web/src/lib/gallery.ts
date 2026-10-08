@@ -5,6 +5,7 @@
 import { prisma, type AlbumVisibility, type Photo, type Prisma } from "@hub/db";
 import { storage } from "@hub/shared";
 import { t, type Locale } from "@hub/shared/i18n";
+import type { KeysetCursor } from "./galleryCursor";
 import type { Viewer } from "./site";
 
 export type Derivatives = { thumb?: string; web?: string; webWm?: string };
@@ -39,6 +40,58 @@ export function visiblePhotoWhere(eventId: string, viewer: Viewer, extra: Prisma
     album: { visibility: { in: visibleVisibilities(viewer) } },
     ...extra,
   };
+}
+
+// ───────────────────────── Keyset pagination ─────────────────────────
+// Every feed is ordered by a total order and continues strictly after the last row of the previous
+// page, so concurrent inserts never shift a page (offsets would). All feeds go through
+// visiblePhotoWhere, so hidden photos, album visibility and event scope hold on every page.
+
+export const PAGE_SIZE = 60;
+export const MAX_PAGE_SIZE = 100;
+
+export type PageOptions<C> = { cursor?: C; limit?: number };
+export type Page<C> = { photos: PhotoDTO[]; nextCursor: C | null };
+
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return PAGE_SIZE;
+  return Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(limit)));
+}
+
+/** `ORDER BY sortKey ASC NULLS LAST, id ASC`: unkeyed photos (not yet processed) sort after keyed ones. */
+const BY_SORT_KEY: Prisma.PhotoOrderByWithRelationInput[] = [{ sortKey: { sort: "asc", nulls: "last" } }, { id: "asc" }];
+
+/** Rows strictly after `(sortKey, id)` in BY_SORT_KEY order. */
+function afterSortKey(c: KeysetCursor | undefined): Prisma.PhotoWhereInput {
+  if (!c) return {};
+  if (c.sortKey === null) return { sortKey: null, id: { gt: c.id } };
+  return { OR: [{ sortKey: { gt: c.sortKey } }, { sortKey: c.sortKey, id: { gt: c.id } }, { sortKey: null }] };
+}
+
+/** One page of photos in sortKey order; `extra` narrows the visible set (album, favorites). */
+async function sortKeyPage(eventId: string, viewer: Viewer, extra: Prisma.PhotoWhereInput, opts: PageOptions<KeysetCursor>): Promise<Page<KeysetCursor>> {
+  const limit = clampLimit(opts.limit);
+  const rows = await prisma.photo.findMany({
+    where: visiblePhotoWhere(eventId, viewer, { ...extra, AND: [afterSortKey(opts.cursor)] }),
+    orderBy: BY_SORT_KEY,
+    take: limit + 1,
+  });
+  const photos = rows.slice(0, limit);
+  const last = photos[photos.length - 1];
+  const entitled = await isEntitledFullRes(eventId, viewer.principal.userId);
+  return {
+    photos: await toPhotoDTOs(photos, viewer, { entitled }),
+    nextCursor: rows.length > limit && last ? { sortKey: last.sortKey, id: last.id } : null,
+  };
+}
+
+export function listAlbumPage(eventId: string, viewer: Viewer, albumId: string, opts: PageOptions<KeysetCursor> = {}) {
+  return sortKeyPage(eventId, viewer, { albumId }, opts);
+}
+
+/** Photos in the album this viewer may list (the header total; pages are fetched separately). */
+export function countAlbumPhotos(eventId: string, viewer: Viewer, albumId: string) {
+  return prisma.photo.count({ where: visiblePhotoWhere(eventId, viewer, { albumId }) });
 }
 
 export async function listVisibleAlbums(eventId: string, viewer: Viewer, locale: Locale) {
