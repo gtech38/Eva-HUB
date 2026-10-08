@@ -16,6 +16,7 @@ Nothing is deployed and nothing can be: there are no Dockerfiles, the Next apps 
 - DOC-006 Provider-agnostic deployment guide with migration and rollout runbook
 - WEB-027 Caddy on-demand TLS `ask` endpoint backed by the Domain table
 - WEB-028 Custom root domains and cross-domain session handshake
+- DOC-020 Verify and record encryption in transit and at rest, and worker access, per environment
 
 ## Definition of Done
 - [ ] `docker compose -f infra/docker-compose.prod.yml up` on a fresh VM with DNS pointed serves `app.<domain>` and `<slug>.<domain>` over TLS.

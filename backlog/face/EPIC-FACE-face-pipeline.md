@@ -17,6 +17,9 @@ YuNet + SFace indexing, agglomerative clustering, selfie search, guardian search
 - ADM-018 Host-labelled clusters and People browse view
 - WRK-013 GPU / ONNX Runtime execution option
 - WEB-029 Re-enable "Remember my face" enrolment once revoke ships
+- WRK-020 INDEX_FACES must not rebuild a purged index; disabling face search purges it
+- WRK-021 Give every indexed event a face-index purge date, including unpublished ones
+- WEB-040 Record BiometricConsent before the selfie reaches the worker
 
 ## Definition of Done
 - [ ] Precision/recall of self-search on the benchmark set is recorded and the model decision is documented in an ADR.
