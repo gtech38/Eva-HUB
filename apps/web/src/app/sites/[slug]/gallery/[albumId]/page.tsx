@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { prisma } from "@hub/db";
 import { t } from "@hub/shared/i18n";
 import { requireViewer } from "@/lib/site";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
 import { PhotoGrid } from "@/components/gallery/PhotoGrid";
 import { galleryStrings } from "@/lib/gallery-strings";
-import { visibleVisibilities, listAlbumPage, countAlbumPhotos } from "@/lib/gallery";
+import { findVisibleAlbum, listAlbumPage, countAlbumPhotos } from "@/lib/gallery";
 import { encodeCursor } from "@/lib/galleryCursor";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +18,7 @@ export default async function AlbumPage({ params }: { params: Promise<{ albumId:
   const { albumId } = await params;
   const S = galleryStrings(locale);
 
-  const album = await prisma.album.findFirst({ where: { id: albumId, eventId: event.id, visibility: { in: visibleVisibilities(viewer) } } });
+  const album = await findVisibleAlbum(event.id, viewer, albumId);
   if (!album) notFound();
 
   // Only the first page is rendered here; PhotoGrid fetches the rest from /api/gallery/<albumId>.

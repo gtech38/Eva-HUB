@@ -4,38 +4,24 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
-import { createGalleryFixture, dbReachable, fakeViewer, VISIBLE_IN_MAIN } from "../../test/galleryFixture";
+import { createGalleryFixture, dbReachable, failInCiWithoutPostgres, fakeViewer, VISIBLE_IN_MAIN } from "../../test/galleryFixture";
 import { decodeCursor } from "./galleryCursor";
-import { galleryFeed, type FeedContext, type FeedResult } from "./galleryFeed";
+import { galleryFeed, previousMatchFeeds, type FeedContext, type FeedResult } from "./galleryFeed";
 import type { Viewer } from "./site";
 
 const dbUp = await dbReachable();
+failInCiWithoutPostgres("gallery feed requests against Postgres", dbUp);
 const dbHost = (process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
 const suite = dbUp ? "gallery feed requests against Postgres" : `gallery feed requests against Postgres [skipped: Postgres unreachable at ${dbHost}; run pnpm infra:up]`;
 
 let fx: Awaited<ReturnType<typeof createGalleryFixture>>;
-const household: { id?: string; mine?: string; other?: string; optedOut?: string; adult?: string } = {};
 
 beforeAll(async () => {
-  if (!dbUp) return;
-  fx = await createGalleryFixture();
-  const mk = (name: string) => prisma.household.create({ data: { studioId: fx.studio.id, eventId: fx.eventA.id, name: `${fx.run} ${name}` } });
-  const [home, away] = [await mk("home"), await mk("away")];
-  household.id = home.id;
-  const guest = (householdId: string, data: { isChild?: boolean; faceSearchOptOut?: boolean; userId?: string }) =>
-    prisma.guest.create({ data: { studioId: fx.studio.id, eventId: fx.eventA.id, householdId, firstName: "G", ...data } });
-  household.adult = (await guest(home.id, { userId: fx.users.viewer.id })).id;
-  household.mine = (await guest(home.id, { isChild: true })).id;
-  household.optedOut = (await guest(home.id, { isChild: true, faceSearchOptOut: true })).id;
-  household.other = (await guest(away.id, { isChild: true })).id;
+  if (dbUp) fx = await createGalleryFixture();
 }, 60_000);
 
 afterAll(async () => {
-  if (dbUp && fx) {
-    await prisma.guest.deleteMany({ where: { eventId: fx.eventA.id } });
-    await prisma.household.deleteMany({ where: { eventId: fx.eventA.id } });
-    await fx.cleanup();
-  }
+  if (dbUp && fx) await fx.cleanup();
   await prisma.$disconnect();
 });
 
@@ -43,6 +29,11 @@ const ctx = (over: { viewer?: Partial<Viewer>; status?: "LIVE" | "DRAFT"; faceSe
   event: { id: fx.eventA.id, status: over.status ?? "LIVE", faceSearchEnabled: over.faceSearchEnabled ?? true },
   viewer: fakeViewer(fx.users.viewer.id, over.viewer),
   faceSearchAllowed: over.faceSearchAllowed ?? true,
+});
+
+/** A viewer who is the adult guest of the "home" household (which has two children and a deleted one). */
+const guardian = (over: { faceSearchOptOut?: boolean } = {}) => ({
+  viewer: { guest: { ...fx.guests.adult, household: fx.households.home, ...over } },
 });
 
 function ok(r: FeedResult) {
@@ -110,10 +101,6 @@ describe.skipIf(!dbUp)(suite, () => {
   });
 
   describe("My photos feed", () => {
-    const withGuest = (extra: Partial<Viewer> = {}) => ({
-      viewer: { guest: { id: household.adult, householdId: household.id } as unknown as Viewer["guest"], ...extra },
-    });
-
     it("pages the signed-in user's own matches by score for subject 'me'", async () => {
       await prisma.photoMatch.createMany({
         data: [
@@ -127,24 +114,37 @@ describe.skipIf(!dbUp)(suite, () => {
       expect(r.photos[0].score).toBe(0.9);
     });
 
+    it("returns 403 opted_out for 'me' when the adult guest opted out of face search, even with old matches stored", async () => {
+      const r = await galleryFeed(ctx(guardian({ faceSearchOptOut: true })), { kind: "me", subject: "me" }, null);
+      expect(r.status).toBe(403);
+      expect(r.body).toEqual({ ok: false, reason: "opted_out" });
+      expect(JSON.stringify(r.body)).not.toContain(fx.expectedMainOrder[6]);
+    });
+
     it("pages a child's matches for a guardian in the same household only", async () => {
-      await prisma.photoMatch.create({ data: { photoId: fx.expectedMainOrder[9], subjectGuestId: household.mine!, source: "GUARDIAN", score: 0.8 } });
-      const mine = ok(await galleryFeed(ctx(withGuest()), { kind: "me", subject: household.mine! }, null));
+      await prisma.photoMatch.create({ data: { photoId: fx.expectedMainOrder[9], subjectGuestId: fx.guests.child.id, source: "GUARDIAN", score: 0.8 } });
+      const mine = ok(await galleryFeed(ctx(guardian()), { kind: "me", subject: fx.guests.child.id }, null));
       expect(mine.photos.map((p) => p.id)).toEqual([fx.expectedMainOrder[9]]);
     });
 
+    it("returns 403 opted_out for a child who opted out", async () => {
+      const r = await galleryFeed(ctx(guardian()), { kind: "me", subject: fx.guests.optedOutChild.id }, null);
+      expect(r.status).toBe(403);
+      expect(r.body).toEqual({ ok: false, reason: "opted_out" });
+    });
+
     it.each([
-      ["a child in another household", () => household.other!],
-      ["a child who opted out of face search", () => household.optedOut!],
-      ["an adult guest", () => household.adult!],
+      ["a child in another household", () => fx.guests.otherHouseholdChild.id],
+      ["an adult guest", () => fx.guests.adult.id],
+      ["a deleted child", () => fx.guests.deletedChild.id],
       ["an unknown id", () => "nope"],
     ])("404s subject %s", async (_name, subject) => {
-      const r = await galleryFeed(ctx(withGuest()), { kind: "me", subject: subject() }, null);
+      const r = await galleryFeed(ctx(guardian()), { kind: "me", subject: subject() }, null);
       expect(r.status).toBe(404);
     });
 
     it("404s a child subject for a viewer with no guest row", async () => {
-      expect((await galleryFeed(ctx(), { kind: "me", subject: household.mine! }, null)).status).toBe(404);
+      expect((await galleryFeed(ctx(), { kind: "me", subject: fx.guests.child.id }, null)).status).toBe(404);
     });
 
     it("is closed when face search is off for the event, not allowed, or the viewer lacks face.search", async () => {
@@ -152,6 +152,33 @@ describe.skipIf(!dbUp)(suite, () => {
         const r = await galleryFeed(c, { kind: "me", subject: "me" }, null);
         expect(r.status).toBe(403);
       }
+    });
+  });
+
+  describe("previousMatchFeeds (first pages for /gallery/me)", () => {
+    it("lists the viewer's matches and each searchable child's, never an opted-out child's or another household's", async () => {
+      await prisma.photoMatch.createMany({
+        data: [
+          { photoId: fx.expectedMainOrder[20], userId: fx.users.viewer.id, source: "SELFIE", score: 0.6 },
+          { photoId: fx.expectedMainOrder[21], subjectGuestId: fx.guests.child.id, source: "GUARDIAN", score: 0.5 },
+          { photoId: fx.expectedMainOrder[22], subjectGuestId: fx.guests.optedOutChild.id, source: "GUARDIAN", score: 0.5 },
+          { photoId: fx.expectedMainOrder[23], subjectGuestId: fx.guests.otherHouseholdChild.id, source: "GUARDIAN", score: 0.5 },
+        ],
+      });
+      const r = await previousMatchFeeds(ctx(guardian()));
+      expect(r.me.photos.map((p) => p.id)).toContain(fx.expectedMainOrder[20]);
+      expect(r.family.map((f) => f.child.id)).toEqual([fx.guests.child.id]);
+      const kidIds = r.family[0].page.photos.map((p) => p.id);
+      expect(kidIds).toContain(fx.expectedMainOrder[21]);
+      expect(kidIds).not.toContain(fx.expectedMainOrder[22]);
+      expect(kidIds).not.toContain(fx.expectedMainOrder[23]);
+    });
+
+    it("shows no 'Photos of you' for an adult guest who opted out of face search, but still their children's", async () => {
+      const r = await previousMatchFeeds(ctx(guardian({ faceSearchOptOut: true })));
+      expect(r.me.photos).toEqual([]);
+      expect(r.me.nextCursor).toBeNull();
+      expect(r.family.map((f) => f.child.id)).toEqual([fx.guests.child.id]);
     });
   });
 });

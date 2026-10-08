@@ -4,12 +4,13 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
-import { VISIBLE_IN_MAIN, createGalleryFixture, dbReachable, fakeViewer } from "../../test/galleryFixture";
-import { countAlbumPhotos, listAlbumPage, listFavoritesPage, listMatchPage, MAX_PAGE_SIZE, PAGE_SIZE, type PhotoDTO } from "./gallery";
+import { VISIBLE_IN_MAIN, createGalleryFixture, dbReachable, failInCiWithoutPostgres, fakeViewer } from "../../test/galleryFixture";
+import { countAlbumPhotos, findVisibleAlbum, listAlbumPage, listFavoritesPage, listMatchPage, MAX_PAGE_SIZE, PAGE_SIZE, type PhotoDTO } from "./gallery";
 import type { KeysetCursor, ScoreCursor } from "./galleryCursor";
 
 const dbUp = await dbReachable();
-const dbHost = (process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
+failInCiWithoutPostgres("gallery feeds against Postgres", dbUp);
+const dbHost =(process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
 const suite = dbUp ? "gallery feeds against Postgres" : `gallery feeds against Postgres [skipped: Postgres unreachable at ${dbHost}; run pnpm infra:up]`;
 
 type Fixture = Awaited<ReturnType<typeof createGalleryFixture>>;
@@ -99,6 +100,20 @@ describe.skipIf(!dbUp)(suite, () => {
       const studio = fakeViewer(fx.users.viewer.id, { canHostsOnlyAlbums: true, isStudio: true });
       expect((await listAlbumPage(fx.eventA.id, studio, fx.albums.otherEvent.id)).photos).toEqual([]);
       expect((await listAlbumPage(fx.eventB.id, studio, fx.albums.otherEvent.id)).photos.map((p) => p.id)).toEqual(fx.otherEventIds);
+    });
+  });
+
+  describe("findVisibleAlbum", () => {
+    it("finds an album only when it belongs to the event and the viewer may see its visibility", async () => {
+      const guest = fakeViewer(fx.users.viewer.id);
+      const host = fakeViewer(fx.users.viewer.id, { canHostsOnlyAlbums: true });
+      const studio = fakeViewer(fx.users.viewer.id, { canHostsOnlyAlbums: true, isStudio: true });
+      expect((await findVisibleAlbum(fx.eventA.id, guest, fx.albums.main.id))?.id).toBe(fx.albums.main.id);
+      expect(await findVisibleAlbum(fx.eventA.id, guest, fx.albums.hostsOnly.id)).toBeNull();
+      expect((await findVisibleAlbum(fx.eventA.id, host, fx.albums.hostsOnly.id))?.id).toBe(fx.albums.hostsOnly.id);
+      expect(await findVisibleAlbum(fx.eventA.id, host, fx.albums.hidden.id)).toBeNull();
+      expect((await findVisibleAlbum(fx.eventA.id, studio, fx.albums.hidden.id))?.id).toBe(fx.albums.hidden.id);
+      expect(await findVisibleAlbum(fx.eventA.id, studio, fx.albums.otherEvent.id)).toBeNull();
     });
   });
 

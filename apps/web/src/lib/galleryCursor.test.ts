@@ -17,8 +17,20 @@ describe("keyset cursor (sortKey, id)", () => {
 
   it("round-trips a null sortKey (photos the worker has not keyed yet)", () => {
     const raw = encodeCursor({ sortKey: null, id: "p9" });
-    expect(raw).toBe(b64("|p9"));
     expect(decodeCursor(raw)).toEqual({ sortKey: null, id: "p9" });
+  });
+
+  it("keeps a null sortKey distinct from an empty-string one", () => {
+    expect(encodeCursor({ sortKey: null, id: "p9" })).not.toBe(encodeCursor({ sortKey: "", id: "p9" }));
+    expect(decodeCursor(encodeCursor({ sortKey: "", id: "p9" }))).toEqual({ sortKey: "", id: "p9" });
+    expect(decodeCursor(b64("|p9"))).toEqual({ sortKey: "", id: "p9" });
+  });
+
+  it("rejects a raw cursor longer than any valid one before decoding it", () => {
+    const longest = encodeCursor({ sortKey: "k".repeat(128), id: "i".repeat(64) });
+    expect(decodeCursor(longest)).not.toBeNull();
+    expect(decodeCursor(`${longest}AAAA`.padEnd(2000, "A"))).toBeNull();
+    expect(decodeScoreCursor("A".repeat(2000))).toBeNull();
   });
 
   it("keeps a '|' inside the sortKey by splitting on the last separator", () => {

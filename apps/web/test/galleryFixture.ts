@@ -4,6 +4,7 @@
  * Everything carries a per-run prefix and `cleanup()` removes it, so the suites are rerunnable
  * and never touch seed data.
  */
+import { describe, it } from "vitest";
 import { prisma } from "@hub/db";
 import type { Viewer } from "@/lib/site";
 
@@ -19,6 +20,21 @@ export async function dbReachable(): Promise<boolean> {
   );
 }
 
+const inCi = Boolean(process.env.CI) && !["0", "false"].includes(process.env.CI!);
+
+/**
+ * Locally a DB-backed suite skips when Postgres is down; under CI that would hide privacy checks,
+ * so register a failing test instead (same convention as apps/admin guests.db.test.ts).
+ */
+export function failInCiWithoutPostgres(label: string, dbUp: boolean): void {
+  if (dbUp || !inCi) return;
+  describe(label, () => {
+    it("requires Postgres when CI is set", () => {
+      throw new Error("Postgres unreachable at DATABASE_URL; start it with: pnpm infra:up");
+    });
+  });
+}
+
 /** A Viewer with only the fields the gallery helpers read; override per test. */
 export function fakeViewer(userId: string, over: Partial<Viewer> = {}): Viewer {
   return {
@@ -32,8 +48,33 @@ export function fakeViewer(userId: string, over: Partial<Viewer> = {}): Viewer {
   };
 }
 
+/** Remove everything a fixture run created, keyed by its prefix, so a half-built fixture is cleaned too. */
+async function cleanupRun(run: string) {
+  const studio = await prisma.studio.findUnique({ where: { slug: `${run}-s` }, select: { id: true } });
+  if (studio) {
+    const eventIds = (await prisma.event.findMany({ where: { studioId: studio.id }, select: { id: true } })).map((e) => e.id);
+    await prisma.entitlement.deleteMany({ where: { eventId: { in: eventIds } } });
+    await prisma.guest.deleteMany({ where: { eventId: { in: eventIds } } });
+    await prisma.household.deleteMany({ where: { eventId: { in: eventIds } } });
+    await prisma.photo.deleteMany({ where: { eventId: { in: eventIds } } }); // cascades favorites + matches
+    await prisma.album.deleteMany({ where: { eventId: { in: eventIds } } });
+    await prisma.event.deleteMany({ where: { id: { in: eventIds } } });
+    await prisma.studio.delete({ where: { id: studio.id } });
+  }
+  await prisma.user.deleteMany({ where: { displayName: { startsWith: `${run} ` } } });
+}
+
 export async function createGalleryFixture() {
   const run = `gt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  try {
+    return await buildGalleryFixture(run);
+  } catch (e) {
+    await cleanupRun(run);
+    throw e;
+  }
+}
+
+async function buildGalleryFixture(run: string) {
   const studio = await prisma.studio.create({ data: { slug: `${run}-s`, name: `${run} studio` } });
   const mkEvent = (suffix: string) =>
     prisma.event.create({ data: { studioId: studio.id, slug: `${run}-${suffix}`, title: { en: run }, theme: "LUXURY", status: "LIVE" } });
@@ -99,15 +140,33 @@ export async function createGalleryFixture() {
     return a < b ? -1 : 1;
   });
 
-  async function cleanup() {
-    const eventIds = [eventA.id, eventB.id];
-    await prisma.entitlement.deleteMany({ where: { eventId: { in: eventIds } } });
-    await prisma.photo.deleteMany({ where: { eventId: { in: eventIds } } }); // cascades favorites + matches
-    await prisma.album.deleteMany({ where: { eventId: { in: eventIds } } });
-    await prisma.event.deleteMany({ where: { id: { in: eventIds } } });
-    await prisma.studio.delete({ where: { id: studio.id } });
-    await prisma.user.deleteMany({ where: { id: { in: [users.viewer.id, users.other.id] } } });
-  }
+  // Two households in event A: the viewer's own (an adult, a child, a child who opted out) and another family's child.
+  const mkHousehold = (name: string) => prisma.household.create({ data: { studioId: studio.id, eventId: eventA.id, name: `${run} ${name}` } });
+  const [home, away] = [await mkHousehold("home"), await mkHousehold("away")];
+  const mkGuest = (householdId: string, data: { isChild?: boolean; faceSearchOptOut?: boolean; deletedAt?: Date; userId?: string }) =>
+    prisma.guest.create({ data: { studioId: studio.id, eventId: eventA.id, householdId, firstName: "G", ...data } });
+  const guests = {
+    adult: await mkGuest(home.id, { userId: users.viewer.id }),
+    child: await mkGuest(home.id, { isChild: true }),
+    optedOutChild: await mkGuest(home.id, { isChild: true, faceSearchOptOut: true }),
+    deletedChild: await mkGuest(home.id, { isChild: true, deletedAt: new Date() }),
+    otherHouseholdChild: await mkGuest(away.id, { isChild: true }),
+  };
 
-  return { run, studio, eventA, eventB, albums, users, mainIds, expectedMainOrder, hostsOnlyIds, hiddenAlbumIds, otherEventIds, cleanup };
+  return {
+    run,
+    studio,
+    eventA,
+    eventB,
+    albums,
+    users,
+    households: { home, away },
+    guests,
+    mainIds,
+    expectedMainOrder,
+    hostsOnlyIds,
+    hiddenAlbumIds,
+    otherEventIds,
+    cleanup: () => cleanupRun(run),
+  };
 }

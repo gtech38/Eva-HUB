@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { prisma } from "@hub/db";
 import { t, type Locale, type LocalizedText } from "@hub/shared/i18n";
 import { requireViewer } from "@/lib/site";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
 import { FaceSearch, type FaceStrings, type PreviousFeed } from "@/components/gallery/FaceSearch";
 import { galleryStrings } from "@/lib/gallery-strings";
-import { listMatchPage, type MatchSubject } from "@/lib/gallery";
-import { encodeScoreCursor } from "@/lib/galleryCursor";
+import type { Page } from "@/lib/gallery";
+import { encodeScoreCursor, type ScoreCursor } from "@/lib/galleryCursor";
+import { previousMatchFeeds } from "@/lib/galleryFeed";
 import { fullName } from "@/lib/format";
 import { consentTextsFor } from "@/lib/consentTexts";
 import { FACE_PROFILE_ENROLMENT, faceSearchAllowed } from "@/lib/faceConsent";
@@ -101,22 +101,18 @@ export default async function MyPhotosPage() {
     );
   }
 
+  // Previously matched photos, best match first (PhotoMatch survives the face-index purge), for the
+  // viewer and for the children they may search for. Only the first page is rendered here;
+  // PhotoGrid fetches the rest from /api/gallery/me.
+  const previous = await previousMatchFeeds({ event, viewer, faceSearchAllowed: faceSearchAllowed(process.env.NODE_ENV) });
+  const feed = (page: Page<ScoreCursor>, subject: string): PreviousFeed => ({
+    photos: page.photos,
+    more: { endpoint: `/api/gallery/me?subject=${encodeURIComponent(subject)}`, nextCursor: page.nextCursor && encodeScoreCursor(page.nextCursor) },
+  });
+  const me = feed(previous.me, "me");
+  const family = previous.family.map(({ child, page }) => ({ guestId: child.id, name: fullName(child), ...feed(page, child.id) }));
   // Children in the viewer's household → guardian search subjects.
-  const children = viewer.guest
-    ? await prisma.guest.findMany({ where: { eventId: event.id, householdId: viewer.guest.householdId, isChild: true, deletedAt: null, faceSearchOptOut: false }, orderBy: { createdAt: "asc" } })
-    : [];
-  const subjects = [{ id: "me", label: F.me }, ...children.map((c) => ({ id: c.id, label: fullName(c) }))];
-
-  // Previously matched photos, best match first (PhotoMatch survives the face-index purge). Only the
-  // first page is rendered here; PhotoGrid fetches the rest from /api/gallery/me.
-  const previousFeed = async (subject: MatchSubject, endpoint: string): Promise<PreviousFeed> => {
-    const page = await listMatchPage(event.id, viewer, subject);
-    return { photos: page.photos, more: { endpoint, nextCursor: page.nextCursor && encodeScoreCursor(page.nextCursor) } };
-  };
-  const me = await previousFeed({ userId: viewer.principal.userId }, "/api/gallery/me?subject=me");
-  const family = await Promise.all(
-    children.map(async (c) => ({ guestId: c.id, name: fullName(c), ...(await previousFeed({ guestId: c.id }, `/api/gallery/me?subject=${encodeURIComponent(c.id)}`)) })),
-  );
+  const subjects = [{ id: "me", label: F.me }, ...previous.family.map(({ child }) => ({ id: child.id, label: fullName(child) }))];
 
   // Hidden until face profiles can be revoked by their owner (WEB-006); the route ignores `remember` too.
   const canRemember = FACE_PROFILE_ENROLMENT && !!viewer.guest && !viewer.guest.isChild;

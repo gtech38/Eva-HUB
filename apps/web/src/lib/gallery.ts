@@ -89,6 +89,11 @@ export function listAlbumPage(eventId: string, viewer: Viewer, albumId: string, 
   return sortKeyPage(eventId, viewer, { albumId }, opts);
 }
 
+/** The album if it is in this event and its visibility is one the viewer may see; null otherwise (callers answer 404). */
+export function findVisibleAlbum(eventId: string, viewer: Viewer, albumId: string) {
+  return prisma.album.findFirst({ where: { id: albumId, eventId, visibility: { in: visibleVisibilities(viewer) } } });
+}
+
 /** The viewer's own hearts across the event. */
 export function listFavoritesPage(eventId: string, viewer: Viewer, opts: PageOptions<KeysetCursor> = {}) {
   return sortKeyPage(eventId, viewer, { favorites: { some: { userId: viewer.principal.userId } } }, opts);
