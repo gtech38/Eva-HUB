@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UNDO_WINDOW_MS, canUndoClaim, checkClaim, registryItemView, remainingQuantity, safeExternalUrl } from "./registry.ts";
+import { UNDO_WINDOW_MS, canUndoClaim, checkClaim, claimMessageKey, registryItemView, remainingQuantity, safeExternalUrl } from "./registry.ts";
 
 const NOW = new Date("2026-06-01T12:00:00Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
@@ -86,6 +86,16 @@ describe("registryItemView", () => {
     const v = registryItemView(item, [claim({ id: "old", claimedAt: ago(UNDO_WINDOW_MS + 5) })], "u1", NOW);
     expect(v.purchasedByViewer).toBe(true);
     expect(v.undoableClaimIds).toEqual([]);
+  });
+});
+
+describe("claimMessageKey", () => {
+  it("maps each refusal to a UI string key the guest can read", () => {
+    expect(claimMessageKey("sold_out")).toBe("claimSoldOut");
+    expect(claimMessageKey("exceeds_remaining")).toBe("claimTooMany");
+    expect(claimMessageKey("invalid_quantity")).toBe("claimTooMany");
+    expect(claimMessageKey("not_found")).toBe("claimFailed");
+    expect(claimMessageKey("forbidden")).toBe("claimFailed");
   });
 });
 

@@ -55,6 +55,19 @@ export function registryItemView(item: ItemLike, claims: ReadonlyArray<ClaimLike
   };
 }
 
+export type ClaimRefusal = "invalid_quantity" | "sold_out" | "exceeds_remaining" | "not_found" | "forbidden";
+
+/** UI string (packages/shared i18n UI key) shown for each way a claim can be refused. */
+export function claimMessageKey(reason: ClaimRefusal): "claimSoldOut" | "claimTooMany" | "claimFailed" {
+  switch (reason) {
+    case "sold_out": return "claimSoldOut";
+    case "exceeds_remaining":
+    case "invalid_quantity": return "claimTooMany";
+    case "not_found":
+    case "forbidden": return "claimFailed";
+  }
+}
+
 /** Host-authored links are rendered as hrefs, so only http(s) is allowed (no javascript:/data:). */
 export function safeExternalUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
