@@ -43,6 +43,19 @@ def test_photomatch_accepts_exactly_one_subject(conn, tenant):
         assert cur.fetchone()["n"] == 2
 
 
+def test_deleting_user_removes_their_matches(conn, tenant):
+    """The FK must cascade: SET NULL would leave a subject-less row the CHECK rejects."""
+    photo_id = tenant.add_photo()
+    user_id = tenant.add_user()
+    _insert_match(conn, photo_id, user_id, None)
+    _insert_match(conn, photo_id, None, "some-guest-id")
+
+    with conn.cursor() as cur:
+        cur.execute('DELETE FROM "User" WHERE id = %s', (user_id,))
+        cur.execute('SELECT "userId", "subjectGuestId" FROM "PhotoMatch" WHERE "photoId" = %s', (photo_id,))
+        assert cur.fetchall() == [{"userId": None, "subjectGuestId": "some-guest-id"}]
+
+
 def test_zipexport_requires_studio_id(conn, tenant):
     with pytest.raises(psycopg.errors.NotNullViolation, match="studioId"):
         with conn.transaction(), conn.cursor() as cur:
