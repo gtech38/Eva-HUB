@@ -16,6 +16,7 @@ Face search indexes every face in a gallery, including people who never opted in
 - LEG-007 DSAR / "delete my data" flow spec and data retention matrix
 - LEG-006 Texas attorney review (external)
 - DB-005 BiometricConsent.consentLocale column
+- LEG-008 Deletion ledger outside the primary database (post-restore replay)
 
 ## Definition of Done
 - [ ] Consent texts shown in the product are the versioned files, with the version recorded on every `BiometricConsent` row.

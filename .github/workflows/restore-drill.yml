@@ -1,0 +1,132 @@
+name: Restore drill
+
+# Weekly proof that a logical backup restores (DOC-003, docs/ops/backups.md). Needs no secrets
+# and no cloud resources: it migrates and seeds a fresh Postgres service container, backs it up
+# with scripts/backup-db.sh and restores it into throwaway targets with scripts/restore-drill.sh,
+# which fails the job when any table's row count or checksum differs from the source.
+# Also runs on PRs that change the scripts or the schema, so a migration that breaks restores
+# is caught before it merges.
+
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays 06:23 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/backup-db.sh
+      - scripts/restore-drill.sh
+      - scripts/lib/**
+      - scripts/tests/**
+      - packages/db/prisma/**
+      # the runbook / replay SQL and the job upsert they copy are tested here
+      - docs/ops/**
+      - workers/media/hub_worker/jobs.py
+      - .github/workflows/restore-drill.yml
+
+permissions:
+  contents: read
+  issues: write # only to report a failed scheduled run; GITHUB_TOKEN, no stored secret
+
+concurrency:
+  group: restore-drill-${{ github.ref }}
+  # superseded PR pushes are cancelled; a scheduled or manual drill is never cut short
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  drill:
+    name: restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: hub
+          POSTGRES_PASSWORD: hub
+          # not "hub": the drill tests refuse to run write-then-rollback SQL on a database named hub
+          POSTGRES_DB: hub_ci
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hub -d hub_ci"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      # same S3 server as infra/docker-compose.yml, so `backup-db.sh --upload` is tested, not skipped
+      s3:
+        # pinned: a moving tag would change the S3 server under the drill without a PR
+        image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
+        env:
+          RUSTFS_ACCESS_KEY: minio
+          RUSTFS_SECRET_KEY: minio12345
+        ports: ["9000:9000"]
+    env:
+      DATABASE_URL: postgresql://hub:hub@localhost:5433/hub_ci
+      # local throwaway credentials of the RustFS service above; not secrets
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: hub-media
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio12345
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # nothing here pushes; don't leave the token in .git/config
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Migrate and seed the source database
+        working-directory: packages/db
+        run: |
+          pnpm exec prisma generate
+          pnpm exec prisma migrate deploy
+          pnpm exec tsx prisma/seed.ts
+
+      - name: Create the bucket on the RustFS service
+        run: |
+          for i in $(seq 1 30); do
+            if docker run --rm --network host -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
+                 -e AWS_DEFAULT_REGION="$S3_REGION" amazon/aws-cli --endpoint-url "$S3_ENDPOINT" s3 mb "s3://$S3_BUCKET"; then
+              exit 0
+            fi
+            echo "waiting for RustFS ($i)"; sleep 2
+          done
+          exit 1
+
+      - name: Back up (pg_dump -Fc + manifest) and upload to the bucket
+        run: ./scripts/backup-db.sh "$RUNNER_TEMP/hub.dump" --upload
+
+      - name: Drill into a throwaway container
+        run: ./scripts/restore-drill.sh "$RUNNER_TEMP/hub.dump"
+
+      - name: Drill into a throwaway database on the service Postgres
+        env:
+          RESTORE_SERVER_URL: postgresql://hub:hub@localhost:5433/postgres
+          RESTORE_DB_NAME: hub_ci_restore_${{ github.run_id }}
+        run: ./scripts/restore-drill.sh "$RUNNER_TEMP/hub.dump"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Drill tests (broken restores must fail, unsafe names are refused)
+        run: |
+          python -m pip install -q pytest "psycopg[binary]"
+          python -m pytest -q -p no:cacheprovider scripts/tests
+
+      - name: Open an issue when the scheduled drill fails
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Weekly restore drill failing"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --title "$title" --label "type:bug" --label "area:infra" \
+              --body "The scheduled restore drill failed: $RUN_URL. Backups are not proven restorable until it passes. See docs/ops/backups.md section 8."
+          fi

@@ -130,6 +130,11 @@ jobs:
       - name: Claude hook tests
         run: python -m pytest -q -p no:cacheprovider .claude/hooks/tests
 
+      # Text-only (no DB). restore-drill.yml is path-filtered, so this catches a rename of a replayed
+      # AuditLog action or an edit to the job upsert anywhere in apps/ or workers/ (DOC-003).
+      - name: Restore contract (replay action names, job upsert copies)
+        run: python -m pytest -q -p no:cacheprovider scripts/tests/test_restore_contracts.py
+
       - name: Backlog files parse
         run: |
           if [ -f scripts/backlog-sync.mjs ]; then node scripts/backlog-sync.mjs --check; else echo "no backlog script yet; skipping"; fi

@@ -7,7 +7,7 @@ epic: EPIC-OBS
 ---
 
 ## Context
-docs/01 §10: "Backups: daily Postgres backups with point-in-time recovery from the managed provider. Bucket versioning is on for originals." Nothing is written down and no restore has been attempted. Originals are irreplaceable; the face index is reproducible; guest lists and RSVPs are not.
+docs/01 §10: "Backups: daily Postgres backups with point-in-time recovery from the managed provider. Bucket versioning is on for originals." Nothing is written down and no restore has been attempted. Originals are irreplaceable, and so are guest lists and RSVPs. The face index is only partly reproducible: embeddings can be recomputed from originals, but "remove me" opt-outs (`FaceCluster.suppressed`) and host labels cannot (docs/ops/backups.md §1, §7).
 
 ## Scope
 - `docs/ops/backups.md`: what to back up (Postgres, bucket originals; derivatives/zips reproducible), RPO/RTO targets (RPO 15 min via PITR, RTO 2 h), managed-Postgres PITR settings per candidate provider (Neon, Supabase, RDS, Crunchy — generic), bucket versioning + lifecycle (keep noncurrent originals 90 d; expire `d/` and `zip/` noncurrent after 7 d), `pg_dump` logical backup as a second copy to the bucket (`backup/pg/<date>.dump`), encryption and retention, who has access.

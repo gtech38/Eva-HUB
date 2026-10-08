@@ -19,6 +19,7 @@ The gallery works end to end locally but several pieces are POC-grade: album pag
 - WRK-007 BUILD_ZIP scope hashing, invalidation and ready notice
 - WEB-019 Proofing lists (guest selection + admin view)
 - ADM-017 EXIF sort, manual reorder and album covers
+- WRK-018 Tag derivative and zip objects hub-class=derived for lifecycle rules
 
 ## Definition of Done
 - [ ] A 2,000-photo album scrolls smoothly on a mid-range phone and the first page returns in under 300 ms server time.
