@@ -6,6 +6,7 @@ import { setSessionCookie } from "@/lib/session";
 import { fullName } from "@/lib/format";
 import { inviteUsable } from "@/lib/inviteLink";
 import { INVITE_EXPIRED_PATH } from "@/lib/inviteNotice";
+import { clientIp, rateLimits } from "@hub/shared/ratePolicies";
 
 export const dynamic = "force-dynamic";
 
@@ -15,11 +16,21 @@ export const dynamic = "force-dynamic";
  * later than the token. Every dead link (expired, revoked, unknown, another event's) gets the same
  * answer: the sign-in form with an expiry heading, no cookie, token not stamped.
  */
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: string }> }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ token: string }> }) {
   const site = await getSite();
   if (!site) return new NextResponse("Not found", { status: 404 });
   const origin = siteOrigin(site);
   const { token } = await ctx.params;
+
+  // Token-guessing guard (SHR-003): counted before the lookup, so the answer cannot depend on the token.
+  const ip = clientIp(req.headers);
+  const limited = await rateLimits.check("inviteIp", ip, { studioId: site.event.studioId, eventId: site.event.id });
+  if (!limited.ok) {
+    return new NextResponse("Too many requests. Please try again later.", {
+      status: 429,
+      headers: { "Retry-After": String(limited.retryAfterSec), "Cache-Control": "private, no-store" },
+    });
+  }
 
   const invite = await prisma.inviteToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { guest: true } });
   const now = new Date();
