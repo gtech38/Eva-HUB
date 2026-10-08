@@ -79,7 +79,7 @@ describe.skipIf(!dbUp)(suite, () => {
     await prisma.job.updateMany({ where: { type }, data: { runAt: new Date(Date.now() + HOUR) } });
   });
 
-  it("aggregates one event's jobs into buckets, with Postgres computing the duration percentiles", async () => {
+  it("aggregates one event's jobs into buckets (counts, oldest runAt, recent finishes, failures before a success)", async () => {
     const type = `${T}_AGG`;
     const now = new Date();
     const ok = (durationMs: number, attempts: number, finishedAgoMs: number) =>
@@ -97,7 +97,8 @@ describe.skipIf(!dbUp)(suite, () => {
     const requeued = buckets.find((b) => b.status === "QUEUED" && !b.retrying)!;
     expect(requeued).toMatchObject({ count: 1, finishedRecent: 0 });
     const succeeded = buckets.find((b) => b.status === "SUCCEEDED")!;
-    expect(succeeded).toMatchObject({ count: 3, finishedRecent: 2, priorFailuresRecent: 2, p50Ms: 2000, p95Ms: 4000 });
+    expect(succeeded).toMatchObject({ count: 3, finishedRecent: 2, priorFailuresRecent: 2 });
+    expect(Object.keys(succeeded).sort()).toEqual(["count", "due", "finishedRecent", "oldestRunAt", "priorFailuresRecent", "retrying", "status", "type"]); // no percentiles here: they force a full-table sort
     expect(buckets.some((b) => b.status === "RUNNING")).toBe(false); // other event
 
     // seen from two hours later, the scheduled rows are due and their oldest runAt is reported
@@ -110,14 +111,19 @@ describe.skipIf(!dbUp)(suite, () => {
     expect(all.some((b) => b.type === type && b.status === "RUNNING")).toBe(true);
   });
 
-  it("computes overall p50/p95 over recent successes of every type in scope", async () => {
+  it("computes p50/p95 in Postgres over recent successes, per type and overall, within the scope", async () => {
     const eventId = `${EVENT}-durations`;
     const now = new Date();
     const ok = (type: string, durationMs: number) =>
       make({ type, eventId, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 1000 - durationMs), finishedAt: new Date(now.getTime() - 1000) });
     await Promise.all([ok(`${T}_A`, 100), ok(`${T}_A`, 200), ok(`${T}_B`, 300), ok(`${T}_B`, 400), ok(`${T}_B`, 1000)]);
-    expect(await loadDurations(now, { eventId })).toEqual({ p50Ms: 300, p95Ms: 1000 });
-    expect(await loadDurations(now, { eventId: `${eventId}-none` })).toEqual({ p50Ms: null, p95Ms: null });
+    await make({ type: `${T}_A`, eventId, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 2 * HOUR - 9000), finishedAt: new Date(now.getTime() - 2 * HOUR) }); // outside the window
+    await make({ type: `${T}_A`, eventId: OTHER_EVENT, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 1000 - 50_000), finishedAt: new Date(now.getTime() - 1000) }); // other event
+    expect(await loadDurations(now, { eventId })).toEqual({
+      overall: { p50Ms: 300, p95Ms: 1000 }, // nearest rank over [100, 200, 300, 400, 1000]
+      byType: { [`${T}_A`]: { p50Ms: 100, p95Ms: 200 }, [`${T}_B`]: { p50Ms: 400, p95Ms: 1000 } },
+    });
+    expect(await loadDurations(now, { eventId: `${eventId}-none` })).toEqual({ overall: { p50Ms: null, p95Ms: null }, byType: {} });
   });
 
   it("loadJobHealth composes the event's summary, live workers and an ETA from the database clock", async () => {

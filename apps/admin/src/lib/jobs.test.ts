@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { cancelRefusal, etaSeconds, failureRate, fmtAge, fmtMs, publicError, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
+import { cancelRefusal, etaSeconds, failureRate, fmtAge, fmtMs, publicError, queueHealth, summarizeJobs, workerStatuses, type DurationStats, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
 
 /** A bucket with every count at zero; override what the case needs. */
 function bucket(over: Partial<JobBucket> & Pick<JobBucket, "type" | "status">): JobBucket {
-  return { due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, p50Ms: null, p95Ms: null, ...over };
+  return { due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, ...over };
 }
 
 describe("summarizeJobs", () => {
@@ -17,15 +17,19 @@ describe("summarizeJobs", () => {
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, retrying: true, count: 1, oldestRunAt: ago(30), finishedRecent: 1 }),
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: false, count: 2, oldestRunAt: new Date(NOW.getTime() + 60_000) }),
     bucket({ type: "PROCESS_PHOTO", status: "RUNNING", count: 1, oldestRunAt: ago(5) }),
-    bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 10, finishedRecent: 4, priorFailuresRecent: 2, p50Ms: 200, p95Ms: 400 }),
+    bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 10, finishedRecent: 4, priorFailuresRecent: 2 }),
     // INDEX_FACES: 1 retrying but not yet due, 2 dead (1 died within the hour), 1 succeeded recently
     bucket({ type: "INDEX_FACES", status: "QUEUED", due: false, retrying: true, count: 1, oldestRunAt: new Date(NOW.getTime() + 5_000) }),
     bucket({ type: "INDEX_FACES", status: "DEAD", retrying: true, count: 2, finishedRecent: 1 }),
-    bucket({ type: "INDEX_FACES", status: "SUCCEEDED", count: 1, finishedRecent: 1, p50Ms: 1000, p95Ms: 1000 }),
+    bucket({ type: "INDEX_FACES", status: "SUCCEEDED", count: 1, finishedRecent: 1 }),
   ];
 
-  // Percentiles come from Postgres (percentile_disc) per bucket; the overall pair spans all types.
-  const s = summarizeJobs(rows, NOW, { p50Ms: 300, p95Ms: 1000 });
+  // Percentiles come from Postgres (percentile_disc) in a separate query, per type and overall.
+  const durations: DurationStats = {
+    overall: { p50Ms: 300, p95Ms: 1000 },
+    byType: { PROCESS_PHOTO: { p50Ms: 200, p95Ms: 400 }, INDEX_FACES: { p50Ms: 1000, p95Ms: 1000 } },
+  };
+  const s = summarizeJobs(rows, NOW, durations);
   const photo = s.types.find((t) => t.type === "PROCESS_PHOTO")!;
   const faces = s.types.find((t) => t.type === "INDEX_FACES")!;
 
@@ -73,6 +77,14 @@ describe("summarizeJobs", () => {
   it("totals every status for the header tiles and sorts types by name", () => {
     expect(s.byStatus).toEqual({ QUEUED: 6, RUNNING: 1, SUCCEEDED: 11, FAILED: 0, DEAD: 2 });
     expect(s.types.map((t) => t.type)).toEqual(["INDEX_FACES", "PROCESS_PHOTO"]);
+  });
+
+  it("leaves percentiles null for a type with no recent successes or when none were supplied", () => {
+    const none = summarizeJobs(rows, NOW);
+    expect(none.total).toMatchObject({ p50Ms: null, p95Ms: null });
+    expect(none.types.every((t) => t.p50Ms === null && t.p95Ms === null)).toBe(true);
+    const partial = summarizeJobs(rows, NOW, { overall: { p50Ms: 5, p95Ms: 6 }, byType: { PROCESS_PHOTO: { p50Ms: 1, p95Ms: 2 } } });
+    expect(partial.types.find((t) => t.type === "INDEX_FACES")).toMatchObject({ p50Ms: null, p95Ms: null });
   });
 
   it("is empty but well-formed with no rows", () => {

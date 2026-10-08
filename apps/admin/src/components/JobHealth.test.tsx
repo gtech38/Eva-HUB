@@ -8,7 +8,7 @@ const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
 
 const bucket = (over: Partial<JobBucket> & Pick<JobBucket, "type" | "status">): JobBucket => ({
-  due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, p50Ms: null, p95Ms: null, ...over,
+  due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, ...over,
 });
 
 /** The same composition `loadJobHealth` does, from fixed inputs. */
@@ -16,10 +16,10 @@ function health(beatAgesSec: number[]): Health {
   const summary = summarizeJobs(
     [
       bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, count: 10, oldestRunAt: ago(236) }),
-      bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 5, finishedRecent: 5, p50Ms: 2000, p95Ms: 3000 }),
+      bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 5, finishedRecent: 5 }),
     ],
     NOW,
-    { p50Ms: 2000, p95Ms: 3000 },
+    { overall: { p50Ms: 2000, p95Ms: 3000 }, byType: { PROCESS_PHOTO: { p50Ms: 2000, p95Ms: 3000 } } },
   );
   const workers = workerStatuses(beatAgesSec.map((s, i) => ({ workerId: `host-${i}:42`, lastSeenAt: ago(s), version: "0.1.0", hostname: `host-${i}` })), NOW);
   const live = workers.filter((w) => w.live).length;

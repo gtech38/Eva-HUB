@@ -1,8 +1,9 @@
 /**
  * Job-queue health metrics (ADM-022). Pure: the dashboard runs one raw aggregate that groups the
- * Job table into `JobBucket`s (type x status x due x retrying), with Postgres computing the duration
- * percentiles (`percentile_disc`, nearest rank) so no per-job durations travel to Node, and hands
- * them here with the same `now` it bound into the query. Nothing in this file touches the database.
+ * Job table into `JobBucket`s (type x status x due x retrying) plus one query for the duration
+ * percentiles (`DurationStats`, `percentile_disc` in Postgres, so no per-job durations travel to
+ * Node), and hands both here with the same `now` it bound into the queries. Nothing in this file
+ * touches the database.
  */
 
 export const JOB_STATUSES = ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "DEAD"] as const;
@@ -30,12 +31,17 @@ export type JobBucket = {
    * succeeded would count as zero failures.
    */
   priorFailuresRecent: number;
-  /** p50/p95 of finishedAt - lockedAt (ms) over SUCCEEDED rows finished within the window; null otherwise. */
-  p50Ms: number | null;
-  p95Ms: number | null;
 };
 
 export type DurationPercentiles = { p50Ms: number | null; p95Ms: number | null };
+
+/**
+ * p50/p95 of finishedAt - lockedAt (ms) over SUCCEEDED rows finished within the window, computed by
+ * Postgres (`percentile_disc`, nearest rank) per type and across all types. They come from their own
+ * query: ordered-set aggregates force a sort, which on the full-table bucket aggregate took 447 ms at
+ * 100k rows versus ~45 ms for the counts plus ~45 ms for percentiles over just the recent window.
+ */
+export type DurationStats = { overall: DurationPercentiles; byType: Record<string, DurationPercentiles> };
 
 export type TypeSummary = {
   type: string;
@@ -65,14 +71,11 @@ export type JobsSummary = {
 type Acc = {
   s: Omit<TypeSummary, "type" | "oldestDueSec" | "p50Ms" | "p95Ms">;
   oldestDue: number | null;
-  /** Percentiles of the SUCCEEDED bucket with the most recent finishes (normally the only one). */
-  pct: (DurationPercentiles & { n: number }) | null;
 };
 
 const emptyAcc = (): Acc => ({
   s: { queued: 0, scheduled: 0, running: 0, retrying: 0, dead: 0, succeededLastHour: 0, failedLastHour: 0 },
   oldestDue: null,
-  pct: null,
 });
 
 function add(acc: Acc, b: JobBucket): void {
@@ -96,11 +99,10 @@ function add(acc: Acc, b: JobBucket): void {
   } else if (b.status === "SUCCEEDED") {
     s.succeededLastHour += b.finishedRecent;
     s.failedLastHour += b.priorFailuresRecent;
-    if (acc.pct === null || b.finishedRecent > acc.pct.n) acc.pct = { n: b.finishedRecent, p50Ms: b.p50Ms, p95Ms: b.p95Ms };
   }
 }
 
-function finish(acc: Acc, now: Date, pct: DurationPercentiles | null = acc.pct): Omit<TypeSummary, "type"> {
+function finish(acc: Acc, now: Date, pct?: DurationPercentiles): Omit<TypeSummary, "type"> {
   return {
     ...acc.s,
     oldestDueSec: acc.oldestDue === null ? null : Math.max(0, Math.floor((now.getTime() - acc.oldestDue) / 1000)),
@@ -109,11 +111,8 @@ function finish(acc: Acc, now: Date, pct: DurationPercentiles | null = acc.pct):
   };
 }
 
-/**
- * `overall` is the p50/p95 across every type in scope: percentiles of several groups cannot be merged,
- * so the loader asks Postgres for them separately (`loadDurations`).
- */
-export function summarizeJobs(rows: readonly JobBucket[], now: Date, overall: DurationPercentiles = { p50Ms: null, p95Ms: null }): JobsSummary {
+/** Percentiles of several groups cannot be merged, so `durations` (from `loadDurations`) carries per-type and overall values. */
+export function summarizeJobs(rows: readonly JobBucket[], now: Date, durations: DurationStats = { overall: { p50Ms: null, p95Ms: null }, byType: {} }): JobsSummary {
   const perType = new Map<string, Acc>();
   const total = emptyAcc();
   const byStatus = Object.fromEntries(JOB_STATUSES.map((s) => [s, 0])) as Record<JobStatusName, number>;
@@ -125,8 +124,8 @@ export function summarizeJobs(rows: readonly JobBucket[], now: Date, overall: Du
   }
   const types = [...perType.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([type, acc]) => ({ type, ...finish(acc, now) }));
-  return { types, total: finish(total, now, overall), byStatus };
+    .map(([type, acc]) => ({ type, ...finish(acc, now, durations.byType[type]) }));
+  return { types, total: finish(total, now, durations.overall), byStatus };
 }
 
 /**
