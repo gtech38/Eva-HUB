@@ -1,11 +1,11 @@
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
+import { exclude, include } from "../../vitest.shared.mts";
 
 export default defineConfig({
   test: {
     name: "@hub/shared",
     environment: "node",
-    include: ["src/**/*.test.ts"],
-    // exFAT writes AppleDouble "._*" twins next to every file; never collect them.
-    exclude: [...configDefaults.exclude, "**/._*"],
+    include,
+    exclude,
   },
 });

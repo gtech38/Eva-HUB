@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
+import { exclude, include } from "../../vitest.shared.mts";
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -15,9 +16,8 @@ export default defineConfig({
   test: {
     name: "@hub/admin",
     environment: "node",
-    include: ["src/**/*.test.{ts,tsx}", "test/**/*.test.ts"],
-    // exFAT writes AppleDouble "._*" twins next to every file; never collect them.
-    exclude: [...configDefaults.exclude, "**/._*"],
+    include,
+    exclude,
     setupFiles: ["./test/setup.ts"],
   },
 });

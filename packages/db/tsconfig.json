@@ -14,6 +14,7 @@
   },
   "include": [
     "src",
-    "prisma/seed.ts"
+    "prisma/seed.ts",
+    "vitest.config.ts"
   ]
 }

@@ -23,7 +23,10 @@ const dbUp = await prisma.$queryRaw`SELECT 1`.then(
   () => false,
 );
 const dbHost = (process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
-if (!dbUp) console.log(`# packages/db: Postgres unreachable at DATABASE_URL (${dbHost}); start it with: pnpm infra:up -- skipping`);
+const skipReason = `Postgres unreachable at DATABASE_URL (${dbHost}); start it with: pnpm infra:up`;
+if (!dbUp) console.log(`# packages/db: ${skipReason} -- skipping`);
+// The reason is in the suite name too: vitest's compact/agent reporters drop console output of skipped files.
+const suite = dbUp ? "enqueue() against Postgres" : `enqueue() against Postgres [skipped: ${skipReason}]`;
 
 afterAll(async () => {
   if (dbUp) {
@@ -34,7 +37,7 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe.skipIf(!dbUp)("enqueue() against Postgres", () => {
+describe.skipIf(!dbUp)(suite, () => {
   it("enqueue without dedupeKey always creates a new QUEUED job", async () => {
     const a = await enqueue(T, { run, n: 1 }, { runAt: future() });
     let b: { id: bigint } | undefined;

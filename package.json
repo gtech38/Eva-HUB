@@ -2,6 +2,9 @@
   "name": "event-hub",
   "private": true,
   "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "pnpm -r --parallel --filter ./apps/* dev",
     "dev:web": "pnpm --filter @hub/web dev",
