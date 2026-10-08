@@ -6,21 +6,21 @@ const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
 
 /** A bucket with every count at zero; override what the case needs. */
 function bucket(over: Partial<JobBucket> & Pick<JobBucket, "type" | "status">): JobBucket {
-  return { due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, ...over };
+  return { due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, failedAttemptsRecent: 0, ...over };
 }
 
 describe("summarizeJobs", () => {
   const rows: JobBucket[] = [
-    // PROCESS_PHOTO: 3 due (oldest 120 s ago), of which 1 retrying; 2 scheduled; 1 running;
-    // 4 succeeded recently, 2 of them only after earlier failed attempts (2 failures in total)
+    // PROCESS_PHOTO: 3 due (oldest 120 s ago), of which 1 retrying after its 2nd failed attempt; 2 scheduled;
+    // 1 running; 4 succeeded recently, 2 of them only after earlier failed attempts (2 failed attempts)
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, count: 2, oldestRunAt: ago(120) }),
-    bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, retrying: true, count: 1, oldestRunAt: ago(30), finishedRecent: 1 }),
+    bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, retrying: true, count: 1, oldestRunAt: ago(30), finishedRecent: 1, failedAttemptsRecent: 2 }),
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: false, count: 2, oldestRunAt: new Date(NOW.getTime() + 60_000) }),
     bucket({ type: "PROCESS_PHOTO", status: "RUNNING", count: 1, oldestRunAt: ago(5) }),
-    bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 10, finishedRecent: 4, priorFailuresRecent: 2 }),
-    // INDEX_FACES: 1 retrying but not yet due, 2 dead (1 died within the hour), 1 succeeded recently
+    bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 10, finishedRecent: 4, failedAttemptsRecent: 2 }),
+    // INDEX_FACES: 1 retrying but not yet due, 2 dead (1 died within the hour after 5 attempts), 1 succeeded recently
     bucket({ type: "INDEX_FACES", status: "QUEUED", due: false, retrying: true, count: 1, oldestRunAt: new Date(NOW.getTime() + 5_000) }),
-    bucket({ type: "INDEX_FACES", status: "DEAD", retrying: true, count: 2, finishedRecent: 1 }),
+    bucket({ type: "INDEX_FACES", status: "DEAD", retrying: true, count: 2, finishedRecent: 1, failedAttemptsRecent: 5 }),
     bucket({ type: "INDEX_FACES", status: "SUCCEEDED", count: 1, finishedRecent: 1 }),
   ];
 
@@ -55,15 +55,24 @@ describe("summarizeJobs", () => {
     expect(s.total.retrying).toBe(2);
   });
 
-  it("counts dead rows and recent outcomes (failed = retrying or dead in the window, plus failed attempts before a success)", () => {
+  it("counts dead rows and recent outcomes in attempts: failed = every failed attempt of the jobs whose latest attempt ended in the window", () => {
     expect(faces.dead).toBe(2);
     expect(photo.succeededLastHour).toBe(4);
-    // mark_succeeded clears lastError, so a job that failed twice and then succeeded would otherwise count as zero failures
-    expect(photo.failedLastHour).toBe(1 + 2);
-    expect(faces.failedLastHour).toBe(1);
+    expect(photo.failedLastHour).toBe(2 + 2); // retrying job's 2 attempts + 2 failed attempts before successes
+    expect(faces.failedLastHour).toBe(5); // the job that went DEAD failed all 5 attempts
     expect(s.total.succeededLastHour).toBe(5);
-    expect(s.total.failedLastHour).toBe(4);
-    expect(failureRate(s.total)).toBe(44); // 4 failed of 9 attempts
+    expect(s.total.failedLastHour).toBe(9);
+    expect(failureRate(s.total)).toBe(64); // 9 failed of 14 attempts
+  });
+
+  it("weighs a job by its failed attempts whatever its outcome: fail 4x then succeed counts 4, fail 5x then DEAD counts 5", () => {
+    const one = (b: JobBucket) => summarizeJobs([b], NOW).total.failedLastHour;
+    expect(one(bucket({ type: "X", status: "SUCCEEDED", count: 1, finishedRecent: 1, failedAttemptsRecent: 4 }))).toBe(4);
+    expect(one(bucket({ type: "X", status: "DEAD", retrying: true, count: 1, finishedRecent: 1, failedAttemptsRecent: 5 }))).toBe(5);
+    expect(one(bucket({ type: "X", status: "QUEUED", retrying: true, count: 1, finishedRecent: 1, failedAttemptsRecent: 3 }))).toBe(3);
+    // a Requeue (not retrying) and a running job contribute nothing, whatever their attempt counter says
+    expect(one(bucket({ type: "X", status: "QUEUED", count: 1, finishedRecent: 1, failedAttemptsRecent: 3 }))).toBe(0);
+    expect(one(bucket({ type: "X", status: "RUNNING", count: 1, finishedRecent: 1, failedAttemptsRecent: 3 }))).toBe(0);
   });
 
   it("passes the database's p50/p95 through, per type and overall", () => {

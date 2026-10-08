@@ -30,12 +30,12 @@ export function JobHealth({ health, typeActions, showWorkers = true }: {
         <Stat label="ETA" value={<span data-testid="jobs-eta">{eta === null ? "—" : fmtAge(eta)}</span>} sub={eta === null && t.queued > 0 ? (live === 0 ? "no workers" : "no recent timings") : "queued × p50 / workers"} />
         <Stat label="Running" value={t.running} />
         <Stat label="Retrying" value={t.retrying} sub={`${t.dead} dead`} />
-        <Stat label="Last hour" value={`${t.succeededLastHour} ok`} sub={`${t.failedLastHour} failed${rate === null ? "" : ` (${rate}%)`}`} />
+        <Stat label="Last hour" value={`${t.succeededLastHour} ok`} sub={`${t.failedLastHour} failed attempts${rate === null ? "" : ` (${rate}%)`}`} />
         <Stat label="Duration p50 / p95" value={fmtMs(t.p50Ms)} sub={`p95 ${fmtMs(t.p95Ms)}`} />
       </div>
       <div className={`grid gap-4 ${showWorkers ? "xl:grid-cols-[1fr_360px]" : ""}`}>
         <Card title="Queue by type" padded={false}>
-          <Table head={["Type", "Queued", "Sched.", "Running", "Retrying", "Dead", "Oldest due", "OK/h", "Failed/h", "p50", "p95", ...(typeActions ? [""] : [])]}>
+          <Table head={["Type", "Queued", "Sched.", "Running", "Retrying", "Dead", "Oldest due", "OK/h", "Failed attempts/h", "p50", "p95", ...(typeActions ? [""] : [])]}>
             {summary.types.map((s) => (
               <tr key={s.type}>
                 <td className="font-mono text-xs">{s.type}</td>

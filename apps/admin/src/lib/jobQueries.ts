@@ -24,7 +24,7 @@ type BucketRow = {
   count: bigint;
   oldestRunAt: Date | null;
   finishedRecent: bigint;
-  priorFailuresRecent: bigint;
+  failedAttemptsRecent: bigint;
 };
 
 /** Job timestamps are timestamp(3) in UTC; bind instants as naive UTC so the session time zone cannot shift them. */
@@ -61,8 +61,8 @@ export async function loadJobBuckets(now: Date, scope: JobScope = {}): Promise<J
            count(*) AS count,
            min("runAt") AS "oldestRunAt",
            count(*) FILTER (WHERE "finishedAt" >= ${since}) AS "finishedRecent",
-           COALESCE(sum(GREATEST(attempts - 1, 0))
-             FILTER (WHERE status = 'SUCCEEDED'::"JobStatus" AND "finishedAt" >= ${since}), 0) AS "priorFailuresRecent"
+           COALESCE(sum(CASE WHEN status = 'SUCCEEDED'::"JobStatus" THEN GREATEST(attempts - 1, 0) ELSE attempts END)
+             FILTER (WHERE "finishedAt" >= ${since}), 0) AS "failedAttemptsRecent"
       FROM "Job"
      WHERE ${inScope(scope)}
      GROUP BY 1, 2, 3, 4`);
@@ -74,7 +74,7 @@ export async function loadJobBuckets(now: Date, scope: JobScope = {}): Promise<J
     count: Number(r.count),
     oldestRunAt: r.oldestRunAt,
     finishedRecent: Number(r.finishedRecent),
-    priorFailuresRecent: Number(r.priorFailuresRecent),
+    failedAttemptsRecent: Number(r.failedAttemptsRecent),
   }));
 }
 

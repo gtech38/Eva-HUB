@@ -84,8 +84,9 @@ describe.skipIf(!dbUp)(suite, () => {
     const now = new Date();
     const ok = (durationMs: number, attempts: number, finishedAgoMs: number) =>
       make({ type, status: "SUCCEEDED", attempts, lockedAt: new Date(now.getTime() - finishedAgoMs - durationMs), finishedAt: new Date(now.getTime() - finishedAgoMs) });
-    await make({ type, lastError: "boom", finishedAt: new Date(now.getTime() - 60_000) }); // scheduled retry
-    await make({ type, lastError: "requeued: more photos arrived" }); // a Requeue is not a failure
+    await make({ type, attempts: 2, lastError: "boom", finishedAt: new Date(now.getTime() - 60_000) }); // scheduled retry after its 2nd failure
+    await make({ type, attempts: 1, lastError: "requeued: more photos arrived" }); // a Requeue is not a failure
+    await make({ type, status: "DEAD", attempts: 5, lastError: "boom", finishedAt: new Date(now.getTime() - 30_000) }); // died after 5 failed attempts
     await ok(2000, 3, 500); // succeeded on its third attempt: two failures preceded it
     await ok(4000, 1, 1000);
     await ok(9000, 2, 2 * HOUR); // outside the window
@@ -93,12 +94,14 @@ describe.skipIf(!dbUp)(suite, () => {
 
     const buckets = (await loadJobBuckets(now, { eventId: EVENT })).filter((b) => b.type === type);
     const retrying = buckets.find((b) => b.status === "QUEUED" && b.retrying)!;
-    expect(retrying).toMatchObject({ due: false, count: 1, finishedRecent: 1 });
+    expect(retrying).toMatchObject({ due: false, count: 1, finishedRecent: 1, failedAttemptsRecent: 2 });
     const requeued = buckets.find((b) => b.status === "QUEUED" && !b.retrying)!;
-    expect(requeued).toMatchObject({ count: 1, finishedRecent: 0 });
+    expect(requeued).toMatchObject({ count: 1, finishedRecent: 0, failedAttemptsRecent: 0 });
+    const dead = buckets.find((b) => b.status === "DEAD")!;
+    expect(dead).toMatchObject({ count: 1, finishedRecent: 1, failedAttemptsRecent: 5 });
     const succeeded = buckets.find((b) => b.status === "SUCCEEDED")!;
-    expect(succeeded).toMatchObject({ count: 3, finishedRecent: 2, priorFailuresRecent: 2 });
-    expect(Object.keys(succeeded).sort()).toEqual(["count", "due", "finishedRecent", "oldestRunAt", "priorFailuresRecent", "retrying", "status", "type"]); // no percentiles here: they force a full-table sort
+    expect(succeeded).toMatchObject({ count: 3, finishedRecent: 2, failedAttemptsRecent: 2 });
+    expect(Object.keys(succeeded).sort()).toEqual(["count", "due", "failedAttemptsRecent", "finishedRecent", "oldestRunAt", "retrying", "status", "type"]); // no percentiles here: they force a full-table sort
     expect(buckets.some((b) => b.status === "RUNNING")).toBe(false); // other event
 
     // seen from two hours later, the scheduled rows are due and their oldest runAt is reported

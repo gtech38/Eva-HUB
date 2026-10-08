@@ -18,7 +18,7 @@ export type JobBucket = {
   status: JobStatusName;
   /** runAt <= now (only meaningful for QUEUED). */
   due: boolean;
-  /** lastError IS NOT NULL. */
+  /** Has a failure `lastError` (not NULL and not a `requeued:` note from a handler's Requeue). */
   retrying: boolean;
   count: number;
   /** Earliest runAt in the bucket. */
@@ -26,11 +26,12 @@ export type JobBucket = {
   /** Rows whose finishedAt falls within RECENT_WINDOW_MS. */
   finishedRecent: number;
   /**
-   * Failed attempts that preceded a success: sum(attempts - 1) over SUCCEEDED rows finished within the
-   * window. mark_succeeded clears lastError, so without this a job that failed four times and then
-   * succeeded would count as zero failures.
+   * Failed attempts of the rows whose latest attempt ended within the window: `attempts - 1` for a
+   * success, `attempts` otherwise (DEAD, or QUEUED waiting for a retry). Counting attempts, not jobs,
+   * keeps a job that failed four times then succeeded (4) consistent with one that failed five times
+   * and died (5). `summarizeJobs` uses it only for SUCCEEDED, DEAD and retrying QUEUED buckets.
    */
-  priorFailuresRecent: number;
+  failedAttemptsRecent: number;
 };
 
 export type DurationPercentiles = { p50Ms: number | null; p95Ms: number | null };
@@ -50,13 +51,17 @@ export type TypeSummary = {
   /** QUEUED rows with a future runAt (delayed jobs, backoff). */
   scheduled: number;
   running: number;
-  /** QUEUED rows with lastError set: failed at least once, will run again. */
+  /** QUEUED rows whose last attempt failed: they will run again. */
   retrying: number;
   dead: number;
   /** Age of the earliest due QUEUED row, whole seconds; null when nothing is due. */
   oldestDueSec: number | null;
+  /** Jobs that succeeded within the window (one successful attempt each). */
   succeededLastHour: number;
-  /** Failed attempts in the window: retrying/DEAD rows whose last failure was recent, plus the attempts that failed before a recent success. */
+  /**
+   * Failed attempts of the jobs whose latest attempt ended within the window (see
+   * `JobBucket.failedAttemptsRecent`). Earlier attempts of such a job may be older than the window.
+   */
   failedLastHour: number;
   p50Ms: number | null;
   p95Ms: number | null;
@@ -85,7 +90,7 @@ function add(acc: Acc, b: JobBucket): void {
     else s.scheduled += b.count;
     if (b.retrying) {
       s.retrying += b.count;
-      s.failedLastHour += b.finishedRecent;
+      s.failedLastHour += b.failedAttemptsRecent;
     }
     if (b.due && b.oldestRunAt) {
       const t = b.oldestRunAt.getTime();
@@ -95,10 +100,10 @@ function add(acc: Acc, b: JobBucket): void {
     s.running += b.count;
   } else if (b.status === "DEAD") {
     s.dead += b.count;
-    s.failedLastHour += b.finishedRecent;
+    s.failedLastHour += b.failedAttemptsRecent;
   } else if (b.status === "SUCCEEDED") {
     s.succeededLastHour += b.finishedRecent;
-    s.failedLastHour += b.priorFailuresRecent;
+    s.failedLastHour += b.failedAttemptsRecent;
   }
 }
 

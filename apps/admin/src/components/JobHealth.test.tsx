@@ -8,7 +8,7 @@ const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
 
 const bucket = (over: Partial<JobBucket> & Pick<JobBucket, "type" | "status">): JobBucket => ({
-  due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, ...over,
+  due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, failedAttemptsRecent: 0, ...over,
 });
 
 /** The same composition `loadJobHealth` does, from fixed inputs. */
@@ -40,6 +40,7 @@ describe("JobHealth (acceptance criterion: 'No live workers' when stopped, the E
     expect(html).not.toContain("No live workers");
     expect(html).toMatch(/data-testid="jobs-eta">20s</); // 10 queued x 2 s p50 / 1 live worker
     expect(html).toContain("3m 56s"); // oldest due
+    expect(html).toContain("0 failed attempts"); // the failure figure counts attempts, and says so
   });
 
   it("divides the ETA across live workers", () => {
