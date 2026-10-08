@@ -16,7 +16,7 @@ description: Use when touching packages/db (schema.prisma, migrations, seed.ts, 
 | Path | What |
 |---|---|
 | `packages/db/prisma/schema.prisma` | Source of truth (`docs/schema.draft.prisma` is the planning copy) |
-| `packages/db/prisma/migrations/20261007200507_init/migration.sql` | Initial migration; creates `citext` + `vector` extensions. Later ones sit beside it (`ls packages/db/prisma/migrations`); `20261008181710_job_finished_at_worker_heartbeat` adds `Job.finishedAt` and the `WorkerHeartbeat` table (ADM-022) |
+| `packages/db/prisma/migrations/20261007200507_init/migration.sql` | Initial migration; creates `citext` + `vector` extensions. Later ones sit beside it (`ls packages/db/prisma/migrations`); `20261008203126_job_finished_at_worker_heartbeat` adds `Job.finishedAt` and the `WorkerHeartbeat` table (ADM-022) |
 | `packages/db/prisma/seed.ts` | Idempotent seed: studio `studio`, admin `admin@localhost`, events `priya-arjun` (LIVE, HINDU_TRADITIONAL, 3 locales), `sofia-james` (LUXURY), `emma-liam` (ROMANTIC), price sheet |
 | `packages/db/src/index.ts` | `prisma` singleton (cached on `globalThis` in dev), `scoped()`, `JobType`, `enqueue()` |
 | `packages/db/.env -> ../../.env` | Symlink so the `prisma` CLI finds `DATABASE_URL` |
