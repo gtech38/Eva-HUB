@@ -44,6 +44,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Skip Next internals, API routes (they read Host themselves), and static files.
-  matcher: ["/((?!_next/|api/|robots\\.txt|favicon\\.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp|css|js|map|txt|woff2?)$).*)"],
+  // Skip Next internals, API routes (they read Host themselves), and static files --
+  // except /og.png, which is per site (sites/[slug]/og.png).
+  matcher: ["/((?!_next/|api/|robots\\.txt|favicon\\.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp|css|js|map|txt|woff2?)$).*)", "/og.png"],
 };
