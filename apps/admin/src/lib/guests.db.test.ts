@@ -82,6 +82,11 @@ describe.skipIf(!ready)(ready ? "RSVP report loaders against Postgres" : `RSVP r
     expect((await loadRsvpReport(event!.id, "names", { subEventId: other!.id })).subEvents).toEqual([]);
   });
 
+  it("Rsvp has the (subEventId, status) index the report counts use (docs/03 §3)", async () => {
+    const rows = await prisma.$queryRaw<Array<{ indexdef: string }>>`SELECT indexdef FROM pg_indexes WHERE tablename = 'Rsvp' AND indexname = 'Rsvp_subEventId_status_idx'`;
+    expect(rows.map((r) => r.indexdef)).toEqual([expect.stringContaining('("subEventId", status)')]);
+  });
+
   it("loadWideCsv has one row per live guest with the existing wide columns", async () => {
     const table = await loadWideCsv(event!.id);
     expect(table[0].slice(0, 8)).toEqual(["household", "first_name", "last_name", "email", "phone", "is_child", "is_plus_one", "linked_user"]);
