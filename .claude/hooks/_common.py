@@ -59,9 +59,22 @@ def file_from_payload(p: dict) -> Path | None:
     return path if path.is_absolute() else ROOT / path
 
 
+def repo_root(path: Path) -> Path:
+    """The git checkout that owns `path`: the main tree or a linked worktree (which has a `.git` file).
+
+    Agents work in worktrees outside CLAUDE_PROJECT_DIR; resolving against the owning checkout keeps
+    the TDD gate and post-edit checks active there instead of silently treating the file as foreign.
+    """
+    p = path.resolve()
+    for parent in [p, *p.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return ROOT.resolve()
+
+
 def rel(path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(ROOT.resolve()))
+        return str(path.resolve().relative_to(repo_root(path)))
     except ValueError:
         return str(path)
 
@@ -210,7 +223,7 @@ def record_touched(p: dict, path: Path) -> None:
         return
     try:
         ledger.parent.mkdir(parents=True, exist_ok=True)
-        line = rel(path)
+        line = str(path.resolve())  # absolute: the file may live in a worktree, not under ROOT
         existing = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
         if line not in existing:
             with ledger.open("a", encoding="utf-8") as f:
@@ -220,7 +233,7 @@ def record_touched(p: dict, path: Path) -> None:
 
 
 def read_touched(p: dict) -> list[str] | None:
-    """Paths (repo-relative) edited in this session, or None when no ledger exists."""
+    """Paths edited in this session (absolute; older ledgers may hold ROOT-relative), or None."""
     ledger = touched_ledger(p)
     if not ledger or not ledger.exists():
         return None

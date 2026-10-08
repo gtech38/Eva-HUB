@@ -21,6 +21,7 @@ import re
 import sys
 
 from _common import (
+    ROOT,
     PY_EXT, SRC_EXT, TS_EXT, Deadline, existing_test, file_from_payload, is_test, package_root,
     read_payload, record_touched, rel, run, tail,
 )
@@ -96,7 +97,7 @@ if pkg:
     elif path.suffix in PY_EXT:
         test_file = path if is_test(path) else existing_test(path)
         if test_file:
-            py = pkg / ".venv" / "bin" / "python"
+            py = next((c for c in (pkg / ".venv/bin/python", ROOT / rel(pkg) / ".venv/bin/python") if c.exists()), pkg / ".venv/bin/python")
             cmd = [str(py) if py.exists() else "python3", "-m", "pytest", "-q", "-x", str(test_file)]
             code, out = run(cmd, cwd=pkg, timeout=deadline)
             if code != 0:

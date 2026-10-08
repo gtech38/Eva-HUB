@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import ROOT, SRC_EXT, Deadline, port_open, read_payload, read_touched, run, tail
+from _common import ROOT, SRC_EXT, Deadline, port_open, read_payload, read_touched, rel, repo_root, run, tail
 
 TOTAL_BUDGET_S = 540
 POSTGRES_PORT = 5433
@@ -35,22 +35,23 @@ changed = read_touched(p)
 if changed is None:
     code, out = run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, timeout=20)
     changed = [l[3:].strip().strip('"') for l in out.splitlines() if l.strip()]
-src = [c for c in changed if c.startswith(("apps/", "packages/", "workers/")) and c.endswith(VERIFY_EXT) and (ROOT / c).exists()]
+paths = [Path(c) if Path(c).is_absolute() else ROOT / c for c in changed]
+src = [p for p in paths if p.exists() and str(p).endswith(VERIFY_EXT) and rel(p).startswith(("apps/", "packages/", "workers/"))]
 if not src:
     sys.exit(0)
 
 pkgs: set[Path] = set()
-py = False
-for c in src:
-    path = ROOT / c
+py_roots: set[Path] = set()
+for path in src:
+    top = repo_root(path)
     for parent in [path, *path.parents]:
-        if parent == ROOT:
+        if parent == top:
             break
         if (parent / "package.json").exists():
             pkgs.add(parent)
             break
         if (parent / "pyproject.toml").exists():
-            py = True
+            py_roots.add(parent)
             break
 
 failures = []
@@ -64,21 +65,21 @@ for pkg in sorted(pkgs):
         if c != 0:
             failures.append(f"[{pkg.name}] typecheck failed:\n{tail(o, 25)}")
     if "test" in scripts:
-        if pkg == ROOT / "packages" / "db" and not pg_up:
+        if pkg.name == "db" and pkg.parent.name == "packages" and not pg_up:
             notes.append(f"[{pkg.name}] tests skipped: Postgres :{POSTGRES_PORT} is not reachable (pnpm infra:up)")
             continue
         c, o = run(["pnpm", "run", "test"], cwd=pkg, timeout=deadline)
         if c != 0:
             failures.append(f"[{pkg.name}] tests failed:\n{tail(o, 40)}")
-if py:
+for w in sorted(py_roots):
     if not pg_up:
-        notes.append(f"[workers/media] pytest skipped: Postgres :{POSTGRES_PORT} is not reachable (test_jobs needs it)")
+        notes.append(f"[{rel(w)}] pytest skipped: Postgres :{POSTGRES_PORT} is not reachable (test_jobs needs it)")
     else:
-        w = ROOT / "workers" / "media"
-        pyexe = w / ".venv" / "bin" / "python"
-        c, o = run([str(pyexe) if pyexe.exists() else "python3", "-m", "pytest", "-q"], cwd=w, timeout=deadline)
+        # worktrees have no venv of their own; fall back to the main tree's
+        pyexe = next((c for c in (w / ".venv/bin/python", ROOT / rel(w) / ".venv/bin/python") if c.exists()), None)
+        c, o = run([str(pyexe) if pyexe else "python3", "-m", "pytest", "-q"], cwd=w, timeout=deadline)
         if c != 0:
-            failures.append(f"[workers/media] pytest failed:\n{tail(o, 40)}")
+            failures.append(f"[{rel(w)}] pytest failed:\n{tail(o, 40)}")
 
 if failures:
     print(json.dumps({
