@@ -16,6 +16,7 @@ YuNet + SFace indexing, agglomerative clustering, selfie search, guardian search
 - WEB-021 "Remove me from face search" guest control
 - ADM-018 Host-labelled clusters and People browse view
 - WRK-013 GPU / ONNX Runtime execution option
+- WEB-029 Re-enable "Remember my face" enrolment once revoke ships
 
 ## Definition of Done
 - [ ] Precision/recall of self-search on the benchmark set is recorded and the model decision is documented in an ADR.
