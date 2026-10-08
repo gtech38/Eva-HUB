@@ -31,6 +31,14 @@ export type Counter = { count: number; resetAt: Date };
 export interface RateLimitStore {
   /** Count one hit; starts a fresh window of `windowSec` when the current one has ended at `now`. */
   hit(keyHash: string, windowSec: number, now: Date): Promise<Counter>;
+  /**
+   * Take one of `max` concurrency slots. Granted: holders + 1 and the lease moves to now + ttlSec.
+   * Refused: nothing changes, `resetAt` says when the current lease lapses. A lapsed lease (holders
+   * that crashed without releasing) restarts at one holder.
+   */
+  lease(keyHash: string, max: number, ttlSec: number, now: Date): Promise<{ granted: boolean; resetAt: Date }>;
+  /** Give back one slot (never below zero). */
+  release(keyHash: string): Promise<void>;
   /** Delete windows that ended before `now`. */
   sweep(now: Date): Promise<void>;
 }
@@ -67,6 +75,33 @@ export async function limit(key: string, w: RateWindow, opts: LimitOptions = {})
   };
 }
 
+export type Slot = Omit<LimitResult, "remaining" | "tripped"> & {
+  /** Give the slot back. Idempotent; a no-op for a refused slot. Call it in `finally`. */
+  release(): Promise<void>;
+};
+
+/**
+ * Concurrency limit: at most `max` holders of `key` at once. `windowSec` is the lease TTL, the
+ * safety net for holders that die without releasing; keep it above the longest legitimate hold.
+ */
+export async function acquireSlot(key: string, w: RateWindow, opts: Omit<LimitOptions, "random"> = {}): Promise<Slot> {
+  const now = opts.now ?? new Date();
+  const store = opts.store ?? (defaultStore ??= pgRateLimitStore(defaultPrisma));
+  const keyHash = hashRateKey(key);
+  const { granted, resetAt } = await store.lease(keyHash, w.max, w.windowSec, now);
+  let held = granted;
+  return {
+    ok: granted,
+    retryAfterSec: granted ? 0 : Math.max(1, Math.ceil((resetAt.getTime() - now.getTime()) / 1000)),
+    keyHash,
+    async release() {
+      if (!held) return;
+      held = false;
+      await store.release(keyHash);
+    },
+  };
+}
+
 /**
  * Postgres store. One `INSERT ... ON CONFLICT DO UPDATE` per hit: the row lock taken by the upsert
  * serialises concurrent hits on a key, and the UPDATE re-reads the latest row, so no advisory lock
@@ -87,6 +122,26 @@ export function pgRateLimitStore(db: Pick<PrismaClient, "$queryRaw" | "$executeR
       const row = rows[0]!;
       return { count: Number(row.count), resetAt: new Date(row.resetAt) };
     },
+    async lease(keyHash, max, ttlSec, now) {
+      const ts = Prisma.sql`${now.toISOString()}::timestamptz`;
+      // The DO UPDATE ... WHERE makes a refusal a no-op that returns no row; one statement either way.
+      const rows = await db.$queryRaw<Array<{ resetAt: Date }>>(Prisma.sql`
+        INSERT INTO "RateLimit" ("key", "count", "resetAt")
+        VALUES (${keyHash}, 1, ${ts} + ${ttlSec}::int * interval '1 second')
+        ON CONFLICT ("key") DO UPDATE SET
+          "count"   = CASE WHEN "RateLimit"."resetAt" <= ${ts} THEN 1 ELSE "RateLimit"."count" + 1 END,
+          "resetAt" = EXCLUDED."resetAt"
+        WHERE "RateLimit"."resetAt" <= ${ts} OR "RateLimit"."count" < ${max}::int
+        RETURNING "resetAt"
+      `);
+      if (rows[0]) return { granted: true, resetAt: new Date(rows[0].resetAt) };
+      // Refused: read when the lease lapses, for Retry-After only (not part of the decision).
+      const cur = await db.$queryRaw<Array<{ resetAt: Date }>>(Prisma.sql`SELECT "resetAt" FROM "RateLimit" WHERE "key" = ${keyHash}`);
+      return { granted: false, resetAt: cur[0] ? new Date(cur[0].resetAt) : now };
+    },
+    async release(keyHash) {
+      await db.$executeRaw(Prisma.sql`UPDATE "RateLimit" SET "count" = GREATEST("count" - 1, 0) WHERE "key" = ${keyHash}`);
+    },
     async sweep(now) {
       await db.$executeRaw(Prisma.sql`DELETE FROM "RateLimit" WHERE "resetAt" < ${now.toISOString()}::timestamptz`);
     },
@@ -105,6 +160,18 @@ export function memoryRateLimitStore(): RateLimitStore {
           : { count: cur.count + 1, resetAt: cur.resetAt };
       rows.set(keyHash, next);
       return { ...next };
+    },
+    async lease(keyHash, max, ttlSec, now) {
+      const cur = rows.get(keyHash);
+      const lapsed = !cur || cur.resetAt.getTime() <= now.getTime();
+      if (!lapsed && cur.count >= max) return { granted: false, resetAt: cur.resetAt };
+      const resetAt = new Date(now.getTime() + ttlSec * 1000);
+      rows.set(keyHash, { count: lapsed ? 1 : cur.count + 1, resetAt });
+      return { granted: true, resetAt };
+    },
+    async release(keyHash) {
+      const cur = rows.get(keyHash);
+      if (cur) rows.set(keyHash, { ...cur, count: Math.max(0, cur.count - 1) });
     },
     async sweep(now) {
       for (const [k, v] of rows) if (v.resetAt.getTime() < now.getTime()) rows.delete(k);

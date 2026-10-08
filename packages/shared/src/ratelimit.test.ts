@@ -8,7 +8,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
-import { hashRateKey, limit, memoryRateLimitStore, pgRateLimitStore, type RateLimitStore } from "./ratelimit.ts";
+import { acquireSlot, hashRateKey, limit,memoryRateLimitStore, pgRateLimitStore, type RateLimitStore } from "./ratelimit.ts";
 
 const run = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const created: string[] = []; // hashes written by this run, deleted in afterAll
@@ -86,6 +86,42 @@ for (const [name, makeStore, enabled] of stores) {
       expect((await limit(live, { max: 1, windowSec: 1000 }, { store, now: at(21), random: never })).ok, "live window kept its count").toBe(false);
     });
   });
+
+  describe.skipIf(!enabled)(`acquireSlot() on the ${name}`, () => {
+    const lease = { max: 3, windowSec: 60 };
+
+    it("allows max concurrent holders, refuses the next, and frees a slot on release", async () => {
+      const store = makeStore();
+      const k = key(`${name}:slots`);
+      const held = [];
+      for (let i = 0; i < 3; i++) held.push(await acquireSlot(k, lease, { store, now: at(i) }));
+      expect(held.map((s) => s.ok)).toStrictEqual([true, true, true]);
+
+      const fourth = await acquireSlot(k, lease, { store, now: at(3) });
+      expect(fourth.ok).toBe(false);
+      expect(fourth.retryAfterSec).toBeGreaterThan(0);
+      await fourth.release(); // a refused slot's release is a no-op, so it cannot free someone else's
+
+      expect((await acquireSlot(k, lease, { store, now: at(4) })).ok, "still full").toBe(false);
+      await held[0]!.release();
+      await held[0]!.release(); // releasing twice frees one slot, not two
+      const next = await acquireSlot(k, lease, { store, now: at(5) });
+      expect(next.ok).toBe(true);
+      expect((await acquireSlot(k, lease, { store, now: at(6) })).ok).toBe(false);
+    });
+
+    it("leases held by a crashed process expire windowSec after the last granted acquire", async () => {
+      const store = makeStore();
+      const k = key(`${name}:stale`);
+      for (let i = 0; i < 3; i++) await acquireSlot(k, lease, { store, now: at(i * 10) }); // never released
+      // Every granted acquire pushes the lease out to now + windowSec (last one: t=20 -> t=80).
+      // Refused attempts must not keep a dead lease alive, or a retrying client would lock itself out.
+      const refused = await acquireSlot(k, lease, { store, now: at(30) });
+      expect(refused).toMatchObject({ ok: false, retryAfterSec: 50 });
+      expect((await acquireSlot(k, lease, { store, now: at(79) })).ok).toBe(false);
+      expect((await acquireSlot(k, lease, { store, now: at(80) })).ok).toBe(true);
+    });
+  });
 }
 
 describe.skipIf(!dbUp)(dbUp ? "limit() on Postgres only" : `limit() on Postgres only [skipped: ${skipReason}]`, () => {
@@ -98,6 +134,15 @@ describe.skipIf(!dbUp)(dbUp ? "limit() on Postgres only" : `limit() on Postgres 
     expect(results.filter((r) => r.tripped)).toHaveLength(1);
     const [row] = await prisma.$queryRaw<Array<{ count: number }>>`SELECT "count" FROM "RateLimit" WHERE "key" = ${hashRateKey(k)}`;
     expect(row?.count, "every hit counted exactly once").toBe(50);
+  });
+
+  it("20 parallel acquireSlot() calls grant exactly max slots", async () => {
+    const k = key("parallel-slots");
+    const slots = await Promise.all(Array.from({ length: 20 }, () => acquireSlot(k, { max: 3, windowSec: 60 }, { store, now: NOW })));
+    expect(slots.filter((s) => s.ok)).toHaveLength(3);
+    await Promise.all(slots.map((s) => s.release()));
+    const [row] = await prisma.$queryRaw<Array<{ count: number }>>`SELECT "count" FROM "RateLimit" WHERE "key" = ${hashRateKey(k)}`;
+    expect(row?.count, "all granted slots returned, refused ones never counted").toBe(0);
   });
 
   it("stores sha256(key), never the raw address", async () => {
