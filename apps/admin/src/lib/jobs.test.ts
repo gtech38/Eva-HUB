@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancelRefusal, etaSeconds, percentile, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
+import { cancelRefusal, etaSeconds, failureRate, fmtAge, fmtMs, percentile, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
@@ -125,6 +125,28 @@ describe("etaSeconds", () => {
 
   it("is zero when nothing is due, even without a duration sample", () => {
     expect(etaSeconds([t("PROCESS_PHOTO", 0, null)], 1)).toBe(0);
+  });
+});
+
+describe("formatting", () => {
+  it("fmtAge renders seconds, minutes and hours compactly", () => {
+    expect(fmtAge(null)).toBe("—");
+    expect(fmtAge(0)).toBe("0s");
+    expect(fmtAge(45)).toBe("45s");
+    expect(fmtAge(125)).toBe("2m 05s");
+    expect(fmtAge(3780)).toBe("1h 03m");
+    expect(fmtAge(2 * 86400 + 3600)).toBe("49h 00m");
+  });
+
+  it("fmtMs renders milliseconds below a second and seconds above", () => {
+    expect(fmtMs(null)).toBe("—");
+    expect(fmtMs(850.4)).toBe("850 ms");
+    expect(fmtMs(2140)).toBe("2.1 s");
+  });
+
+  it("failureRate is failed / (succeeded + failed) as a percentage, null with no outcomes", () => {
+    expect(failureRate({ succeededLastHour: 3, failedLastHour: 1 })).toBe(25);
+    expect(failureRate({ succeededLastHour: 0, failedLastHour: 0 })).toBeNull();
   });
 });
 

@@ -153,6 +153,31 @@ export function etaSeconds(types: ReadonlyArray<Pick<TypeSummary, "queued" | "p5
   return Math.ceil(ms / liveWorkers / 1000);
 }
 
+// ── display ───────────────────────────────────────────────────────────
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** 45s, 2m 05s, 1h 03m; "—" for unknown. */
+export function fmtAge(sec: number | null): string {
+  if (sec === null) return "—";
+  const s = Math.max(0, Math.floor(sec));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${pad2(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${pad2(Math.floor((s % 3600) / 60))}m`;
+}
+
+/** 850 ms, 2.1 s; "—" for unknown. */
+export function fmtMs(ms: number | null): string {
+  if (ms === null) return "—";
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** Percentage of recent outcomes that were failures; null when nothing finished. */
+export function failureRate(s: Pick<TypeSummary, "succeededLastHour" | "failedLastHour">): number | null {
+  const n = s.succeededLastHour + s.failedLastHour;
+  return n === 0 ? null : Math.round((s.failedLastHour / n) * 100);
+}
+
 // ── actions ───────────────────────────────────────────────────────────
 
 /** Why a job may not be cancelled, or null when it may. A RUNNING handler cannot be interrupted safely. */
