@@ -21,9 +21,7 @@ import re
 import sys
 
 from _common import (
-    ROOT,
-    PY_EXT, SRC_EXT, TS_EXT, Deadline, existing_test, file_from_payload, is_test, package_root,
-    read_payload, record_touched, rel, run, tail,
+    Deadline, PY_EXT, SRC_EXT, TS_EXT, bootstrap_problem, checkout_env, existing_test, file_from_payload, is_test, package_root, read_payload, record_touched, rel, run, tail, venv_python,
 )
 
 TOTAL_BUDGET_S = 170
@@ -77,10 +75,14 @@ if not is_test(path):
 
 # ── Type-check + tests ────────────────────────────────────────────────────────
 pkg = package_root(path)
-if pkg:
+not_ready = bootstrap_problem(path)
+if not_ready:
+    warnings.append(not_ready)
+env = checkout_env(path)
+if pkg and not not_ready:
     if path.suffix in TS_EXT:
         if not os.environ.get("HOOK_FAST"):
-            code, out = run(["pnpm", "exec", "tsc", "--noEmit", "--incremental", "--tsBuildInfoFile", ".tsbuildinfo-hook"], cwd=pkg, timeout=deadline)
+            code, out = run(["pnpm", "exec", "tsc", "--noEmit", "--incremental", "--tsBuildInfoFile", ".tsbuildinfo-hook"], cwd=pkg, timeout=deadline, env=env)
             if code not in (0,):
                 problems.append(f"Type errors in {rel(pkg)}:\n{tail(out, 30)}")
         test_file = path if is_test(path) else existing_test(path)
@@ -91,15 +93,15 @@ if pkg:
                 cmd = ["pnpm", "exec", "vitest", "run", str(test_file), "--reporter=dot"]
             else:
                 cmd = ["node", "--import", "tsx", "--test", str(test_file)]
-            code, out = run(cmd, cwd=pkg, timeout=deadline)
+            code, out = run(cmd, cwd=pkg, timeout=deadline, env=env)
             if code != 0:
                 problems.append(f"Tests failed ({rel(test_file)}):\n{tail(out, 40)}")
     elif path.suffix in PY_EXT:
         test_file = path if is_test(path) else existing_test(path)
         if test_file:
-            py = next((c for c in (pkg / ".venv/bin/python", ROOT / rel(pkg) / ".venv/bin/python") if c.exists()), pkg / ".venv/bin/python")
-            cmd = [str(py) if py.exists() else "python3", "-m", "pytest", "-q", "-x", str(test_file)]
-            code, out = run(cmd, cwd=pkg, timeout=deadline)
+            py = venv_python(pkg)
+            cmd = [str(py) if py else "python3", "-m", "pytest", "-q", "-x", str(test_file)]
+            code, out = run(cmd, cwd=pkg, timeout=deadline, env=env)
             if code != 0:
                 problems.append(f"pytest failed ({rel(test_file)}):\n{tail(out, 40)}")
 

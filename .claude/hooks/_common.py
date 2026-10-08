@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
@@ -59,24 +60,84 @@ def file_from_payload(p: dict) -> Path | None:
     return path if path.is_absolute() else ROOT / path
 
 
-def repo_root(path: Path) -> Path:
-    """The git checkout that owns `path`: the main tree or a linked worktree (which has a `.git` file).
+@lru_cache(maxsize=64)
+def _git_common_dir(checkout: Path) -> Path | None:
+    """Absolute git common dir of a checkout; equal for the main tree and all its linked worktrees."""
+    try:
+        r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                           cwd=checkout, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
 
-    Agents work in worktrees outside CLAUDE_PROJECT_DIR; resolving against the owning checkout keeps
-    the TDD gate and post-edit checks active there instead of silently treating the file as foreign.
+
+def main_tree() -> Path:
+    """The main checkout of this repository, even when the session itself runs in a worktree."""
+    common = _git_common_dir(ROOT.resolve())
+    return common.parent if common else ROOT.resolve()
+
+
+def repo_root(path: Path) -> Path | None:
+    """The checkout of *this* repository that owns `path`: the main tree or a linked worktree.
+
+    Agents work in worktrees outside CLAUDE_PROJECT_DIR; resolving against the owning checkout keeps the
+    TDD gate and post-edit checks active there. A checkout of any *other* repository returns None, so
+    its files pass through untouched (they are not our source).
     """
     p = path.resolve()
+    ours = _git_common_dir(ROOT.resolve())
     for parent in [p, *p.parents]:
         if (parent / ".git").exists():
-            return parent
-    return ROOT.resolve()
+            return parent if ours is not None and _git_common_dir(parent) == ours else None
+    return None
 
 
 def rel(path: Path) -> str:
+    """Path relative to the owning checkout of this repo; absolute (i.e. foreign) otherwise."""
+    root = repo_root(path)
+    if root is None:
+        return str(path.resolve())
     try:
-        return str(path.resolve().relative_to(repo_root(path)))
+        return str(path.resolve().relative_to(root))
     except ValueError:
-        return str(path)
+        return str(path.resolve())
+
+
+def venv_python(pkg: Path) -> Path | None:
+    """Python for a package: its own .venv, else the main tree's (worktrees have none)."""
+    root = repo_root(pkg)
+    rel_pkg = pkg.resolve().relative_to(root) if root else None
+    candidates = [pkg / ".venv/bin/python"] + ([main_tree() / rel_pkg / ".venv/bin/python"] if rel_pkg else [])
+    return next((c for c in candidates if c.exists()), None)
+
+
+def bootstrap_problem(path: Path) -> str | None:
+    """Why checks can't run in this checkout yet (fresh worktree), or None when it is ready."""
+    root = repo_root(path)
+    if root is None or root == main_tree():
+        return None
+    if not (root / "node_modules").exists():
+        return f"worktree {root} is not bootstrapped: run `pnpm install` there (checks skipped until then)"
+    return None
+
+
+def checkout_env(path: Path) -> dict[str, str] | None:
+    """Subprocess env for a checkout with no .env of its own: the main tree's .env under os.environ."""
+    root = repo_root(path)
+    if root is None or (root / ".env").exists():
+        return None
+    env_file = main_tree() / ".env"
+    if not env_file.exists():
+        return None
+    env = dict(os.environ)
+    for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        v = v.split(" #", 1)[0].strip().strip('"').strip("'")
+        env.setdefault(k.strip(), v)
+    return env
 
 
 def is_source(path: Path) -> bool:
@@ -163,10 +224,10 @@ class Deadline:
         return time.monotonic() >= self.end
 
 
-def run(cmd: list[str], cwd: Path, timeout: int | Deadline = 120) -> tuple[int, str]:
+def run(cmd: list[str], cwd: Path, timeout: int | Deadline = 120, env: dict[str, str] | None = None) -> tuple[int, str]:
     t = timeout.remaining() if isinstance(timeout, Deadline) else timeout
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=t)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=t, env=env)
         return r.returncode, (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {t}s: {' '.join(cmd)}"

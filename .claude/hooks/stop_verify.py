@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-from _common import ROOT, SRC_EXT, Deadline, port_open, read_payload, read_touched, rel, repo_root, run, tail
+from _common import ROOT, SRC_EXT, Deadline, bootstrap_problem, checkout_env, port_open, read_payload, read_touched, rel, repo_root, run, tail, venv_python
 
 TOTAL_BUDGET_S = 540
 POSTGRES_PORT = 5433
@@ -35,15 +35,22 @@ changed = read_touched(p)
 if changed is None:
     code, out = run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, timeout=20)
     changed = [l[3:].strip().strip('"') for l in out.splitlines() if l.strip()]
-paths = [Path(c) if Path(c).is_absolute() else ROOT / c for c in changed]
-src = [p for p in paths if p.exists() and str(p).endswith(VERIFY_EXT) and rel(p).startswith(("apps/", "packages/", "workers/"))]
+# `git status` (fallback when there is no ledger) only sees ROOT; worktree edits reach us via the ledger.
+paths = [(Path(c) if Path(c).is_absolute() else ROOT / c).resolve() for c in changed]
+src = [f for f in paths if f.exists() and str(f).endswith(VERIFY_EXT) and rel(f).startswith(("apps/", "packages/", "workers/"))]
 if not src:
     sys.exit(0)
 
 pkgs: set[Path] = set()
 py_roots: set[Path] = set()
+notes = []
 for path in src:
     top = repo_root(path)
+    why = bootstrap_problem(path)
+    if why:
+        if why not in notes:
+            notes.append(why)
+        continue
     for parent in [path, *path.parents]:
         if parent == top:
             break
@@ -55,29 +62,27 @@ for path in src:
             break
 
 failures = []
-notes = []
 pg_up = port_open(POSTGRES_PORT)
 for pkg in sorted(pkgs):
     pj = json.loads((pkg / "package.json").read_text())
     scripts = pj.get("scripts", {})
     if "typecheck" in scripts:
-        c, o = run(["pnpm", "run", "typecheck"], cwd=pkg, timeout=deadline)
+        c, o = run(["pnpm", "run", "typecheck"], cwd=pkg, timeout=deadline, env=checkout_env(pkg))
         if c != 0:
             failures.append(f"[{pkg.name}] typecheck failed:\n{tail(o, 25)}")
     if "test" in scripts:
         if pkg.name == "db" and pkg.parent.name == "packages" and not pg_up:
             notes.append(f"[{pkg.name}] tests skipped: Postgres :{POSTGRES_PORT} is not reachable (pnpm infra:up)")
             continue
-        c, o = run(["pnpm", "run", "test"], cwd=pkg, timeout=deadline)
+        c, o = run(["pnpm", "run", "test"], cwd=pkg, timeout=deadline, env=checkout_env(pkg))
         if c != 0:
             failures.append(f"[{pkg.name}] tests failed:\n{tail(o, 40)}")
 for w in sorted(py_roots):
     if not pg_up:
         notes.append(f"[{rel(w)}] pytest skipped: Postgres :{POSTGRES_PORT} is not reachable (test_jobs needs it)")
     else:
-        # worktrees have no venv of their own; fall back to the main tree's
-        pyexe = next((c for c in (w / ".venv/bin/python", ROOT / rel(w) / ".venv/bin/python") if c.exists()), None)
-        c, o = run([str(pyexe) if pyexe else "python3", "-m", "pytest", "-q"], cwd=w, timeout=deadline)
+        pyexe = venv_python(w)
+        c, o = run([str(pyexe) if pyexe else "python3", "-m", "pytest", "-q"], cwd=w, timeout=deadline, env=checkout_env(w))
         if c != 0:
             failures.append(f"[{rel(w)}] pytest failed:\n{tail(o, 40)}")
 

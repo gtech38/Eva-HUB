@@ -113,6 +113,9 @@ jobs:
           python scripts/download_models.py
           python -m pytest -q
 
+      - name: Claude hook tests
+        run: python -m pytest -q -p no:cacheprovider .claude/hooks/tests
+
       - name: Backlog files parse
         run: |
           if [ -f scripts/backlog-sync.mjs ]; then node scripts/backlog-sync.mjs --check; else echo "no backlog script yet; skipping"; fi

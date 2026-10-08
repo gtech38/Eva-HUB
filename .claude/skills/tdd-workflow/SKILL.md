@@ -66,6 +66,16 @@ Prefer testing the seam the ticket names (a `lib/` function, a handler, `can()`)
 - **No sleeps**: poll with a bounded loop or inject the clock.
 - **Mailpit as oracle** in integration tests: `GET http://localhost:8025/api/v1/messages` then `/api/v1/message/<ID>` to read the magic link.
 
+## Worktrees
+
+Agents usually work in a linked worktree (`git worktree add <scratch>/wt-<id> -b <id>/<slug> dev`). The hooks resolve every path against the checkout of *this* repository that owns it, so the TDD gate, post-edit checks and Stop verification apply inside worktrees exactly as in the main tree; checkouts of other repositories pass through untouched.
+
+- Run `pnpm install` in the worktree first. Until `node_modules` exists the hooks skip checks and say so ("worktree … is not bootstrapped").
+- A worktree has no `.env`; the hooks pass the main tree's `.env` to every check they run. For your own commands, symlink it: `ln -s "<main>/.env" .env && ln -s ../../.env packages/db/.env`.
+- Python checks use the worktree's `.venv` if present, otherwise the main tree's `workers/media/.venv`.
+- The touched-file ledger (`.claude/.touched/<session>`) stores absolute paths, so the Stop hook verifies the worktree's packages, not the main tree's.
+- Hook behaviour is covered by `.claude/hooks/tests/` (`workers/media/.venv/bin/python -m pytest -q .claude/hooks/tests`), which CI runs.
+
 ## Commands
 
 ```bash
