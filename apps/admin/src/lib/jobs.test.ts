@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { percentile, summarizeJobs, type JobBucket } from "./jobs";
+import { etaSeconds, percentile, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
@@ -89,5 +89,48 @@ describe("summarizeJobs", () => {
     const e = summarizeJobs([], NOW);
     expect(e.types).toEqual([]);
     expect(e.total).toMatchObject({ queued: 0, oldestDueSec: null, p50Ms: null, p95Ms: null });
+  });
+});
+
+describe("workerStatuses", () => {
+  const beat = (workerId: string, secondsAgo: number): Heartbeat => ({ workerId, lastSeenAt: ago(secondsAgo), version: "0.1.0", hostname: "h" });
+
+  it("a worker seen within 30 s is live; one silent for 30 s or more is not", () => {
+    const ws = workerStatuses([beat("a:1", 29), beat("b:2", 30), beat("c:3", 600)], [], NOW);
+    expect(ws.map((w) => [w.workerId, w.live])).toEqual([["a:1", true], ["b:2", false], ["c:3", false]]);
+  });
+
+  it("a silent worker still holding a RUNNING job counts as live and busy (long handlers skip beats)", () => {
+    const [w] = workerStatuses([beat("zip:9", 300)], ["zip:9"], NOW);
+    expect(w).toMatchObject({ live: true, busy: true });
+  });
+
+  it("lists live workers first, most recently seen first", () => {
+    const ws = workerStatuses([beat("old:1", 900), beat("b:2", 10), beat("a:1", 2)], [], NOW);
+    expect(ws.map((w) => w.workerId)).toEqual(["a:1", "b:2", "old:1"]);
+  });
+});
+
+describe("etaSeconds", () => {
+  const t = (type: string, queued: number, p50Ms: number | null) => ({ type, queued, p50Ms }) as TypeSummary;
+
+  it("is queued x p50 summed over types, divided by live workers", () => {
+    expect(etaSeconds([t("PROCESS_PHOTO", 100, 2000), t("INDEX_FACES", 50, 400)], 2)).toBe(110);
+  });
+
+  it("is null with no live workers, and when a type with work has no recent duration", () => {
+    expect(etaSeconds([t("PROCESS_PHOTO", 100, 2000)], 0)).toBeNull();
+    expect(etaSeconds([t("PROCESS_PHOTO", 1, null)], 1)).toBeNull();
+  });
+
+  it("is zero when nothing is due, even without a duration sample", () => {
+    expect(etaSeconds([t("PROCESS_PHOTO", 0, null)], 1)).toBe(0);
+  });
+});
+
+describe("queueHealth", () => {
+  it("exposes queue.oldestDueSec and workers.live for alerting", () => {
+    const s = summarizeJobs([bucket({ type: "X", status: "QUEUED", due: true, count: 4, oldestRunAt: ago(90) })], NOW);
+    expect(queueHealth(s, 0)).toEqual({ queue: { depth: 4, oldestDueSec: 90, retrying: 0, dead: 0 }, workers: { live: 0 } });
   });
 });

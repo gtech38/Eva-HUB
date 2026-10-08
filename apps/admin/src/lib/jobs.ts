@@ -116,3 +116,47 @@ export function summarizeJobs(rows: readonly JobBucket[], now: Date): JobsSummar
     .map(([type, acc]) => ({ type, ...finish(acc, now) }));
   return { types, total: finish(total, now), byStatus };
 }
+
+// ── workers ───────────────────────────────────────────────────────────
+
+/** A worker is live when its heartbeat (written every ~15 s by consume_forever) is younger than this. */
+export const LIVE_WINDOW_MS = 30_000;
+
+export type Heartbeat = { workerId: string; lastSeenAt: Date; version: string | null; hostname: string | null };
+export type WorkerStatus = Heartbeat & { live: boolean; busy: boolean };
+
+/**
+ * `busyIds` are the `lockedBy` values of RUNNING jobs. The consumer beats between jobs, so a worker
+ * inside a long handler (a big BUILD_ZIP) goes quiet; holding a RUNNING lock keeps it live. A worker
+ * that crashed mid-job stops counting once the stale-lock sweep releases its job.
+ */
+export function workerStatuses(beats: readonly Heartbeat[], busyIds: readonly string[], now: Date): WorkerStatus[] {
+  const busy = new Set(busyIds);
+  return beats
+    .map((b) => {
+      const isBusy = busy.has(b.workerId);
+      return { ...b, busy: isBusy, live: isBusy || now.getTime() - b.lastSeenAt.getTime() < LIVE_WINDOW_MS };
+    })
+    .sort((a, b) => Number(b.live) - Number(a.live) || b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
+}
+
+/** "How long until done": sum of queued x p50 per type, spread over live workers. Whole seconds, or null when unknown. */
+export function etaSeconds(types: ReadonlyArray<Pick<TypeSummary, "queued" | "p50Ms">>, liveWorkers: number): number | null {
+  let ms = 0;
+  for (const t of types) {
+    if (t.queued === 0) continue;
+    if (t.p50Ms === null) return null;
+    ms += t.queued * t.p50Ms;
+  }
+  if (ms === 0) return 0;
+  if (liveWorkers <= 0) return null;
+  return Math.ceil(ms / liveWorkers / 1000);
+}
+
+/** The alerting slice of the dashboard, for the health endpoint (INF-014). */
+export function queueHealth(s: JobsSummary, liveWorkers: number) {
+  return {
+    queue: { depth: s.total.queued, oldestDueSec: s.total.oldestDueSec, retrying: s.total.retrying, dead: s.total.dead },
+    workers: { live: liveWorkers },
+  };
+}
