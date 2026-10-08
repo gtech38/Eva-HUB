@@ -1,59 +1,68 @@
 import { describe, expect, it } from "vitest";
 import { THEMES } from "@/themes";
-import { OG_CACHE_CONTROL, ogCard, ogImageResponse } from "./ogCard.tsx";
+import { ogCard, ogCardForEvent, titleFontSize } from "./ogCard.tsx";
 
-// The three original themes (docs/05). A palette change shows up as a snapshot diff.
-const THEME_VARS = {
-  LUXURY: THEMES.LUXURY.vars,
-  ROMANTIC: THEMES.ROMANTIC.vars,
-  HINDU_TRADITIONAL: THEMES.HINDU_TRADITIONAL.vars,
+const event = {
+  title: { en: "Priya & Arjun", te: "ప్రియ & అర్జున్" },
+  defaultLocale: "en",
+  theme: "HINDU_TRADITIONAL" as const,
+  themeOverrides: { monogram: "P&A", accent: "#123456" },
 };
 
-const event = { eventTitle: { en: "Priya & Arjun", te: "ప్రియ & అర్జున్" }, defaultLocale: "en", monogram: "P&A" };
+describe("ogCardForEvent (the card is a function of these event fields only)", () => {
+  it("takes the default-locale title, the monogram override and the theme palette", () => {
+    const v = THEMES.HINDU_TRADITIONAL.vars;
+    expect(ogCardForEvent(event)).toEqual({
+      title: "Priya & Arjun",
+      monogram: "P&A",
+      background: v["--bg"],
+      foreground: v["--fg"],
+      accent: v["--accent"],
+      muted: v["--muted"],
+    });
+  });
 
-/** Width/height from the PNG IHDR chunk. */
-function pngSize(buf: Uint8Array) {
-  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  expect([...buf.slice(0, 8)]).toEqual(sig);
-  const v = new DataView(buf.buffer, buf.byteOffset);
-  return { width: v.getUint32(16), height: v.getUint32(20) };
-}
+  it("uses the event's default locale, never the visitor's (the asset is cached publicly)", () => {
+    expect(ogCardForEvent({ ...event, defaultLocale: "te" }).title).toBe("ప్రియ & అర్జున్");
+    expect(ogCardForEvent({ ...event, defaultLocale: "xx" }).title).toBe("Priya & Arjun");
+  });
 
-describe("ogCard (the OG image shows the sign-in screen's title and monogram only)", () => {
-  it("snapshot: card per theme carries title, monogram and theme colours", () => {
-    for (const [key, vars] of Object.entries(THEME_VARS)) {
-      expect(ogCard({ ...event, vars }), key).toMatchSnapshot(key);
+  it("has an empty monogram when the event has none, and an unknown theme falls back to luxury", () => {
+    const card = ogCardForEvent({ ...event, themeOverrides: null, theme: "NOPE" as never });
+    expect(card.monogram).toBe("");
+    expect(card.background).toBe(THEMES.LUXURY.vars["--bg"]);
+  });
+
+  it("ignores anything else on the event (dates, hero, status)", () => {
+    const leaky = { ...event, startsOn: new Date("2026-12-12"), heroKey: "x.webp", status: "LIVE" } as typeof event;
+    expect(Object.keys(ogCardForEvent(leaky)).sort()).toEqual(["accent", "background", "foreground", "monogram", "muted", "title"]);
+  });
+
+  // Colour mapping per theme (not an image snapshot; pixel snapshots belong to #102).
+  it("maps each of the three original themes' palettes", () => {
+    for (const key of ["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL"] as const) {
+      expect(ogCardForEvent({ ...event, theme: key }), key).toMatchSnapshot(key);
     }
   });
+});
 
-  it("uses the event's default locale, not the visitor's language (the asset is publicly cached)", () => {
-    const card = ogCard({ ...event, defaultLocale: "te", vars: THEME_VARS.LUXURY });
-    expect(card.title).toBe("ప్రియ & అర్జున్");
-    expect(ogCard({ ...event, defaultLocale: "xx", vars: THEME_VARS.LUXURY }).title).toBe("Priya & Arjun");
-  });
-
-  it("carries nothing but title, monogram and colours", () => {
-    const leaky = { ...event, vars: THEME_VARS.LUXURY, startsOn: "2026-12-12", heroUrl: "x.webp" } as Parameters<typeof ogCard>[0];
-    expect(Object.keys(ogCard(leaky)).sort()).toEqual(["accent", "background", "foreground", "monogram", "muted", "title"]);
-  });
-
+describe("ogCard", () => {
   it("falls back to neutral colours when a theme lacks a variable", () => {
-    const card = ogCard({ ...event, monogram: "", vars: {} });
+    const card = ogCard({ title: "T", monogram: "", vars: {} });
     expect(card).toMatchObject({ monogram: "", background: expect.stringMatching(/^#/), foreground: expect.stringMatching(/^#/) });
   });
+});
 
-  it("renders a 1200x630 PNG that may be cached publicly for a day", async () => {
-    for (const vars of Object.values(THEME_VARS)) {
-      const res = ogImageResponse(ogCard({ ...event, vars }));
-      expect(res.headers.get("content-type")).toBe("image/png");
-      expect(res.headers.get("cache-control")).toBe(OG_CACHE_CONTROL);
-      expect(OG_CACHE_CONTROL).toBe("public, max-age=86400");
-      expect(pngSize(new Uint8Array(await res.arrayBuffer()))).toEqual({ width: 1200, height: 630 });
+describe("titleFontSize counts graphemes, not UTF-16 units", () => {
+  it("short Telugu and Hindi titles are sized like short Latin ones", () => {
+    // 12 and 15 graphemes, but 25 UTF-16 code units each.
+    for (const s of ["శ్రీ ప్రియ & శ్రీ అర్జున్", "प्रिया और अर्जुन का विवाह"]) {
+      expect(s.length, s).toBeGreaterThan(24);
+      expect(titleFontSize(s), s).toBe(titleFontSize("Priya & Arjun"));
     }
   });
-
-  it("renders without a monogram (Liskov: every theme handles an empty monogram)", async () => {
-    const res = ogImageResponse(ogCard({ ...event, monogram: "", vars: THEME_VARS.ROMANTIC }));
-    expect(pngSize(new Uint8Array(await res.arrayBuffer()))).toEqual({ width: 1200, height: 630 });
+  it("shrinks long titles", () => {
+    expect(titleFontSize("x".repeat(30))).toBeLessThan(titleFontSize("x".repeat(10)));
+    expect(titleFontSize("x".repeat(60))).toBeLessThan(titleFontSize("x".repeat(30)));
   });
 });

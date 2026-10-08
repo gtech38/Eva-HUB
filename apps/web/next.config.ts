@@ -8,7 +8,8 @@ loadEnv({ path: path.resolve(process.cwd(), "../../.env") });
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@hub/db", "@hub/shared"],
-  serverExternalPackages: ["@prisma/client", "nodemailer", "@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner"],
+  // satori + resvg render /og.png (resvg is a native addon; neither should be bundled).
+  serverExternalPackages: ["@prisma/client", "nodemailer", "@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner", "satori", "@resvg/resvg-js"],
   poweredByHeader: false,
   images: { unoptimized: true },
   async headers() {

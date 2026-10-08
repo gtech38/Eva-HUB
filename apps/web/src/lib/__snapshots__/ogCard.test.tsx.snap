@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`ogCard (the OG image shows the sign-in screen's title and monogram only) > snapshot: card per theme carries title, monogram and theme colours > HINDU_TRADITIONAL 1`] = `
+exports[`ogCardForEvent (the card is a function of these event fields only) > maps each of the three original themes' palettes > HINDU_TRADITIONAL 1`] = `
 {
   "accent": "#450000",
   "background": "#f6f4ee",
@@ -11,7 +11,7 @@ exports[`ogCard (the OG image shows the sign-in screen's title and monogram only
 }
 `;
 
-exports[`ogCard (the OG image shows the sign-in screen's title and monogram only) > snapshot: card per theme carries title, monogram and theme colours > LUXURY 1`] = `
+exports[`ogCardForEvent (the card is a function of these event fields only) > maps each of the three original themes' palettes > LUXURY 1`] = `
 {
   "accent": "#c9a961",
   "background": "#f7ead7",
@@ -22,7 +22,7 @@ exports[`ogCard (the OG image shows the sign-in screen's title and monogram only
 }
 `;
 
-exports[`ogCard (the OG image shows the sign-in screen's title and monogram only) > snapshot: card per theme carries title, monogram and theme colours > ROMANTIC 1`] = `
+exports[`ogCardForEvent (the card is a function of these event fields only) > maps each of the three original themes' palettes > ROMANTIC 1`] = `
 {
   "accent": "#b88792",
   "background": "#f6f1e8",

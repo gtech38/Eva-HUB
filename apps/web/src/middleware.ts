@@ -5,6 +5,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { isLocale } from "@hub/shared/i18n";
+import { HUB_HOST_HEADER, hostOf } from "@/lib/hubHost";
 
 export const LANG_COOKIE = "hub_lang";
 
@@ -12,7 +13,10 @@ const ROOT_DOMAIN = (process.env.ROOT_DOMAIN ?? "localhost").toLowerCase();
 
 export function middleware(req: NextRequest) {
   const url = req.nextUrl;
-  const host = (req.headers.get("host") ?? "").toLowerCase().split(":")[0];
+  const host = hostOf(req.headers.get("host"));
+  // Trusted host for handlers: always overwritten here, so a client cannot supply it.
+  const reqHeaders = new Headers(req.headers);
+  reqHeaders.set(HUB_HOST_HEADER, host);
 
   // Note: every matched request is rewritten below, so the internal `/sites/*` and
   // `/root` segments are never reachable by their literal path.
@@ -30,14 +34,13 @@ export function middleware(req: NextRequest) {
   if (isRoot) {
     const rewritten = url.clone();
     rewritten.pathname = `/root${url.pathname === "/" ? "" : url.pathname}`;
-    return NextResponse.rewrite(rewritten);
+    return NextResponse.rewrite(rewritten, { request: { headers: reqHeaders } });
   }
 
   const slug = host.split(".")[0];
   const rewritten = url.clone();
   rewritten.pathname = `/sites/${slug}${url.pathname === "/" ? "" : url.pathname}`;
   // Forward slug + original path as *request* headers so server components can read them.
-  const reqHeaders = new Headers(req.headers);
   reqHeaders.set("x-hub-slug", slug);
   reqHeaders.set("x-hub-path", url.pathname);
   return NextResponse.rewrite(rewritten, { request: { headers: reqHeaders } });
@@ -45,6 +48,13 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   // Skip Next internals, API routes (they read Host themselves), and static files --
-  // except /og.png, which is per site (sites/[slug]/og.png).
-  matcher: ["/((?!_next/|api/|robots\\.txt|favicon\\.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp|css|js|map|txt|woff2?)$).*)", "/og.png"],
+  // except /og.png, which is per site (sites/[slug]/og.png). Literal /sites/* and /root/*
+  // paths always run middleware, so they are rewritten (404) and never reach a route
+  // without a trusted x-hub-host.
+  matcher: [
+    "/((?!_next/|api/|robots\\.txt|favicon\\.ico|.*\\.(?:png|jpg|jpeg|svg|ico|webp|css|js|map|txt|woff2?)$).*)",
+    "/og.png",
+    "/sites/:path*",
+    "/root/:path*",
+  ],
 };
