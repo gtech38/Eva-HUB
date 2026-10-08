@@ -15,7 +15,12 @@ yet, stayed QUEUED, and the next test's single claim picked it up instead of its
 """
 from __future__ import annotations
 
+import threading
+import time
+import uuid
 from datetime import timedelta
+
+import pytest
 
 from hub_worker import jobs
 from hub_worker.handlers import cluster_faces
@@ -176,6 +181,94 @@ def test_cleanup_leaves_no_row_the_test_created(queue, conn):
     with conn.cursor() as cur:
         cur.execute('SELECT id FROM "Job" WHERE id = ANY(%s)', (created,))
         assert cur.fetchall() == []
+
+
+def test_finished_at_is_stamped_on_success_failure_and_death(queue):
+    """ADM-022: the dashboard's "succeeded/failed in the last hour" and durations read finishedAt."""
+    ok = queue.enqueue()
+    queue.run_job({queue.type: lambda c, j: None}, ok)
+    row = queue.row(ok)
+    assert row["finishedAt"] is not None and row["finishedAt"] >= row["lockedAt"]
+
+    def boom(c, j):
+        raise RuntimeError("kaboom")
+
+    bad = queue.enqueue(max_attempts=1)
+    queue.run_job({queue.type: boom}, bad)
+    row = queue.row(bad)
+    assert row["status"] == "DEAD" and row["finishedAt"] is not None
+
+
+# ── worker heartbeat (ADM-022) ────────────────────────────────────────
+
+def _heartbeat(conn, worker_id):
+    with conn.cursor() as cur:
+        cur.execute('SELECT * FROM "WorkerHeartbeat" WHERE "workerId" = %s', (worker_id,))
+        return cur.fetchone()
+
+
+@pytest.fixture
+def worker_id(conn):
+    wid = f"pytest-heartbeat-{uuid.uuid4().hex[:8]}"
+    yield wid
+    with conn.cursor() as cur:
+        cur.execute('DELETE FROM "WorkerHeartbeat" WHERE "workerId" = %s', (wid,))
+
+
+def test_heartbeat_written_within_5s_of_consumer_start(queue, conn, worker_id):
+    stop = threading.Event()
+    t = threading.Thread(
+        target=jobs.consume_forever,
+        kwargs=dict(handlers={queue.type: lambda c, j: None}, stop=stop, poll_interval_s=0.05,
+                    worker_id=worker_id, only_types=[queue.type]),
+        daemon=True,
+    )
+    t0 = time.monotonic()
+    t.start()
+    try:
+        while (row := _heartbeat(conn, worker_id)) is None:
+            assert time.monotonic() - t0 < 5, "no heartbeat within 5 s of consumer start"
+            time.sleep(0.02)
+    finally:
+        stop.set()
+        t.join(timeout=5)
+    assert not t.is_alive()
+    assert row["hostname"] and row["version"]
+    with conn.cursor() as cur:
+        cur.execute('SELECT now() - "lastSeenAt" < interval \'10 seconds\' AS fresh FROM "WorkerHeartbeat" WHERE "workerId" = %s', (worker_id,))
+        assert cur.fetchone()["fresh"]
+
+
+def test_heartbeat_is_throttled_to_one_write_per_interval(conn, worker_id):
+    """No write amplification: the poll loop runs every ~1 s but beats once per interval."""
+    clock = [1000.0]
+    hb = jobs.Heartbeat(worker_id, interval_s=15, clock=lambda: clock[0])
+    assert hb.beat_if_due(conn) is True
+    first = _heartbeat(conn, worker_id)["lastSeenAt"]
+    clock[0] += 14.9
+    assert hb.beat_if_due(conn) is False
+    assert _heartbeat(conn, worker_id)["lastSeenAt"] == first
+    clock[0] += 0.1
+    time.sleep(0.005)  # timestamp(3): make the second write observably later
+    assert hb.beat_if_due(conn) is True
+    assert _heartbeat(conn, worker_id)["lastSeenAt"] > first
+
+
+def test_prune_heartbeats_removes_only_long_silent_workers(conn, worker_id):
+    jobs.Heartbeat(worker_id).beat_if_due(conn)
+    gone = f"{worker_id}-gone"
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO "WorkerHeartbeat"("workerId", "lastSeenAt") VALUES (%s, now() - interval '10 years')""",
+            (gone,),
+        )
+    try:
+        assert jobs.prune_heartbeats(conn, older_than_s=NINE_YEARS_S) >= 1
+        assert _heartbeat(conn, gone) is None
+        assert _heartbeat(conn, worker_id) is not None
+    finally:
+        with conn.cursor() as cur:
+            cur.execute('DELETE FROM "WorkerHeartbeat" WHERE "workerId" = %s', (gone,))
 
 
 def test_backoff_grows_and_caps():

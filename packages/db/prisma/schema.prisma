@@ -771,6 +771,7 @@ model Job {
   lastError String?
   dedupeKey String?   @unique
   createdAt DateTime  @default(now())
+  finishedAt DateTime? // worker stamps on success and on every failure (retry or DEAD); jobs dashboard (ADM-022)
 
   @@index([status, runAt])
 }
@@ -786,4 +787,13 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([studioId, createdAt])
+}
+
+/// One row per job consumer process (workers/media consume_forever), upserted at most every ~15 s.
+/// Live = lastSeenAt within 30 s (or holding a RUNNING job). Rows silent for a day are pruned by the worker.
+model WorkerHeartbeat {
+  workerId   String   @id // settings.worker_id, "host:pid"; equals Job.lockedBy
+  lastSeenAt DateTime @default(now())
+  version    String?
+  hostname   String?
 }

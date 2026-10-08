@@ -65,6 +65,15 @@ package), so no symlink is needed and the cwd does not matter. Real environment 
   The row never rests in `FAILED` because the claim query only looks at `QUEUED`; "failed, retrying"
   is `status='QUEUED' AND "lastError" IS NOT NULL`.
 - `RUNNING` rows locked for more than 60 min (crashed worker) are released once a minute.
+- `finishedAt` is stamped on success and on every failure (retry, `DEAD`, stale-lock release); a `Requeue`
+  return does not stamp it. The admin Jobs dashboard reads it for "succeeded/failed in the last hour" and
+  p50/p95 duration (`finishedAt - lockedAt`, successes only; failures clear `lockedAt`).
+- Heartbeat: `consume_forever` upserts `WorkerHeartbeat(workerId = WORKER_ID or host:pid)` on its first loop
+  iteration and then at most every 15 s (between jobs, so a long handler skips beats; the dashboard also
+  counts a worker holding a `RUNNING` lock as live). Rows silent for 24 h are pruned in the minutely housekeeping.
+  `consume_forever(worker_id=, only_types=)` lets a process (or a test) serve a subset of types under its own id.
+- Cancelled jobs (admin "Cancel", only while `QUEUED`) become `DEAD` with `lastError = 'cancelled …'`; Retry or a
+  dedupe re-enqueue brings them back.
 - `dedupeKey` enqueue (`jobs.enqueue`): insert, or on conflict refresh a `QUEUED` row (payload, later
   `runAt`), reset a `SUCCEEDED`/`DEAD`/`FAILED` row to `QUEUED`, and leave a `RUNNING` row alone.
   If the web app wants the same re-run semantics it should use the same `ON CONFLICT ... DO UPDATE ... WHERE status <> 'RUNNING'`

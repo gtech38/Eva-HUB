@@ -22,8 +22,11 @@ for atomic sections.
 """
 from __future__ import annotations
 
+import importlib.metadata
 import logging
+import os
 import random
+import socket
 import threading
 import time
 import traceback
@@ -146,7 +149,8 @@ def claim(conn: psycopg.Connection, worker_id: str, only_types: list[str] | None
 def mark_succeeded(conn: psycopg.Connection, job_id: int) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            'UPDATE "Job" SET status = \'SUCCEEDED\'::"JobStatus", "lastError" = NULL WHERE id = %s',
+            '''UPDATE "Job" SET status = 'SUCCEEDED'::"JobStatus", "lastError" = NULL, "finishedAt" = now()
+                WHERE id = %s''',
             (job_id,),
         )
 
@@ -177,7 +181,7 @@ def mark_failed(conn: psycopg.Connection, job: Mapping[str, Any], error: str) ->
                 '''UPDATE "Job"
                       SET status = 'QUEUED'::"JobStatus",
                           "runAt" = now() + make_interval(secs => %s),
-                          "lastError" = %s,
+                          "lastError" = %s, "finishedAt" = now(),
                           "lockedBy" = NULL, "lockedAt" = NULL
                     WHERE id = %s''',
                 (float(delay), error, job["id"]),
@@ -185,7 +189,7 @@ def mark_failed(conn: psycopg.Connection, job: Mapping[str, Any], error: str) ->
             return "QUEUED"
         cur.execute(
             '''UPDATE "Job"
-                  SET status = 'DEAD'::"JobStatus", "lastError" = %s,
+                  SET status = 'DEAD'::"JobStatus", "lastError" = %s, "finishedAt" = now(),
                       "lockedBy" = NULL, "lockedAt" = NULL
                 WHERE id = %s''',
             (error, job["id"]),
@@ -200,9 +204,73 @@ def requeue_stale(conn: psycopg.Connection, older_than_s: float = STALE_LOCK_S) 
             '''UPDATE "Job"
                   SET status = CASE WHEN attempts >= "maxAttempts" THEN 'DEAD'::"JobStatus" ELSE 'QUEUED'::"JobStatus" END,
                       "lastError" = 'stale lock released (worker ' || COALESCE("lockedBy", '?') || ')',
+                      "finishedAt" = now(),
                       "lockedBy" = NULL, "lockedAt" = NULL
                 WHERE status = 'RUNNING'::"JobStatus"
                   AND "lockedAt" < now() - make_interval(secs => %s)''',
+            (float(older_than_s),),
+        )
+        return cur.rowcount
+
+
+# ── heartbeat ─────────────────────────────────────────────────────────
+
+HEARTBEAT_INTERVAL_S = 15.0          # admin counts a worker live when seen < 30 s ago
+HEARTBEAT_RETENTION_S = 24 * 3600    # rows of workers silent this long are pruned
+
+
+def worker_version() -> str:
+    """GIT_SHA when the deploy sets it, else the package version."""
+    sha = os.getenv("GIT_SHA")
+    if sha:
+        return sha[:12]
+    try:
+        return importlib.metadata.version("hub-media-worker")
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover - source checkout without install
+        return "dev"
+
+
+class Heartbeat:
+    """Upserts this consumer's `WorkerHeartbeat` row, at most once per `interval_s`.
+
+    Called on every poll-loop iteration; the throttle keeps it to one single-row UPDATE per
+    interval per worker (no index on lastSeenAt, so the update stays HOT).
+    """
+
+    def __init__(
+        self,
+        worker_id: str,
+        interval_s: float = HEARTBEAT_INTERVAL_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.worker_id = worker_id
+        self.interval_s = interval_s
+        self._clock = clock
+        self._last: float | None = None
+        self._version = worker_version()
+        self._hostname = socket.gethostname()
+
+    def beat_if_due(self, conn: psycopg.Connection) -> bool:
+        now = self._clock()
+        if self._last is not None and now - self._last < self.interval_s:
+            return False
+        with conn.cursor() as cur:
+            cur.execute(
+                '''INSERT INTO "WorkerHeartbeat"("workerId", "lastSeenAt", version, hostname)
+                   VALUES (%s, now(), %s, %s)
+                   ON CONFLICT ("workerId") DO UPDATE
+                      SET "lastSeenAt" = now(), version = EXCLUDED.version, hostname = EXCLUDED.hostname''',
+                (self.worker_id, self._version, self._hostname),
+            )
+        self._last = now
+        return True
+
+
+def prune_heartbeats(conn: psycopg.Connection, older_than_s: float = HEARTBEAT_RETENTION_S) -> int:
+    """Drop rows of workers that have been silent for `older_than_s` (restarts get a new host:pid id)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            'DELETE FROM "WorkerHeartbeat" WHERE "lastSeenAt" < now() - make_interval(secs => %s)',
             (float(older_than_s),),
         )
         return cur.rowcount
@@ -265,29 +333,48 @@ def run_once(
     return job
 
 
+def _beat(heartbeat: Heartbeat, conn: psycopg.Connection) -> None:
+    """A heartbeat failure must not stop job processing; connection loss still goes to the reconnect path."""
+    try:
+        heartbeat.beat_if_due(conn)
+    except psycopg.OperationalError:
+        raise
+    except psycopg.Error as exc:
+        log.warning("heartbeat write failed: %s", exc)
+
+
 def consume_forever(
     handlers: Mapping[str, Handler] | None = None,
     stop: threading.Event | None = None,
     poll_interval_s: float | None = None,
+    worker_id: str | None = None,
+    only_types: list[str] | None = None,
 ) -> None:
-    """Poll loop: claim+run until the queue is empty, then sleep ~1 s with jitter."""
+    """Poll loop: claim+run until the queue is empty, then sleep ~1 s with jitter.
+
+    Beats `WorkerHeartbeat` on the first iteration and then at most every HEARTBEAT_INTERVAL_S.
+    """
     handlers = handlers or default_handlers()
     stop = stop or threading.Event()
     poll = poll_interval_s if poll_interval_s is not None else settings.poll_interval_s
+    worker_id = worker_id or settings.worker_id
+    heartbeat = Heartbeat(worker_id)
     conn = connect(autocommit=True)
     last_housekeeping = 0.0
-    log.info("consumer %s started; handlers: %s", settings.worker_id, ", ".join(sorted(handlers)))
+    log.info("consumer %s started; handlers: %s", worker_id, ", ".join(sorted(handlers)))
     while not stop.is_set():
         try:
             if conn.closed:
                 conn = connect(autocommit=True)
+            _beat(heartbeat, conn)
             now = time.monotonic()
             if now - last_housekeeping > 60:
                 n = requeue_stale(conn)
                 if n:
                     log.warning("released %d stale RUNNING job(s)", n)
+                prune_heartbeats(conn)
                 last_housekeeping = now
-            ran = run_once(conn, handlers)
+            ran = run_once(conn, handlers, worker_id=worker_id, only_types=only_types)
             if ran is not None:
                 continue  # drain without sleeping
         except psycopg.OperationalError as exc:
