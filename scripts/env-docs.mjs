@@ -24,6 +24,10 @@ const END = "<!-- env-docs:end -->";
 const args = process.argv.slice(2);
 const check = args.includes("--check");
 const rootArg = args.indexOf("--root");
+if (rootArg >= 0 && (!args[rootArg + 1] || args[rootArg + 1].startsWith("--"))) {
+  console.error("env-docs: --root requires a directory");
+  process.exit(1);
+}
 const ROOT = rootArg >= 0 ? resolve(args[rootArg + 1]) : resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const errors = [];
@@ -94,6 +98,17 @@ for (const [file, keys] of [[ENV_TS, tsKeys], [CONFIG_PY, pyKeys]]) {
     }
   }
 }
+// The parsers state the same default twice (Zod and DEFAULTS); a disagreement is a bug the docs would hide.
+const sameValue = (a, b) => {
+  const norm = (v) => (Number.isNaN(Number(v)) || String(v).trim() === "" ? String(v).trim().toLowerCase() : String(Number(v)));
+  return norm(a) === norm(b);
+};
+for (const [key, ts] of tsKeys) {
+  const py = pyKeys.get(key);
+  if (ts.kind === "default" && py?.kind === "default" && !sameValue(ts.value, py.value)) {
+    errors.push(`${key}: defaults differ between ${ENV_TS} and ${CONFIG_PY}; make them agree`);
+  }
+}
 for (const [key, m] of meta) {
   if (!tsKeys.has(key) && !pyKeys.has(key) && !m.readBy?.length && !m.planned) {
     errors.push(`${key}: listed in scripts/env-meta.mjs but read by neither parser; remove it or set readBy/planned`);
@@ -121,7 +136,10 @@ function defaultText(key) {
   };
   const ts = describe(tsKeys.get(key));
   const py = describe(pyKeys.get(key));
-  if (ts && py && ts !== py) return `web/admin: ${ts}; worker: ${py}`;
+  const bothDefaults = tsKeys.get(key)?.kind === "default" && pyKeys.get(key)?.kind === "default";
+  if (ts && py && ts !== py && !(bothDefaults && sameValue(tsKeys.get(key).value, pyKeys.get(key).value))) {
+    return `web/admin: ${ts}; worker: ${py}`;
+  }
   return ts ?? py ?? (m.planned ? `not read yet (${m.planned})` : "unset");
 }
 
@@ -131,7 +149,10 @@ function localText(key) {
   return m.secret ? "dev placeholder" : code(m.example);
 }
 
-const PRODUCTION = { required: "**required**", optional: "optional", planned: "planned" };
+function productionText(m) {
+  if (m.production === "required") return m.check ? `**required** · checked by ${m.check}` : "**required**";
+  return m.production === "planned" ? "planned (not read yet)" : "optional";
+}
 
 function renderDoc() {
   const out = [BEGIN, ""];
@@ -143,7 +164,7 @@ function renderDoc() {
     for (const [key, m] of Object.entries(section.vars)) {
       out.push(
         `| ${code(key)} | ${cell(consumers(key).join(", ") || "nobody yet")} | ${cell(defaultText(key))} | ${cell(localText(key))} | ` +
-          `${PRODUCTION[m.production]} | ${m.secret ? "secret" : "no"} | ${cell(m.owner ?? "")} | ${cell(m.notes ?? "")} |`,
+          `${productionText(m)} | ${m.secret ? "secret" : "no"} | ${cell(m.owner ?? "")} | ${cell(m.notes ?? "")} |`,
       );
     }
   }

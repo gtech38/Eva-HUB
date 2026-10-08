@@ -94,6 +94,29 @@ describe("scripts/env-docs.mjs --check", () => {
     expect(r.out).toMatch(/docs\/deploy\/env\.md.*stale/);
   });
 
+  it("fails when the two parsers give the same variable different defaults", () => {
+    const dir = fixture();
+    edit(dir, CONFIG_PY, (s) => s.replace('"S3_REGION": "us-east-1"', '"S3_REGION": "eu-west-1"'));
+    const r = run("--check", "--root", dir);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/S3_REGION.*differ/);
+  });
+
+  it("compares defaults by value: 0.363 and \"0.3630\", true and \"True\" are the same", () => {
+    const dir = fixture();
+    edit(dir, CONFIG_PY, (s) => s.replace('"FACE_MATCH_THRESHOLD": "0.363"', '"FACE_MATCH_THRESHOLD": "0.3630"').replace('"S3_FORCE_PATH_STYLE": "true"', '"S3_FORCE_PATH_STYLE": "True"'));
+    const r = run("--root", dir);
+    expect(r.status).toBe(0);
+    expect(run("--check", "--root", dir).status).toBe(0);
+  });
+
+  it("--root without a directory is a usage error, not a stack trace", () => {
+    const r = run("--check", "--root");
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/--root requires a directory/);
+    expect(r.out).not.toMatch(/TypeError/);
+  });
+
   it("write mode regenerates both files so the check passes again", () => {
     const dir = fixture();
     edit(dir, EXAMPLE, (s) => s.replace(/^SESSION_TTL_DAYS=.*\n/m, ""));
@@ -128,9 +151,41 @@ describe("docs/deploy/env.md", () => {
   });
 
   it("marks what production must set", () => {
-    for (const key of ["AUTH_SECRET", "S3_PUBLIC_ENDPOINT", "EMAIL_PROVIDER", "ROOT_DOMAIN", "DATABASE_URL"]) {
-      expect(row(key), key).toMatch(/\| \*\*required\*\* \|/);
+    for (const key of ["AUTH_SECRET", "S3_PUBLIC_ENDPOINT", "EMAIL_PROVIDER", "ROOT_DOMAIN", "DATABASE_URL", "SMTP_HOST"]) {
+      expect(row(key), key).toMatch(/\| \*\*required\*\*/);
     }
     expect(row("SESSION_TTL_DAYS")).toMatch(/\| optional \|/);
+  });
+
+  it("says, per required row, whether startup checks it, and that matches the code", () => {
+    const envTs = readFileSync(join(ROOT, ENV_TS), "utf8");
+    const configPy = readFileSync(join(ROOT, CONFIG_PY), "utf8");
+    const checkedByEnv = [...new Set([...envTs.matchAll(/\badd\("([A-Z][A-Z0-9_]*)"/g)].map((m) => m[1]!))];
+    const required = configPy.match(/PRODUCTION_REQUIRED = \(([^)]*)\)/)?.[1] ?? "";
+    const checkedByWorker = [...required.matchAll(/"([A-Z][A-Z0-9_]*)"/g)].map((m) => m[1]!);
+    expect(checkedByEnv.length).toBeGreaterThan(5);
+    expect(checkedByWorker.length).toBeGreaterThan(3);
+
+    const documented = (who: "env\\(\\)" | "worker") =>
+      doc
+        .split("\n")
+        .filter((l) => new RegExp(`\\*\\*required\\*\\* · checked by [^|]*${who}`).test(l))
+        .map((l) => l.match(/^\| `([A-Z0-9_]+)`/)![1]!)
+        .sort();
+    expect(documented("env\\(\\)")).toEqual([...checkedByEnv].sort());
+    expect(documented("worker")).toEqual([...checkedByWorker].sort());
+    expect(row("SMTP_HOST")).not.toMatch(/checked by/);
+  });
+
+  it("says plainly that the Stripe keys are not read yet", () => {
+    for (const key of ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"]) {
+      expect(row(key), key).toMatch(/\| planned \(not read yet\) \|/);
+    }
+  });
+
+  it("documents `next build`: NEXT_PHASE skips the production checks, and how to build locally", () => {
+    expect(doc).toContain("phase-production-build");
+    expect(doc).toMatch(/next build/);
+    expect(doc).toMatch(/APP_ENV=development/);
   });
 });

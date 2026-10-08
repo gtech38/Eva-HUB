@@ -10,6 +10,9 @@
 // Fields
 //   production  "required" (must be set deliberately; the local value is wrong in production)
 //               "optional" (the default is fine) | "planned" (not read yet; see `planned`)
+//   check       for "required" vars that startup actually verifies: "env()" (web/admin, productionIssues()
+//               in env.ts), "worker" (PRODUCTION_REQUIRED in config.py) or "env(), worker". A test
+//               cross-checks this against both files; omit it for rows nothing enforces.
 //   secret      true when the value is a credential. Docs never print secret values.
 //   owner       where the production value comes from (ticket ids: INF-019 DNS, INF-009 Stripe, ...)
 //   notes       one or two sentences for docs/deploy/env.md
@@ -28,12 +31,12 @@ export const SECTIONS = [
       NODE_ENV: {
         production: "optional",
         owner: "Set by Next (`next build` / `next start`)",
-        notes: "Do not set it in `.env`; Next manages it. web/admin treat `production` as production unless APP_ENV says otherwise.",
+        notes: "Do not set it in `.env`; Next sets it. It is the fallback when APP_ENV is unset: `production` turns the production checks on. An empty value counts as unset.",
       },
       APP_ENV: {
         production: "required",
         owner: "Deploy config (DOC-006)",
-        notes: "Set `production` on every service (the worker has no NODE_ENV). Wins over NODE_ENV: `production` turns on the env() production checks and the worker's default warnings; `development` lets you `next start` locally with the dev `.env`.",
+        notes: "Set `production` on every service, including the worker (which has no NODE_ENV). Wins over NODE_ENV: `production` turns on the production checks, `development` lets you `next start` locally with the dev `.env`. Must be exactly `development`, `test` or `production` (an empty value counts as unset): web/admin refuse to start on anything else, the worker warns and ignores it. A warning is logged when NODE_ENV=production and APP_ENV is not `production`.",
       },
     },
   },
@@ -43,9 +46,10 @@ export const SECTIONS = [
     vars: {
       ROOT_DOMAIN: {
         production: "required",
+        check: "env()",
         readBy: ["seed"],
         owner: "INF-019 (domain, wildcard DNS, TLS)",
-        notes: "Event sites live at `{slug}.ROOT_DOMAIN`; also the session cookie domain. `localhost` locally.",
+        notes: "Event sites live at `{slug}.ROOT_DOMAIN`; also the session cookie domain. `localhost` locally; env() rejects a loopback value in production.",
         example: "localhost",
       },
       WEB_PORT: {
@@ -64,15 +68,17 @@ export const SECTIONS = [
       },
       WEB_ORIGIN: {
         production: "required",
+        check: "env()",
         owner: "INF-019",
-        notes: "Absolute guest-site origin used in links (emails, redirects).",
+        notes: "Absolute guest-site origin used in links (emails, redirects). env() rejects a loopback origin in production.",
         hint: "Full origins (used for links in emails)",
         example: "http://localhost:3000",
       },
       ADMIN_ORIGIN: {
         production: "required",
+        check: "env()",
         owner: "INF-019",
-        notes: "Absolute admin origin used in sign-in links and redirects.",
+        notes: "Absolute admin origin used in sign-in links and redirects. env() rejects a loopback origin in production.",
         example: "http://localhost:3001",
       },
     },
@@ -83,6 +89,7 @@ export const SECTIONS = [
     vars: {
       DATABASE_URL: {
         production: "required",
+        check: "worker",
         secret: true,
         readBy: ["prisma"],
         owner: "Managed Postgres with pgvector (DOC-006); platform secret store",
@@ -103,12 +110,14 @@ export const SECTIONS = [
     vars: {
       S3_ENDPOINT: {
         production: "required",
+        check: "worker",
         owner: "Bucket provider (DOC-006)",
         notes: "Server-side S3 API endpoint. Locally RustFS on :9000.",
         example: "http://localhost:9000",
       },
       S3_PUBLIC_ENDPOINT: {
         production: "required",
+        check: "env()",
         owner: "Bucket provider / CDN domain (DOC-006)",
         notes: "Browser-facing endpoint for presigned URLs. Falls back to S3_ENDPOINT locally; env() rejects production without it.",
         example: "http://localhost:9000",
@@ -121,19 +130,22 @@ export const SECTIONS = [
       },
       S3_BUCKET: {
         production: "required",
+        check: "worker",
         owner: "Bucket provider (DOC-006)",
         notes: "Single bucket; keys are tenant-prefixed (`s/{studioId}/e/{eventId}/...`).",
         example: "hub-media",
       },
       S3_ACCESS_KEY: {
         production: "required",
+        check: "env(), worker",
         secret: true,
         owner: "Bucket provider API token; platform secret store",
-        notes: "Local values match the RustFS credentials in infra/docker-compose.yml.",
+        notes: "Local values match the RustFS credentials in infra/docker-compose.yml; env() rejects them in production.",
         example: "minio",
       },
       S3_SECRET_KEY: {
         production: "required",
+        check: "env(), worker",
         secret: true,
         owner: "Bucket provider API token; platform secret store",
         notes: "Rotate with S3_ACCESS_KEY (see Rotation).",
@@ -142,7 +154,7 @@ export const SECTIONS = [
       S3_FORCE_PATH_STYLE: {
         production: "optional",
         owner: "Bucket provider",
-        notes: "`true` for RustFS/MinIO; R2 and S3 accept either.",
+        notes: "`true` for RustFS/MinIO; R2 and S3 accept either. Accepts true/false, 1/0, yes/no, on/off (case-insensitive) in both web/admin and the worker; anything else is an error. Empty counts as unset.",
         example: "true",
       },
     },
@@ -153,6 +165,7 @@ export const SECTIONS = [
     vars: {
       EMAIL_PROVIDER: {
         production: "required",
+        check: "env()",
         owner: "SHR-012 (email provider)",
         notes: "`console` (the default) only logs mail; `smtp` sends via SMTP_HOST. env() rejects `console` in production.",
         example: "smtp",
@@ -194,9 +207,10 @@ export const SECTIONS = [
     vars: {
       AUTH_SECRET: {
         production: "required",
+        check: "env()",
         secret: true,
         owner: "Platform secret store; generate with `openssl rand -base64 32`",
-        notes: "HMAC key that signs the session cookie and salts IP hashes in face-search records. env() rejects fewer than 32 random bytes or a dev placeholder in production. Rotating it signs everyone out until dual-key support (SHR-018) lands (see Rotation).",
+        notes: "HMAC key that signs the session cookie and salts IP hashes in face-search records. In production env() requires hex or base64 that decodes to at least 32 bytes and rejects dev placeholders; that is a format and length check, it cannot measure entropy, so generate it with a CSPRNG. Rotating it signs everyone out until dual-key support (SHR-018) lands (see Rotation).",
         example: "dev-only-change-me-0123456789abcdef",
       },
       SESSION_TTL_DAYS: {
@@ -222,8 +236,9 @@ export const SECTIONS = [
     vars: {
       WORKER_INTERNAL_URL: {
         production: "required",
+        check: "env()",
         owner: "Deploy topology (DOC-006)",
-        notes: "Where web calls the worker API (`/embed-selfie`). Private network only; never public.",
+        notes: "Where web calls the worker API (`/embed-selfie`). Private network only; never public. env() requires it to be set explicitly in production (a loopback address is allowed for a single-host deploy).",
         example: "http://localhost:8010",
       },
       WORKER_PORT: {
@@ -288,7 +303,7 @@ export const SECTIONS = [
         secret: true,
         planned: "INF-008",
         owner: "INF-009 (Stripe account); platform secret store",
-        notes: "Not read yet. No Stripe call may happen unless it starts with `sk_`.",
+        notes: "Nothing reads this yet; it is only a placeholder in `.env.example`, so leave it as is until INF-008 lands. Once code reads it, no Stripe call may happen unless it starts with `sk_`.",
         example: "sk_test_placeholder",
       },
       STRIPE_WEBHOOK_SECRET: {
@@ -296,7 +311,7 @@ export const SECTIONS = [
         secret: true,
         planned: "INF-008",
         owner: "INF-009 (Stripe webhook endpoint); platform secret store",
-        notes: "Not read yet. Signing secret for the Stripe webhook endpoint.",
+        notes: "Nothing reads this yet; placeholder only. Once code reads it, it is the signing secret for the Stripe webhook endpoint.",
         example: "whsec_placeholder",
       },
     },
