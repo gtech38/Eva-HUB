@@ -1,3 +1,7 @@
+/**
+ * Elegant Hindu Traditional — reference: Jashn, gold frame from Shaadi (docs/05-theme-references.md).
+ * Cream paper, deep maroon, gold line ornaments; Cinzel names, Pinyon Script accent, Cormorant body.
+ */
 import Link from "next/link";
 import type { Theme, ShellProps, HeroProps } from "../types";
 import { Nav, LangSwitcher, NotYou, Credit } from "@/components/chrome";
@@ -5,105 +9,99 @@ import { Countdown } from "@/components/Countdown";
 import { fmtDayLabel } from "@/lib/format";
 
 const vars = {
-  "--bg": "#fff8ee",
-  "--surface": "#fffdf8",
-  "--fg": "#3a1410",
-  "--muted": "#7d564d",
-  "--accent": "#9b1b1b",
-  "--accent-2": "#e8a317",
-  "--accent-fg": "#fff8ee",
-  "--line": "#efd9b8",
-  "--radius": "6px",
-  // Serif Devanagari pairs with Lora for Hindi headings; Noto Sans Telugu covers Telugu.
-  "--font-display": "var(--font-lora), var(--font-devanagari-serif)",
-  "--font-body": "var(--font-inter)",
-  "--font-script": "var(--font-lora)",
+  "--bg": "#f6f4ee",          // cream paper
+  "--surface": "#fffcf7",
+  "--fg": "#212121",
+  "--muted": "#4e4e4e",
+  "--accent": "#450000",      // deep maroon
+  "--accent-2": "#b8923e",    // gold
+  "--accent-fg": "#fffcf7",
+  "--line": "#e3d9c4",
+  "--radius": "2px",
+  // Cinzel has no Indic glyphs; Noto Serif Devanagari follows in the stack.
+  "--font-display": "var(--font-cinzel), var(--font-devanagari-serif)",
+  "--font-body": "var(--font-cormorant), var(--font-devanagari-serif)",
+  "--font-script": "var(--font-pinyon)",
 };
+
+/** Gold floral line: two leaf strokes meeting at a bud. Pure SVG, no image assets. */
+function Flourish({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 160 20" className={`h-5 w-40 ${className}`} fill="none" stroke="currentColor" strokeWidth="1" aria-hidden>
+      <path d="M0 10 H60 M100 10 H160" />
+      <path d="M62 10c6-7 12-7 18 0-6 7-12 7-18 0z" />
+      <path d="M98 10c-6-7-12-7-18 0 6 7 12 7 18 0z" />
+      <circle cx="80" cy="10" r="2" fill="currentColor" />
+      <path d="M44 10c4-4 8-4 12 0M104 10c4 4 8 4 12 0" />
+    </svg>
+  );
+}
 
 function Divider() {
   return (
-    <div className="my-10 flex items-center justify-center gap-2" aria-hidden>
-      <span className="h-px w-16" style={{ background: "var(--accent-2)" }} />
-      <span className="h-2 w-2 rotate-45" style={{ background: "var(--accent)" }} />
-      <span className="h-2.5 w-2.5 rotate-45" style={{ background: "var(--accent-2)" }} />
-      <span className="h-2 w-2 rotate-45" style={{ background: "var(--accent)" }} />
-      <span className="h-px w-16" style={{ background: "var(--accent-2)" }} />
+    <div className="my-12 flex items-center justify-center text-[color:var(--accent-2)]" aria-hidden>
+      <Flourish />
     </div>
   );
 }
 
 function Shell({ title, monogram, nav, locale, locales, brand, viewerName, children }: ShellProps) {
   return (
-    <div className="flex min-h-dvh flex-col font-body">
-      <div className="rangoli-band" aria-hidden />
-      <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-3 px-4 py-5 sm:flex-row sm:justify-between">
+    <div className="paper flex min-h-dvh flex-col font-body text-[1.0625rem]">
+      <header className="border-b border-line">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-5 py-5 sm:flex-row sm:justify-between">
           <Link href="/" className="flex items-center gap-3">
             {monogram && (
-              <span
-                className="flex h-11 w-11 rotate-45 items-center justify-center border-2"
-                style={{ borderColor: "var(--accent-2)", color: "var(--accent)" }}
-              >
-                <span className="-rotate-45 font-display text-base font-semibold">{monogram}</span>
+              <span className="gold-double-frame flex h-11 w-11 items-center justify-center font-display text-sm text-[color:var(--accent)]">
+                {monogram}
               </span>
             )}
-            <span className="font-display text-2xl font-semibold" style={{ color: "var(--accent)" }}>
-              {title}
-            </span>
+            <span className="font-display text-lg uppercase tracking-[0.18em] text-[color:var(--accent)]">{title}</span>
           </Link>
           <div className="flex flex-col items-center gap-2 sm:items-end">
-            {viewerName !== null && <Nav items={nav} className="justify-center text-[0.8rem] font-medium" />}
-            <div className="flex items-center gap-4">
+            {viewerName !== null && <Nav items={nav} className="justify-center font-display text-[0.7rem] uppercase tracking-[0.2em]" />}
+            <div className="flex items-center gap-4 font-body text-sm">
               <LangSwitcher locale={locale} locales={locales} />
               {viewerName !== null && <NotYou locale={locale} viewerName={viewerName} />}
             </div>
           </div>
         </div>
-        <div className="scallop" aria-hidden />
       </header>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 fade-in">{children}</main>
-      <footer className="border-t border-line bg-surface">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-2 px-4 py-8 text-center">
-          <Divider />
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 fade-in">{children}</main>
+      <footer className="border-t border-line">
+        <div className="mx-auto flex max-w-5xl flex-col items-center gap-3 px-4 py-10 text-center">
+          <Flourish className="text-[color:var(--accent-2)]" />
           <Credit brand={brand} locale={locale} />
         </div>
       </footer>
-      <div className="rangoli-band" aria-hidden />
     </div>
   );
 }
 
-function Hero({ title, monogram, headline, dateLine, startsOn, timezone, locale, heroUrl }: HeroProps) {
+function Hero({ title, headline, dateLine, startsOn, timezone, locale, heroUrl, copy }: HeroProps) {
   return (
-    <section className="paisley-frame relative overflow-hidden rounded-theme border border-line">
+    <section className="gold-double-frame grid overflow-hidden bg-surface sm:grid-cols-2">
       <div
-        className="absolute inset-0"
-        style={
-          heroUrl
-            ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center", opacity: 0.4 }
-            : { background: "linear-gradient(160deg, #fff3dc 0%, #f7d59a 45%, #e9b26a 100%)" }
-        }
-        aria-hidden
-      />
-      <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 py-16 text-center sm:py-24">
-        <p className="mb-3 text-xs uppercase tracking-[0.35em]" style={{ color: "var(--accent)" }}>
-          {"शुभ विवाह"}
-        </p>
-        {monogram && (
-          <div className="mb-4 font-display text-4xl font-semibold" style={{ color: "var(--accent)" }}>
-            {monogram}
-          </div>
-        )}
-        <p className="font-display text-xl italic text-muted">{headline}</p>
-        <h1 className="mt-2 font-display text-5xl font-semibold leading-tight sm:text-6xl" style={{ color: "var(--accent)" }}>
-          {title}
-        </h1>
-        <p className="mt-5 text-base text-fg/80">{dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}</p>
+        className="maroon-panel relative min-h-[18rem] sm:min-h-[34rem]"
+        style={heroUrl ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
+      >
+        <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-[#f6f4ee]">
+          <p className="font-script text-3xl sm:text-4xl">{copy.invite}</p>
+          <h1 className="mt-3 font-display text-3xl uppercase tracking-[0.22em] sm:text-4xl">{title}</h1>
+          <p className="mt-3 text-xs uppercase tracking-[0.4em] opacity-80">{copy.eyebrow}</p>
+        </div>
+      </div>
+      <div className="flex flex-col items-center justify-center px-8 py-14 text-center">
+        <Flourish className="text-[color:var(--accent-2)]" />
+        <p className="mt-6 font-display text-sm uppercase tracking-[0.3em] text-[color:var(--accent)]">{headline}</p>
+        <p className="mt-2 font-script text-5xl leading-none text-[color:var(--accent)] sm:text-6xl">{copy.accent}</p>
+        <p className="mt-6 text-lg text-muted">{dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}</p>
         {startsOn && (
-          <div className="mt-10">
+          <div className="mt-10 text-[color:var(--accent)]">
             <Countdown startsOn={startsOn.toISOString()} locale={locale} />
           </div>
         )}
+        <Flourish className="mt-8 rotate-180 text-[color:var(--accent-2)]" />
       </div>
     </section>
   );

@@ -26,7 +26,8 @@ const EventSettings = z.object({
   startsOn: z.string().optional(),
   timezone: z.string().min(1, "Timezone is required"),
   status: z.enum(["DRAFT", "LIVE", "COMPLETED", "ARCHIVED"]),
-  theme: z.enum(["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL"]),
+  theme: z.enum(["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL", "NURSERY_SAGE", "TELUGU_TRADITIONAL", "MIDNIGHT_GALA"]),
+  kind: z.enum(["WEDDING", "ENGAGEMENT", "BABY_SHOWER", "BIRTHDAY", "ANNIVERSARY", "CEREMONY", "PARTY", "CORPORATE", "OTHER"]).default("WEDDING"),
   monogram: z.string().max(12).optional(),
   enabledLocales: z.array(z.enum(["en", "te", "hi"])).min(1, "Enable at least one locale"),
   defaultLocale: z.enum(["en", "te", "hi"]),
@@ -44,7 +45,7 @@ export async function updateEventSettings(_p: ActionState, fd: FormData): Promis
     const retentionRaw = str(fd, "faceIndexRetentionDays");
     const input = EventSettings.parse({
       title: localized(fd, "title"), slug: str(fd, "slug"), startsOn: str(fd, "startsOn") || undefined, timezone: str(fd, "timezone"),
-      status: str(fd, "status"), theme: str(fd, "theme"), monogram: str(fd, "monogram") || undefined,
+      status: str(fd, "status"), theme: str(fd, "theme"), kind: str(fd, "kind") || "WEDDING", monogram: str(fd, "monogram") || undefined,
       enabledLocales: locales, defaultLocale: str(fd, "defaultLocale"), faceSearchEnabled: bool(fd, "faceSearchEnabled"),
       faceIndexRetentionDays: retentionRaw === "" ? null : retentionRaw,
     });
@@ -67,7 +68,7 @@ export async function updateEventSettings(_p: ActionState, fd: FormData): Promis
         where: { id: eventId },
         data: {
           title: input.title, slug: input.slug, startsOn: input.startsOn ? new Date(`${input.startsOn}T00:00:00`) : null, timezone: input.timezone,
-          status: input.status, theme: input.theme,
+          status: input.status, theme: input.theme, kind: input.kind,
           themeOverrides: { ...((before.themeOverrides as object) ?? {}), monogram: input.monogram ?? null },
           enabledLocales: input.enabledLocales, defaultLocale: input.defaultLocale,
           faceSearchEnabled: input.faceSearchEnabled, faceIndexRetentionDays: input.faceIndexRetentionDays,

@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import type { ThemeKey } from "@hub/db";
+import type { ThemeKey, EventKind } from "@hub/db";
 import type { Locale } from "@hub/shared/i18n";
 import type { Brand } from "@/lib/site";
+import type { EventCopy } from "@/lib/eventCopy";
 
 export type NavItem = { href: string; label: string; current: boolean };
 
@@ -12,6 +13,8 @@ export type ShellProps = {
   locale: Locale;
   locales: Locale[];
   brand: Brand;
+  kind: EventKind;
+  copy: EventCopy;
   /** null when rendering the sign-in gate (no header nav / sign-out). */
   viewerName: string | null;
   children: ReactNode;
@@ -26,6 +29,8 @@ export type HeroProps = {
   timezone: string;
   locale: Locale;
   heroUrl: string | null;
+  kind: EventKind;
+  copy: EventCopy;
 };
 
 export type Theme = {

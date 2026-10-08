@@ -1,3 +1,7 @@
+/**
+ * Luxury — reference: Velvet Promise (docs/05-theme-references.md).
+ * Burgundy velvet, cream, antique gold; Instrument Serif display with script initials.
+ */
 import Link from "next/link";
 import type { Theme, ShellProps, HeroProps } from "../types";
 import { Nav, LangSwitcher, NotYou, Credit } from "@/components/chrome";
@@ -5,53 +9,65 @@ import { Countdown } from "@/components/Countdown";
 import { fmtDayLabel } from "@/lib/format";
 
 const vars = {
-  "--bg": "#0b0a09",
-  "--surface": "#151311",
-  "--fg": "#f3eee4",
-  "--muted": "#a39b8c",
-  "--accent": "#c9a961",
-  "--accent-2": "#8a7340",
-  "--accent-fg": "#0b0a09",
-  "--line": "#2a2622",
-  "--radius": "0px",
-  "--font-display": "var(--font-cormorant)",
+  "--bg": "#f7ead7",          // cream
+  "--surface": "#fbf3e6",
+  "--fg": "#2a0a10",          // near-burgundy ink on cream
+  "--muted": "#7a5a52",
+  "--accent": "#c9a961",      // antique gold
+  "--accent-2": "#580b1b",    // burgundy
+  "--accent-fg": "#2a0a10",
+  "--line": "#e6d3b6",
+  "--radius": "0px",          // squared frames and cards
+  "--radius-btn": "999px",    // pill buttons, as in the reference
+  "--font-display": "var(--font-instrument)",
   "--font-body": "var(--font-inter)",
-  "--font-script": "var(--font-cormorant)",
+  "--font-script": "var(--font-luxurious)",
 };
 
 function Divider() {
   return (
-    <div className="my-10 flex items-center justify-center gap-3" aria-hidden>
-      <span className="hairline w-24" />
-      <span className="h-1.5 w-1.5 rotate-45 bg-accent" />
-      <span className="hairline w-24" />
+    <div className="my-12 flex items-center justify-center gap-4" aria-hidden>
+      <span className="hairline w-28" />
+      <span className="font-script text-3xl leading-none text-accent">&amp;</span>
+      <span className="hairline w-28" />
     </div>
+  );
+}
+
+/** Splits "Priya & Arjun" so each name can carry a script initial. */
+function Names({ title, className = "" }: { title: string; className?: string }) {
+  const parts = title.split(/\s*(&|and|\+)\s*/i).filter(Boolean);
+  if (parts.length < 3) return <span className={className}>{title}</span>;
+  return (
+    <span className={className}>
+      <span className="initial-script">{parts[0]}</span>
+      <span className="mx-3 align-middle text-[0.6em] font-light">&amp;</span>
+      <span className="initial-script">{parts[2]}</span>
+    </span>
   );
 }
 
 function Shell({ title, monogram, nav, locale, locales, brand, viewerName, children }: ShellProps) {
   return (
     <div className="flex min-h-dvh flex-col font-body">
-      <header className="border-b border-line">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 px-4 py-6 sm:flex-row sm:justify-between">
-          <Link href="/" className="flex items-center gap-3">
-            {monogram && (
-              <span className="flex h-10 w-10 items-center justify-center border border-accent font-display text-lg text-accent">{monogram}</span>
-            )}
-            <span className="font-display text-2xl tracking-wide">{title}</span>
+      <header className="velvet text-[#f7ead7]">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-5 py-5 sm:flex-row sm:justify-between">
+          <Link href="/" className="font-display text-2xl tracking-wide">
+            <Names title={title} />
           </Link>
           <div className="flex flex-col items-center gap-3 sm:items-end">
-            {viewerName !== null && <Nav items={nav} className="justify-center uppercase text-[0.7rem] tracking-[0.25em]" />}
-            <div className="flex items-center gap-4">
+            {viewerName !== null && <Nav items={nav} className="justify-center text-[0.72rem] uppercase tracking-[0.22em] text-[#f7ead7]/85" />}
+            <div className="flex items-center gap-4 text-[#f7ead7]/80">
               <LangSwitcher locale={locale} locales={locales} />
               {viewerName !== null && <NotYou locale={locale} viewerName={viewerName} />}
             </div>
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 fade-in">{children}</main>
-      <footer className="border-t border-line">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-2 px-4 py-8 text-center">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-12 fade-in">{children}</main>
+      <footer className="velvet text-[#f7ead7]/80">
+        <div className="mx-auto flex max-w-5xl flex-col items-center gap-3 px-4 py-10 text-center">
+          {monogram && <span className="font-script text-4xl text-accent">{monogram}</span>}
           <span className="hairline w-32" aria-hidden />
           <Credit brand={brand} locale={locale} />
         </div>
@@ -60,30 +76,35 @@ function Shell({ title, monogram, nav, locale, locales, brand, viewerName, child
   );
 }
 
-function Hero({ title, monogram, headline, dateLine, startsOn, timezone, locale, heroUrl }: HeroProps) {
+function Hero({ title, headline, dateLine, startsOn, timezone, locale, heroUrl, copy }: HeroProps) {
   return (
-    <section className="relative overflow-hidden border border-line">
-      <div
-        className="absolute inset-0"
-        style={
-          heroUrl
-            ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center", opacity: 0.55 }
-            : { background: "radial-gradient(ellipse at 50% 120%, #2a2415 0%, #0b0a09 70%)" }
-        }
-        aria-hidden
-      />
-      <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 py-20 text-center sm:py-28">
-        {monogram && <div className="mb-6 font-display text-5xl font-light text-accent">{monogram}</div>}
-        <p className="eyebrow mb-4">{headline}</p>
-        <h1 className="font-display text-5xl font-light leading-tight sm:text-7xl">{title}</h1>
-        <p className="mt-6 text-sm uppercase tracking-[0.3em] text-muted">
-          {dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}
-        </p>
-        {startsOn && (
-          <div className="mt-10">
-            <Countdown startsOn={startsOn.toISOString()} locale={locale} />
-          </div>
-        )}
+    <section className="velvet relative -mx-4 -mt-12 overflow-hidden text-[#f7ead7] sm:mx-0 sm:mt-0">
+      <div className="relative mx-auto grid max-w-6xl items-center gap-10 px-6 py-20 sm:grid-cols-[1fr_auto] sm:py-28">
+        <div className="text-center sm:text-left">
+          <p className="font-display text-2xl text-[#e4e2b8]">{headline}</p>
+          <p className="mt-1 font-body text-base tracking-[0.25em] text-[#f7ead7]/80">
+            {dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}
+          </p>
+          <h1 className="mt-8 font-display text-6xl leading-[0.95] sm:text-8xl">
+            <Names title={title} className="text-[#f7ead7]" />
+          </h1>
+          <p className="mt-8 text-xs uppercase tracking-[0.35em] text-[#f7ead7]/75">{copy.eyebrow}</p>
+          {startsOn && (
+            <div className="mt-10 text-[#f7ead7]">
+              <Countdown startsOn={startsOn.toISOString()} locale={locale} />
+            </div>
+          )}
+        </div>
+        <div className="gold-frame mx-auto aspect-[4/5] w-56 rotate-2 sm:w-72" aria-hidden>
+          <div
+            className="h-full w-full"
+            style={
+              heroUrl
+                ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center" }
+                : { background: "linear-gradient(160deg, #7a2a2f 0%, #3c0a12 60%, #2a0a10 100%)" }
+            }
+          />
+        </div>
       </div>
     </section>
   );

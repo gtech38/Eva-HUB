@@ -139,7 +139,8 @@ export async function deleteProduct(_p: ActionState, fd: FormData): Promise<Acti
 const CreateEvent = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(2, "Slug is required").max(60).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Lowercase letters, digits and dashes only"),
-  theme: z.enum(["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL"]),
+  theme: z.enum(["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL", "NURSERY_SAGE", "TELUGU_TRADITIONAL", "MIDNIGHT_GALA"]),
+  kind: z.enum(["WEDDING", "ENGAGEMENT", "BABY_SHOWER", "BIRTHDAY", "ANNIVERSARY", "CEREMONY", "PARTY", "CORPORATE", "OTHER"]).default("WEDDING"),
   startsOn: z.string().optional(),
   timezone: z.string().min(1),
   hostEmail: EmailSchema("Enter a valid email").or(z.literal("")),
@@ -153,7 +154,7 @@ export async function createEvent(_p: ActionState, fd: FormData): Promise<Action
     const p = await requireSignedIn();
     const studioId = str(fd, "studioId");
     authorize(p, "event.create", { studioId });
-    const input = CreateEvent.parse({ title: str(fd, "title"), slug: str(fd, "slug"), theme: str(fd, "theme"), startsOn: str(fd, "startsOn") || undefined, timezone: str(fd, "timezone") || "America/Chicago", hostEmail: str(fd, "hostEmail"), hostUserId: str(fd, "hostUserId") || undefined });
+    const input = CreateEvent.parse({ title: str(fd, "title"), slug: str(fd, "slug"), theme: str(fd, "theme"), kind: str(fd, "kind") || "WEDDING", startsOn: str(fd, "startsOn") || undefined, timezone: str(fd, "timezone") || "America/Chicago", hostEmail: str(fd, "hostEmail"), hostUserId: str(fd, "hostUserId") || undefined });
 
     if (RESERVED_SLUGS.has(input.slug)) return { ok: false, error: "Please fix the highlighted fields.", fieldErrors: { slug: ["That slug is reserved"] } };
     const hostname = `${input.slug}.${env().ROOT_DOMAIN}`;
@@ -178,6 +179,7 @@ export async function createEvent(_p: ActionState, fd: FormData): Promise<Action
           slug: input.slug,
           title: { en: input.title },
           theme: input.theme,
+          kind: input.kind,
           startsOn: input.startsOn ? new Date(`${input.startsOn}T00:00:00`) : null,
           timezone: input.timezone,
           status: "DRAFT",

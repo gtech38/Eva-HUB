@@ -4,6 +4,7 @@ import { t, ui } from "@hub/shared/i18n";
 import { storage } from "@hub/shared";
 import { requireViewer, page } from "@/lib/site";
 import { themeFor } from "@/themes";
+import { eventCopy } from "@/lib/eventCopy";
 import { fmtDateTime } from "@/lib/format";
 import { prisma } from "@hub/db";
 
@@ -38,6 +39,8 @@ export default async function HomePage() {
         timezone={event.timezone}
         locale={locale}
         heroUrl={heroUrl}
+        kind={event.kind}
+        copy={eventCopy(event.kind, locale)}
       />
 
       {upcoming.length > 0 && (

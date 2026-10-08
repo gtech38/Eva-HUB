@@ -1,3 +1,7 @@
+/**
+ * High-Class Romantic — reference: Vow and Bloom (docs/05-theme-references.md).
+ * Warm ivory, soft charcoal, dusty rose, sage; Inria Serif with tight tracking; falling petals.
+ */
 import Link from "next/link";
 import type { Theme, ShellProps, HeroProps } from "../types";
 import { Nav, LangSwitcher, NotYou, Credit } from "@/components/chrome";
@@ -5,52 +9,74 @@ import { Countdown } from "@/components/Countdown";
 import { fmtDayLabel } from "@/lib/format";
 
 const vars = {
-  "--bg": "#fbf5f1",
-  "--surface": "#ffffff",
-  "--fg": "#3b2f31",
-  "--muted": "#8a7478",
-  "--accent": "#c98a95",
-  "--accent-2": "#e9c9c0",
-  "--accent-fg": "#ffffff",
-  "--line": "#eedcd8",
-  "--radius": "14px",
-  "--font-display": "var(--font-playfair)",
+  "--bg": "#f6f1e8",          // warm ivory
+  "--surface": "#fff9f5",
+  "--fg": "#2b2926",          // soft charcoal
+  "--muted": "#756e67",
+  "--accent": "#b88792",      // dusty rose
+  "--accent-2": "#7a8068",    // sage
+  "--accent-fg": "#fff9f5",
+  "--line": "#d8d0c7",
+  "--radius": "20px",         // soft cards
+  "--radius-btn": "999px",    // pill buttons
+  "--font-display": "var(--font-inria)",
   "--font-body": "var(--font-inter)",
-  "--font-script": "var(--font-great-vibes)",
+  "--font-script": "var(--font-inria)",
 };
 
 function Divider() {
   return (
-    <div className="my-10 flex items-center justify-center gap-3 text-accent" aria-hidden>
-      <span className="h-px w-16 bg-line" />
-      <span className="font-script text-2xl leading-none">&amp;</span>
-      <span className="h-px w-16 bg-line" />
+    <div className="my-12 flex items-center justify-center gap-3" aria-hidden>
+      <span className="h-px w-20 bg-line" />
+      <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+      <span className="h-px w-20 bg-line" />
     </div>
   );
 }
 
-function Shell({ title, monogram, nav, locale, locales, brand, viewerName, children }: ShellProps) {
+const PETALS = Array.from({ length: 14 }, (_, i) => ({
+  left: `${(i * 7.3 + 3) % 100}%`,
+  delay: `${(i * 1.7) % 12}s`,
+  duration: `${11 + (i % 5) * 2}s`,
+  drift: `${(i % 2 ? 1 : -1) * (30 + (i % 4) * 25)}px`,
+  scale: 0.7 + (i % 3) * 0.25,
+}));
+
+function Petals() {
   return (
-    <div className="blush-glow flex min-h-dvh flex-col font-body">
+    <div className="petals" aria-hidden>
+      {PETALS.map((p, i) => (
+        <span
+          key={i}
+          className="petal"
+          style={{ left: p.left, animationDelay: p.delay, animationDuration: p.duration, ["--drift" as string]: p.drift, scale: String(p.scale) }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Shell({ title, nav, locale, locales, brand, viewerName, children }: ShellProps) {
+  return (
+    <div className="flex min-h-dvh flex-col font-body">
       <header>
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-3 px-4 pt-8 pb-4">
-          <Link href="/" className="flex flex-col items-center">
-            {monogram && <span className="font-script text-4xl leading-none text-accent">{monogram}</span>}
-            <span className="mt-1 font-display text-2xl italic">{title}</span>
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-5 py-5 sm:flex-row sm:justify-between">
+          <Link href="/" className="font-display text-xl tracking-[-0.02em]">
+            {title}
           </Link>
-          {viewerName !== null && <Nav items={nav} className="justify-center text-[0.8rem]" />}
-          <div className="flex items-center gap-4">
-            <LangSwitcher locale={locale} locales={locales} />
-            {viewerName !== null && <NotYou locale={locale} viewerName={viewerName} />}
+          <div className="flex flex-col items-center gap-2 sm:items-end">
+            {viewerName !== null && <Nav items={nav} className="justify-center text-[0.8rem] tracking-[-0.01em]" />}
+            <div className="flex items-center gap-4">
+              <LangSwitcher locale={locale} locales={locales} />
+              {viewerName !== null && <NotYou locale={locale} viewerName={viewerName} />}
+            </div>
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 fade-in">{children}</main>
-      <footer className="mt-8 border-t border-line bg-surface/60">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-1 px-4 py-8 text-center">
-          <span className="font-script text-2xl text-accent" aria-hidden>
-            with love
-          </span>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 fade-in">{children}</main>
+      <footer className="border-t border-line">
+        <div className="mx-auto flex max-w-5xl flex-col items-center gap-2 px-4 py-10 text-center">
+          <span className="font-display text-lg tracking-[-0.02em]">{title}</span>
           <Credit brand={brand} locale={locale} />
         </div>
       </footer>
@@ -60,23 +86,21 @@ function Shell({ title, monogram, nav, locale, locales, brand, viewerName, child
 
 function Hero({ title, monogram, headline, dateLine, startsOn, timezone, locale, heroUrl }: HeroProps) {
   return (
-    <section className="relative overflow-hidden rounded-theme border border-line bg-surface shadow-[0_20px_60px_-30px_rgba(120,70,80,0.35)]">
+    <section className="relative overflow-hidden rounded-[28px]">
       <div
-        className="absolute inset-0"
-        style={
-          heroUrl
-            ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center", opacity: 0.35 }
-            : { background: "linear-gradient(160deg, #fff7f3 0%, #f6dfd9 55%, #ecc9c2 100%)" }
-        }
+        className={`absolute inset-0 ${heroUrl ? "" : "ivory-sky"}`}
+        style={heroUrl ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
         aria-hidden
       />
-      <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 py-16 text-center sm:py-24">
-        <p className="font-script text-4xl text-accent sm:text-5xl">{headline}</p>
-        <h1 className="mt-3 font-display text-5xl leading-tight sm:text-6xl">{title}</h1>
-        {monogram && <div className="mt-4 text-xs uppercase tracking-[0.35em] text-muted">{monogram}</div>}
-        <p className="mt-5 text-base text-muted">{dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}</p>
+      {heroUrl && <div className="absolute inset-0 bg-gradient-to-b from-[#f6f1e8]/70 via-transparent to-[#f6f1e8]/40" aria-hidden />}
+      <Petals />
+      <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 py-24 text-center sm:py-32">
+        <p className="text-[0.65rem] uppercase tracking-[0.4em] text-muted">{headline}</p>
+        <h1 className="mt-6 font-display text-5xl leading-[1.02] tracking-[-0.03em] sm:text-7xl">{title}</h1>
+        {monogram && <p className="mt-4 font-display text-xl italic text-accent">{monogram}</p>}
+        <p className="mt-6 text-sm text-muted">{dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}</p>
         {startsOn && (
-          <div className="mt-10">
+          <div className="mt-12">
             <Countdown startsOn={startsOn.toISOString()} locale={locale} />
           </div>
         )}
