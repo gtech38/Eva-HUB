@@ -40,13 +40,27 @@ jobs:
         env:
           POSTGRES_USER: hub
           POSTGRES_PASSWORD: hub
-          POSTGRES_DB: hub
+          # not "hub": the drill tests refuse to run write-then-rollback SQL on a database named hub
+          POSTGRES_DB: hub_ci
         ports: ["5433:5432"]
         options: >-
-          --health-cmd "pg_isready -U hub -d hub"
+          --health-cmd "pg_isready -U hub -d hub_ci"
           --health-interval 5s --health-timeout 3s --health-retries 20
+      # same S3 server as infra/docker-compose.yml, so `backup-db.sh --upload` is tested, not skipped
+      s3:
+        image: rustfs/rustfs:latest
+        env:
+          RUSTFS_ACCESS_KEY: minio
+          RUSTFS_SECRET_KEY: minio12345
+        ports: ["9000:9000"]
     env:
-      DATABASE_URL: postgresql://hub:hub@localhost:5433/hub
+      DATABASE_URL: postgresql://hub:hub@localhost:5433/hub_ci
+      # local throwaway credentials of the RustFS service above; not secrets
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: hub-media
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio12345
     steps:
       - uses: actions/checkout@v4
 
@@ -64,8 +78,19 @@ jobs:
           pnpm exec prisma migrate deploy
           pnpm exec tsx prisma/seed.ts
 
-      - name: Back up (pg_dump -Fc + manifest)
-        run: ./scripts/backup-db.sh "$RUNNER_TEMP/hub.dump"
+      - name: Create the bucket on the RustFS service
+        run: |
+          for i in $(seq 1 30); do
+            if docker run --rm --network host -e AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" -e AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
+                 -e AWS_DEFAULT_REGION="$S3_REGION" amazon/aws-cli --endpoint-url "$S3_ENDPOINT" s3 mb "s3://$S3_BUCKET"; then
+              exit 0
+            fi
+            echo "waiting for RustFS ($i)"; sleep 2
+          done
+          exit 1
+
+      - name: Back up (pg_dump -Fc + manifest) and upload to the bucket
+        run: ./scripts/backup-db.sh "$RUNNER_TEMP/hub.dump" --upload
 
       - name: Drill into a throwaway container
         run: ./scripts/restore-drill.sh "$RUNNER_TEMP/hub.dump"
