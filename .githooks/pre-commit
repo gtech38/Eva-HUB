@@ -9,27 +9,27 @@ staged=$(git diff --cached --name-only --diff-filter=ACMR)
 fail() { echo "pre-commit: $1" >&2; exit 1; }
 
 # 1. Never commit env files or secrets.
-if echo "$staged" | grep -Eq '(^|/)\.env(\..*)?$' && ! echo "$staged" | grep -Eq '\.env\.example$'; then
+if echo "$staged" | grep -E '(^|/)\.env(\..*)?$' | grep -Ev '(^|/)\.env\.example$' | grep -q .; then
   fail ".env files are never committed (use .env.example)."
 fi
-if git diff --cached -U0 | grep -E '^\+' | grep -Eq '(sk_live_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----)'; then
+if git diff --cached -U0 | grep -E '^\+' | grep -E '(sk_live_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----)' >/dev/null; then
   fail "a live secret or private key is in the staged diff."
 fi
 
 # 2. No oversized blobs (originals/derivatives belong in the bucket, models are downloaded).
 while IFS= read -r f; do
   [ -f "$f" ] || continue
-  size=$(wc -c < "$f")
+  size=$(wc -c < "$f" | tr -d ' ')
   if [ "$size" -gt 5000000 ]; then fail "$f is $((size/1000000)) MB; files over 5 MB are not committed."; fi
 done <<< "$staged"
 
 # 3. TDD escape hatches must not leak into committed *code* (docs and the hooks themselves may name them).
 code=$(echo "$staged" | grep -E '^(apps|packages|workers)/' | grep -Ev '\.md$' || true)
 if [ -n "$code" ]; then
-  if git diff --cached -U0 -- $code | grep -E '^\+' | grep -q 'TDD_GATE=off'; then
+  if printf '%s\n' "$code" | tr '\n' '\0' | xargs -0 git diff --cached -U0 -- | grep -E '^\+' | grep 'TDD_GATE=off' >/dev/null; then
     fail "TDD_GATE=off must not be committed in code."
   fi
-  if git diff --cached -U0 -- $code | grep -E '^\+' | grep -Eq 'tdd-exempt:\s*$'; then
+  if printf '%s\n' "$code" | tr '\n' '\0' | xargs -0 git diff --cached -U0 -- | grep -E '^\+' | grep -E 'tdd-exempt:\s*$' >/dev/null; then
     fail "tdd-exempt marker needs a reason: // tdd-exempt: <why>"
   fi
 fi
@@ -42,7 +42,8 @@ fi
 
 # 5. Backlog tickets must parse (frontmatter + required sections).
 if echo "$staged" | grep -Eq '^backlog/.*\.md$'; then
-  for f in $(echo "$staged" | grep -E '^backlog/.*\.md$' | grep -v README.md); do
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     head -1 "$f" | grep -q '^---$' || fail "$f: missing frontmatter."
     case "$(basename "$f")" in
       EPIC-*) secs=("## Context" "## Children" "## Definition of Done") ;;
@@ -51,14 +52,14 @@ if echo "$staged" | grep -Eq '^backlog/.*\.md$'; then
     for sec in "${secs[@]}"; do
       grep -q "^$sec" "$f" || fail "$f: missing section '$sec'."
     done
-  done
+  done < <(echo "$staged" | grep -E '^backlog/.*\.md$' | grep -v README.md)
 fi
 
 # 6. Source edits must be accompanied by tests somewhere in the commit, unless exempt.
 src=$(echo "$staged" | grep -E '^(apps|packages|workers)/.*\.(ts|tsx|py)$' | grep -Ev '(\.test\.|\.spec\.|/tests/|/__tests__/|/e2e/|/test_|\.d\.ts$|/themes/|/components/|page\.tsx$|layout\.tsx$|loading\.tsx$|error\.tsx$|not-found\.tsx$|middleware\.ts$|types\.ts$|__init__\.py$|__main__\.py$|config\.py$|/prisma/|/scripts/)' || true)
 tests=$(echo "$staged" | grep -E '(\.test\.|\.spec\.|/tests/|/__tests__/|/test_)' || true)
 if [ -n "$src" ] && [ -z "$tests" ]; then
-  if ! git diff --cached -U0 -- $src | grep -q 'tdd-exempt:'; then
+  if ! printf '%s\n' "$src" | tr '\n' '\0' | xargs -0 git diff --cached -U0 -- | grep -E '^\+.*tdd-exempt:' >/dev/null; then
     echo "pre-commit: source files changed with no test files in this commit:" >&2
     echo "$src" | sed 's/^/  /' >&2
     echo "Add or update the test that covers the change (or mark pure wiring with // tdd-exempt: <why>)." >&2

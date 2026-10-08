@@ -4,6 +4,8 @@ set -euo pipefail
 remote="$1"
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ -z "$local_ref" ] && continue
+  case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac   # branch deletion
+  case "$local_ref" in refs/tags/*) continue ;; esac
   case "$remote_ref" in
     refs/heads/main|refs/heads/master)
       echo "pre-push: direct pushes to main are blocked. Open a PR from a branch." >&2
@@ -18,6 +20,6 @@ done
 
 if [ "${SKIP_VERIFY:-}" = "1" ]; then exit 0; fi
 echo "pre-push: typecheck + unit tests (SKIP_VERIFY=1 to bypass once)…" >&2
-pnpm -s typecheck
-pnpm -s --filter @hub/shared --filter @hub/web test
+pnpm typecheck
+pnpm -r --if-present test
 exit 0

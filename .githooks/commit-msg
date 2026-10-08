@@ -5,7 +5,8 @@
 # Summary ≤ 72 chars, no trailing period. Merge/revert/fixup commits are exempt.
 set -euo pipefail
 msg_file="$1"
-first=$(grep -v '^#' "$msg_file" | sed -n '1p')
+first=$(grep -v '^#' "$msg_file" | grep -m1 . || true)
+[ -n "$first" ] || { echo "commit-msg: empty commit message." >&2; exit 1; }
 
 case "$first" in
   Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;

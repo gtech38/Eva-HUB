@@ -23,8 +23,8 @@ JSON
 
 # Squash-only merges keep main linear and make PR = one commit = one ticket.
 gh api -X PATCH "repos/$REPO" \
-  -f allow_squash_merge=true -f allow_merge_commit=false -f allow_rebase_merge=false \
-  -f delete_branch_on_merge=true -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY >/dev/null
+  -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false \
+  -F delete_branch_on_merge=true -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY >/dev/null
 
 echo "branch protection applied to $REPO:main (required checks: verify, PR standards; linear history; squash-only; admins included)"
 echo "Note: required reviews are off because a solo maintainer cannot approve their own PR; turn on with required_pull_request_reviews when a second reviewer exists."

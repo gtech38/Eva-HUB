@@ -86,6 +86,11 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: workers/media/pyproject.toml
+      - name: Cache face models
+        uses: actions/cache@v4
+        with:
+          path: workers/media/models
+          key: face-models-yunet2023mar-sface2021dec
       - name: Python worker tests
         working-directory: workers/media
         run: |
@@ -95,6 +100,5 @@ jobs:
 
       - name: Backlog files parse
         run: |
-          if [ -f scripts/backlog-sync.mjs ]; then node scripts/backlog-sync.mjs --dry-run >/dev/null; else echo "no backlog script yet; skipping"; fi
-        env:
-          GH_TOKEN: ${{ github.token }}
+          if [ -f scripts/backlog-sync.mjs ]; then node scripts/backlog-sync.mjs --check; else echo "no backlog script yet; skipping"; fi
+
