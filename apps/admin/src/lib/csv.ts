@@ -25,12 +25,28 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-export function toCsv(rows: Array<Array<string | number | null | undefined>>): string {
-  const esc = (v: string | number | null | undefined) => {
-    const s = v == null ? "" : String(v);
+type Cell = string | number | null | undefined;
+
+/** Text that a spreadsheet would evaluate as a formula (OWASP "CSV injection"). Numbers are never text. */
+const FORMULA_START = /^[=+\-@\t\r]/;
+
+/**
+ * RFC-4180 CSV. Text cells that start with = + - @ (or tab/CR) get a leading apostrophe so Excel,
+ * Sheets and Numbers show them as text instead of running them: guest names and phone numbers are
+ * typed by hosts and guests, so they are untrusted.
+ */
+export function toCsv(rows: Array<Array<Cell>>): string {
+  const esc = (v: Cell) => {
+    let s = v == null ? "" : String(v);
+    if (typeof v === "string" && FORMULA_START.test(s)) s = `'${s}`;
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return rows.map((r) => r.map(esc).join(",")).join("\r\n") + "\r\n";
+}
+
+/** A downloadable CSV body: UTF-8 BOM first so Excel detects UTF-8 (Telugu/Hindi names). */
+export function csvFile(rows: Array<Array<Cell>>): string {
+  return `﻿${toCsv(rows)}`;
 }
 
 /** Header-keyed records; header names normalised to snake_case lowercase. */
