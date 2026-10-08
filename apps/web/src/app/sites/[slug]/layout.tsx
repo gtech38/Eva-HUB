@@ -4,7 +4,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { t, ui, isLocale, type Locale } from "@hub/shared/i18n";
 import { PAGE_PATHS } from "@hub/shared/pages";
-import { getSite, type SiteContext } from "@/lib/site";
+import { getSite, siteOrigin, type SiteContext } from "@/lib/site";
+import { siteMetadata } from "@/lib/siteMetadata";
 import { themeFor, type NavItem } from "@/themes";
 import { SignIn } from "@/components/SignIn";
 import { fullName } from "@/lib/format";
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 export async function generateMetadata(): Promise<Metadata> {
   const site = await getSite();
   if (!site) return { title: "Not found" };
-  return { title: t(site.event.title as object, site.locale) };
+  return siteMetadata({ title: t(site.event.title as object, site.locale), origin: siteOrigin(site) });
 }
 
 const NAV_LABEL: Partial<Record<keyof typeof PAGE_PATHS, Parameters<typeof ui>[0]>> = {
