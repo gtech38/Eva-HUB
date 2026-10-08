@@ -18,7 +18,7 @@ export const RATE_LIMITS = {
   signInIp: { max: 60, windowSec: 15 * 60 },
   signInAddressIp: { max: 5, windowSec: 15 * 60 },
   signInAddress: { max: 20, windowSec: 15 * 60 },
-  otpVerifyAddress: { max: 10, windowSec: 15 * 60 }, // applied by the OTP verify step (SHR-026)
+  otpVerifyAddress: { max: 10, windowSec: 15 * 60 }, // applied by the OTP verify step (SHR-027)
   inviteIp: { max: 200, windowSec: 60 * 60 },
   faceSearchUser: { max: 10, windowSec: 60 * 60 },
   faceSearchConcurrent: { max: 3, windowSec: 60 },

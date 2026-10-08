@@ -1,5 +1,5 @@
 ---
-id: SHR-017
+id: SHR-027
 title: Apply the per-address rate limit to OTP code verification
 labels: [type:feature, area:shared, area:web, priority:p1, size:S, agent-ready]
 milestone: Phase 1 — MVP
@@ -12,7 +12,8 @@ SHR-003 added Postgres-backed rate limits and defined the `otpVerifyAddress` pol
 
 ## Scope
 - Where SHR-002's code-entry action calls `verifyLoginCode(sentTo, code)`, first call `rateLimits.check("otpVerifyAddress", normalizedAddress, { studioId, eventId })` (web) and the admin equivalent if SHR-002 adds one.
-- Over the limit: the same response as a wrong code (no "too many attempts" copy), `verifyLoginCode` not called, nothing burned.
+- Follow the sign-in shape from the SHR-003 review so a stranger cannot lock a guest out: decide with the reviewer whether `otpVerifyAddress` becomes a strict per-(address, IP) limit (`addressAtIp(address, clientIp(headers))`) plus a looser address-only cap, as `signInAddressIp`/`signInAddress` do.
+- Over the limit (or if the limiter throws): the same response as a wrong code (no "too many attempts" copy), `verifyLoginCode` not called, nothing burned.
 - Check before any account or guest-list lookup so on-list and off-list addresses are counted the same way.
 
 ## Out of scope
@@ -21,7 +22,7 @@ SHR-003 added Postgres-backed rate limits and defined the `otpVerifyAddress` pol
 ## Acceptance criteria
 - [ ] Vitest: 11 code checks for one address within 15 minutes; the 11th returns the wrong-code response and `verifyLoginCode` is called 10 times (limiter on `memoryRateLimitStore()`, as in `apps/web/src/app/sites/[slug]/auth/actions.test.ts`).
 - [ ] Vitest: an off-list address and an on-list address get identical responses at and over the limit.
-- [ ] One `auth.rate_limited` audit row with `policy: "otpVerifyAddress"` and the hashed key only.
+- [ ] One `auth.rate_limited` audit row with `policy: "otpVerifyAddress"` and the HMAC'd key only.
 
 ## Files
 - the OTP verify action added by SHR-002 (web, and admin if present), its test
