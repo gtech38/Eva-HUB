@@ -10,6 +10,8 @@ epic: EPIC-LEGAL
 ## Context
 docs/04 long-lead: "Texas attorney review of the biometric consent text, host agreement, privacy policy and terms." Google OAuth verification (ADM-011) and 10DLC (INF-011) both require a public privacy policy URL. The event sites are private by design, so these documents are served from the root/admin domain.
 
+**Decision (2026-10-08, docs/04 §3):** `/legal/privacy` and `/legal/terms` on the root domain are the only unauthenticated routes in the product. They exist because Stripe, Google OAuth verification (ADM-011) and 10DLC (INF-011) each need a public privacy-policy URL. Every other root and event-site path stays behind the sign-in gate; WEB-014 (OG metadata) relies on this.
+
 ## Scope
 - `legal/privacy/v1/privacy.{en,te,hi}.md`: data categories (identity, contacts, RSVP and meal data, photos, face geometry/embeddings, payment metadata, usage logs), sources (host import, the person, device), purposes, legal bases/consent, biometric section mirroring LEG-001 and the retention matrix (LEG-007), sharing (studio as controller for its events, processors: hosting, Stripe, SMS/email providers, print lab), cookies (session + language only), rights and how to exercise them (DSAR flow), children (guardian search; no accounts for minors), Texas-specific disclosures, contact.
 - `legal/terms/v1/terms.en.md`: platform terms for hosts, guests and (later) studios; acceptable use; photos licence; payments/refunds; disclaimers.

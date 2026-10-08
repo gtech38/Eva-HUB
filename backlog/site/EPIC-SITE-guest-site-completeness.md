@@ -16,6 +16,7 @@ milestone: Phase 1 — MVP
 - SHR-006 Complete te/hi UI catalogs with a missing-key check
 - WEB-014 Open Graph and crawler metadata limited to the sign-in screen
 - WEB-015 Accessibility pass (WCAG 2.1 AA)
+- WEB-020 Event kinds and three non-wedding themes (baby shower, Telugu ceremony, gala)
 
 ## Definition of Done
 - [ ] All nine `PageType`s render in all three themes and three locales with screenshots under version control.

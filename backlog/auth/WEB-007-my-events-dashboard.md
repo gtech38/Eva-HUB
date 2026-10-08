@@ -1,6 +1,6 @@
 ---
 id: WEB-007
-title: "My events" cross-event dashboard at the root domain
+title: '"My events" cross-event dashboard at the root domain'
 labels: [type:feature, area:web, priority:p2, size:M, agent-ready]
 milestone: Phase 2 — Commerce, messaging, polish
 depends_on: [SHR-002]

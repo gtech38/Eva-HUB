@@ -16,7 +16,7 @@ docs/01 §4: "Open Graph previews show only the sign-in screen's title and monog
 - A static `favicon` per theme optional; default `favicon.ico` present.
 
 ## Out of scope
-- Public pages (none exist by design).
+- Public pages on event sites (none exist by design). The only unauthenticated routes in the product are `/legal/privacy` and `/legal/terms` on the root domain (LEG-003, docs/04 §3); this ticket does not touch them.
 
 ## Acceptance criteria
 - [ ] `curl -I http://priya-arjun.localhost:3000/og.png` returns 200 `image/png` without a session cookie.

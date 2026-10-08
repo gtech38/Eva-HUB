@@ -20,15 +20,57 @@ docs/01 §2 says it "runs on Fly, Railway, Render, ECS, Cloud Run, Hetzner + Coo
 - Terraform/IaC. Multi-region.
 
 ## Acceptance criteria
-- [ ] A reviewer follows the VPS path on a fresh VM and reaches a working sign-in gate over TLS; the PR records the time taken and any doc fixes.
-- [ ] The rollout runbook is exercised once on staging with a real migration (DB-001 or later) and the result noted.
-- [ ] Every command in the docs is copy-pasteable (no `<placeholders>` without a definition in DOC-005).
+- [ ] `docs/deploy/README.md`, `docs/ops/runbook-rollout.md` and `docs/ops/runbook-incidents.md` exist and `README.md` links to `docs/deploy/README.md` (`grep -c 'docs/deploy/README.md' README.md` ≥ 1).
+- [ ] Every relative link in `docs/deploy/**` and `docs/ops/**` resolves to a file in the repo — the link-check one-liner in Verification exits 0.
+- [ ] Every `pnpm <script>`, `node <path>` and `make <target>` command in a fenced block of those files exists in `package.json` `scripts`, under `scripts/`, or as a target in `workers/media/Makefile` — the command-check one-liner exits 0.
+- [ ] Every `<PLACEHOLDER>` token used in a fenced block of those files is a variable listed in `docs/deploy/env.md` (DOC-005) — the placeholder one-liner exits 0.
+- [ ] `node scripts/env-docs.mjs --check` still passes.
 
 ## Files
 - `docs/deploy/{README.md,cdn.md,storage.md}`, `docs/ops/{runbook-rollout.md,runbook-incidents.md}` (new or extended), `README.md` (link)
 
 ## Verification
-Manual walkthrough; `markdownlint docs/` if configured; `node scripts/env-docs.mjs --check` still passes.
+```bash
+grep -c 'docs/deploy/README.md' README.md
+node scripts/env-docs.mjs --check
+
+# Relative links resolve.
+node -e '
+const fs=require("fs"),p=require("path");
+const files=fs.readdirSync("docs",{recursive:true}).map(f=>p.join("docs",f)).filter(f=>/^docs\/(deploy|ops)\/.*\.md$/.test(f));
+let bad=0;
+for (const f of files) for (const m of fs.readFileSync(f,"utf8").matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)) {
+  const t=m[1]; if (/^[a-z]+:/.test(t)) continue;
+  if (!fs.existsSync(p.resolve(p.dirname(f),t))) { console.log(`${f}: broken link ${t}`); bad++; }
+}
+process.exit(bad?1:0)'
+
+# Fenced pnpm/node/make commands exist.
+node -e '
+const fs=require("fs"),p=require("path");
+const scripts=Object.keys(JSON.parse(fs.readFileSync("package.json","utf8")).scripts);
+const targets=[...fs.readFileSync("workers/media/Makefile","utf8").matchAll(/^([a-z][\w-]*):/gm)].map(m=>m[1]);
+const builtin=new Set(["install","i","add","exec","dlx","run","-r","--filter","-w"]);
+const files=fs.readdirSync("docs",{recursive:true}).map(f=>p.join("docs",f)).filter(f=>/^docs\/(deploy|ops)\/.*\.md$/.test(f));
+let bad=0;
+for (const f of files) for (const b of fs.readFileSync(f,"utf8").match(/```[\s\S]*?```/g)??[]) for (const l of b.split("\n")) {
+  const m=l.trim().match(/^(pnpm|node|make)\s+(\S+)/); if(!m) continue;
+  const ok=m[1]==="node"?fs.existsSync(m[2]):m[1]==="make"?targets.includes(m[2]):builtin.has(m[2])||scripts.includes(m[2]);
+  if(!ok){ console.log(`${f}: ${l.trim()}`); bad++; }
+}
+process.exit(bad?1:0)'
+
+# Placeholders are defined in the env reference.
+node -e '
+const fs=require("fs"),p=require("path");
+const env=fs.readFileSync("docs/deploy/env.md","utf8");
+const files=fs.readdirSync("docs",{recursive:true}).map(f=>p.join("docs",f)).filter(f=>/^docs\/(deploy|ops)\/.*\.md$/.test(f));
+let bad=0;
+for (const f of files) for (const b of fs.readFileSync(f,"utf8").match(/```[\s\S]*?```/g)??[]) for (const m of b.matchAll(/<([A-Z][A-Z0-9_]+)>/g)) {
+  if (!env.includes(m[1])) { console.log(`${f}: undefined placeholder <${m[1]}>`); bad++; }
+}
+process.exit(bad?1:0)'
+```
 
 ## Notes for agents
-Write the runbook as numbered steps with expected output after each. Where a provider differs, use a short per-provider subsection rather than hedging prose.
+Write the runbook as numbered steps with expected output after each. Where a provider differs, use a short per-provider subsection rather than hedging prose. A walkthrough of the VPS path on a fresh VM, and one rollout on staging with a real migration, are strongly recommended before merging; note timings and doc fixes in the PR, but they are not acceptance criteria because nothing in CI can assert them.

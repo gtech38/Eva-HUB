@@ -1,6 +1,6 @@
 ---
 id: WEB-021
-title: "Remove me from face search" guest control
+title: '"Remove me from face search" guest control'
 labels: [type:feature, area:web, priority:p0, size:S, agent-ready]
 milestone: Phase 1 — MVP
 epic: EPIC-FACE

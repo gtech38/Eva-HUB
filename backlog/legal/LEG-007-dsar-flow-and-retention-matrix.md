@@ -1,6 +1,6 @@
 ---
 id: LEG-007
-title: DSAR / "delete my data" flow spec and data retention matrix
+title: 'DSAR / "delete my data" flow spec and data retention matrix'
 labels: [type:chore, area:legal, area:docs, priority:p1, size:S, agent-ready]
 milestone: Phase 1 — MVP
 epic: EPIC-LEGAL

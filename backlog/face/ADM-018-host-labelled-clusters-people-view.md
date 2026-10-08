@@ -1,6 +1,6 @@
 ---
 id: ADM-018
-title: Host-labelled clusters and a "People" browse view
+title: 'Host-labelled clusters and a "People" browse view'
 labels: [type:feature, area:admin, area:web, priority:p2, size:M, agent-ready]
 milestone: Phase 2 — Commerce, messaging, polish
 depends_on: [WRK-009]

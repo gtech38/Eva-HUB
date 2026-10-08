@@ -1,6 +1,6 @@
 ---
 id: WEB-005
-title: Re-authentication and "Not you?" flows on guest site and admin
+title: 'Re-authentication and "Not you?" flows on guest site and admin'
 labels: [type:feature, area:web, area:admin, priority:p1, size:M, agent-ready]
 milestone: Phase 1 — MVP
 depends_on: [SHR-002]

@@ -129,6 +129,7 @@ The scope you picked: gallery with face search, event page, guest list and RSVP.
 | Face index retention | Set by admins only: a studio default of 365 days, with a per-event override. Always finite (30–730 days). Hosts can't change it. |
 | Invitation recipients | Every adult guest with a contact, on every channel they have (email and SMS) |
 | Public pages | None. The whole site is behind a magic link or sign-in code, and signed-out visitors see a sign-in screen. |
+| Legal pages (resolved 2026-10-08) | The one exception: `/legal/privacy` and `/legal/terms` on the root domain are served without a session, because Stripe, Google OAuth verification and 10DLC each need a public privacy-policy URL. Nothing else is public; event subdomains stay fully gated. See LEG-003. |
 
 ### Still open
 

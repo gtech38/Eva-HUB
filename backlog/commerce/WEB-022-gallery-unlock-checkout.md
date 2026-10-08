@@ -27,7 +27,7 @@ docs/01 §8: "After the host pays for the package (the GALLERY_UNLOCK product): 
 - [ ] With the real Stripe test mode and `stripe trigger`, the order becomes PAID (manual, documented).
 
 ## Files
-- `packages/shared/src/policy.ts`, `packages/shared/src/policy.test.ts`, `packages/shared/src/payments/handlers.ts`
+- `packages/shared/src/policy.ts`, `packages/shared/src/policy.test.ts`, `packages/shared/src/payments/handlers.ts` (created by SHR-009)
 - `apps/web/src/app/sites/[slug]/gallery/{page.tsx,purchase/actions.ts}` (new), `apps/web/src/components/gallery/UnlockBanner.tsx` (new)
 - `apps/admin/src/app/studios/[studioId]/events/[eventId]/{settings/page.tsx,gallery/actions.ts}`
 - `packages/db/prisma/schema.prisma` (unique `Entitlement.orderId` or composite) + migration

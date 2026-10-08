@@ -1,6 +1,6 @@
 ---
 id: WRK-010
-title: Face-profile lifecycle: "we found N photos" notice, lastUsedAt refresh, stale on model change
+title: 'Face-profile lifecycle: "we found N photos" notice, lastUsedAt refresh, stale on model change'
 labels: [type:feature, area:worker, area:web, priority:p1, size:M, agent-ready]
 milestone: Phase 2 — Commerce, messaging, polish
 depends_on: [SHR-005]
