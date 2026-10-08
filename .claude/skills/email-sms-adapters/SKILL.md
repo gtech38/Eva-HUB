@@ -33,7 +33,7 @@ description: Use when sending or tracking email/SMS: packages/shared/src/email.t
 - **Invitation = personal token per guest per channel.** `InviteToken { tokenHash, guestId, channel, sentTo, expiresAt, revokedAt?, lastUsedAt? }`; link `${eventOrigin(slug)}/i/${token}`; reusable until revoked; "resend" revokes all live tokens for that guest first. Children never receive invitations; adults without email or phone are reached through their household.
 - **Opt-out is honoured before sending**: `optOuts()` looks up `ContactPoint.smsOptOut` for the target phones and records `SUPPRESSED` instead of sending.
 - **Copy is English-only on the admin side** (`buildMessages`), with the face-search notice included; guest magic-link copy uses `ui()` in the guest's locale. SMS bodies are short: `"{title}: you're invited! Schedule & RSVP: {link}"`.
-- **Audit:** `invites.send` (counts), `invite.resend` (per-channel results), `reminder.create`, `reminder.delete`.
+- **Audit:** `invites.send` (counts), `invite.resend` (per-channel results), `invite.extend` (`{ count, expiresAt }`; `saveSubEvent`/`updateEventSettings` moved the event end later and live tokens were extended), `reminder.create`, `reminder.delete`.
 - **Reminders** are host-scheduled `ReminderRule` rows plus a delayed job; actually composing and sending the reminder is not implemented (worker stub). docs/01 §7 describes the intended behaviour: SMS to households with any PENDING invited sub-event, email if no phone.
 
 ## Common tasks

@@ -20,7 +20,7 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 | `packages/shared/src/env.ts` | `AUTH_SECRET` (min 16 chars), `SESSION_TTL_DAYS` (30), `INVITE_SESSION_TTL_DAYS` (90; an INVITE_LINK session is also capped at its token's expiry, see `sessionExpiry()`), `cookieDomain()` |
 | `apps/web/src/app/sites/[slug]/auth/actions.ts` | `requestSignIn` server action (guest-site magic link, email or SMS) |
 | `apps/web/src/app/sites/[slug]/auth/callback/route.ts` | magic-link landing: burn token, resolve user, link guests, `createSession(EMAIL_LINK|SMS_OTP)` |
-| `apps/web/src/app/sites/[slug]/i/[token]/route.ts` | invitation link: resolve user, link that guest row, `createSession("INVITE_LINK", eventId)` |
+| `apps/web/src/app/sites/[slug]/i/[token]/route.ts` | invitation link: `inviteUsable()` (`lib/inviteLink.ts`), resolve user, link that guest row, `createSession("INVITE_LINK", { guestScopeEventId, inviteExpiresAt, now })`; every dead link redirects to `/?invite=expired` (no cookie, `lastUsedAt` untouched), where `SignIn` shows the `inviteExpired` heading (`lib/inviteNotice.ts`) |
 | `apps/web/src/app/sites/[slug]/auth/signout/route.ts`, `apps/web/src/lib/session.ts` | sign-out; cookie options (`httpOnly`, `sameSite: lax`, `secure` off on localhost, `domain: cookieDomain()`) |
 | `apps/admin/src/app/login/actions.ts`, `app/auth/callback/route.ts`, `app/auth/signout/route.ts` | admin magic link (email only; eligible = platform admin or studio member) |
 | `apps/admin/src/lib/auth.ts` | `getPrincipal()`, `authorize()`, `isStale()`, `requireSignedIn()`, `requireAdmin()`, `requirePlatformAdmin()` |
@@ -30,7 +30,7 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 ## Conventions in this repo
 - **Cookie = `<sessionId>.<base64url HMAC>`.** `decodeCookie` uses `timingSafeEqual`; a bad signature is `null`, never an exception. The cookie carries no claims; everything is loaded from `Session` + `User` per request.
 - **Tokens are stored hashed only** (`tokenHash = sha256(token)`, `@unique`). `LoginToken` (magic link, 15 min, single use via `updateMany({ usedAt: null })` so a double click cannot mint two sessions) and `InviteToken` (per guest per channel, expires at event end + 90 d via `inviteExpiry()` in `packages/shared/src/invites.ts` (latest sub-event end, else `startsOn`; `now + 180d` without dates), reusable until `revokedAt`, `lastUsedAt` stamped).
-- **`authMethod` decides scope.** `INVITE_LINK` sessions get `guestScopeEventId`, a 90-day TTL, and `can()` returns false for every `ELEVATED` action regardless of roles. Magic-link sessions are `EMAIL_LINK` (or `SMS_OTP` for SMS delivery) with a 30-day TTL.
+- **`authMethod` decides scope.** `INVITE_LINK` sessions get `guestScopeEventId`, a TTL of min(90 days, the token's expiry) -- the `createSession` overloads make `{ guestScopeEventId, inviteExpiresAt }` required at compile time -- and `can()` returns false for every `ELEVATED` action regardless of roles. Magic-link sessions are `EMAIL_LINK` (or `SMS_OTP` for SMS delivery) with a 30-day TTL.
 - **Re-auth gate:** elevated actions also fail when `authedAt` is older than 12 h. Admin `authorize()` turns that specific case into `redirect("/login?reauth=1")`; a real denial throws `ForbiddenError`.
 - **Platform admin bypasses role checks but not the INVITE_LINK rule** (tested).
 - **Guest linking happens only on a verified contact.** `resolveUserForVerifiedContact(kind, value)` finds-or-creates the `User` owning that `ContactPoint` and marks it verified; `linkGuestsForContact(userId, kind, value)` attaches unlinked `Guest` rows whose host-typed email/phone equals it, skipping events where the user already has a guest row. The invite route links its own single guest row the same way (contact verified by delivery). `apps/admin/src/lib/users.ts` `userForEmail()` creates users with an **unverified** contact point and never links guests.
@@ -75,7 +75,7 @@ cd apps/admin && pnpm exec tsx scripts/smoke-session.mts admin@localhost
 curl -s -b 'hub_session=<cookie>' http://localhost:3001/platform/jobs | head -c 300
 curl -s -b 'hub_session=<cookie>' -H 'Host: priya-arjun.localhost' http://localhost:3000/rsvp | head -c 300
 ```
-`createSession(userId, "EMAIL_LINK")` is what the script calls; pass `"INVITE_LINK", eventId` to reproduce guest scope.
+`createSession(userId, "EMAIL_LINK")` is what the script calls; pass `"INVITE_LINK", { guestScopeEventId: eventId, inviteExpiresAt }` to reproduce guest scope.
 
 ### Read a magic link from Mailpit (for scripted sign-in)
 ```bash
