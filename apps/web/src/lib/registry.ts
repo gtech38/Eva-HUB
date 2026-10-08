@@ -66,6 +66,15 @@ export function claimGate(input: { registryEnabled: boolean; eventStatus: string
   return input.registryEnabled && input.eventStatus === "LIVE" ? null : "unavailable";
 }
 
+/**
+ * Taking back your own claim only needs a LIVE event: if the host later disables the Registry
+ * page, a guest must still be able to undo within the 24 h window (the claim is theirs, and
+ * ownership/window are enforced by `undoRegistryClaim`).
+ */
+export function undoGate(input: { eventStatus: string }): "unavailable" | null {
+  return input.eventStatus === "LIVE" ? null : "unavailable";
+}
+
 /** The quantity to submit: at least 1, at most what remains (0 when nothing remains). */
 export function clampQuantity(requested: number, remaining: number): number {
   if (remaining <= 0) return 0;

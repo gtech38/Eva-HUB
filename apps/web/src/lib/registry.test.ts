@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UNDO_WINDOW_MS, canUndoClaim, checkClaim, claimGate, claimMessageKey, clampQuantity, registryItemView, remainingQuantity, safeExternalUrl } from "./registry.ts";
+import { UNDO_WINDOW_MS, canUndoClaim, checkClaim, claimGate, claimMessageKey, clampQuantity, undoGate, registryItemView, remainingQuantity, safeExternalUrl } from "./registry.ts";
 
 const NOW = new Date("2026-06-01T12:00:00Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
@@ -121,6 +121,18 @@ describe("claimGate", () => {
   it("refuses on events that are not live (draft, archived)", () => {
     for (const eventStatus of ["DRAFT", "ARCHIVED", "CLOSED", ""]) {
       expect(claimGate({ registryEnabled: true, eventStatus }), eventStatus).toBe("unavailable");
+    }
+  });
+});
+
+describe("undoGate", () => {
+  it("lets a guest take back their own claim while the event is LIVE, even if the host has since disabled the Registry page", () => {
+    expect(undoGate({ eventStatus: "LIVE" })).toBeNull();
+  });
+
+  it("refuses once the event is not live (draft, archived, closed)", () => {
+    for (const eventStatus of ["DRAFT", "ARCHIVED", "CLOSED", ""]) {
+      expect(undoGate({ eventStatus }), eventStatus).toBe("unavailable");
     }
   });
 });
