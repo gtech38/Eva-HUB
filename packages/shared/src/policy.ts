@@ -92,7 +92,6 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     case "rsvp.report.names": return isOwner || assignedStaff || hostish || has("PLANNER");
     case "rsvp.respond": return isGuest || hostish;
     case "registry.manage": return isOwner || hostish;
-    case "registry.claim": return false; // handled above, before the platform-admin bypass
     case "photos.upload": return isOwner || assignedStaff;
     case "albums.manage": return isOwner || assignedStaff;
     case "photos.hide": return isOwner || assignedStaff || hostish;

@@ -44,7 +44,7 @@ export default async function RegistryPage() {
               {items.map((item) => {
                 const view = registryItemView(item, item.claims, userId, now);
                 const href = safeExternalUrl(item.url);
-                const image = safeExternalUrl(item.imageUrl);
+                const image = safeExternalUrl(item.imageUrl, { httpsOnly: true });
                 const title = t(item.title as object, locale);
                 return (
                   <li key={item.id} className="card flex flex-col p-5" data-testid="registry-item">
@@ -66,10 +66,11 @@ export default async function RegistryPage() {
                     )}
                     <ClaimControls
                       itemId={item.id}
+                      itemTitle={title}
                       remaining={view.remaining}
                       canClaim={canClaim}
                       purchasedByViewer={view.purchasedByViewer}
-                      undoableClaimIds={view.undoableClaimIds}
+                      undoableClaims={view.undoableClaims}
                       strings={strings}
                     />
                   </li>

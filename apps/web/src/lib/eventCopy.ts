@@ -90,7 +90,7 @@ export function eventCopy(kind: EventKind, locale: Locale): EventCopy {
 
 const HOSTS_LABEL: Partial<Record<EventKind, LocalizedText>> = {
   WEDDING: UI.party,
-  ENGAGEMENT: { en: "Wedding Party", te: "బృందం", hi: "टोली" },
+  ENGAGEMENT: { ...UI.party, te: "బృందం", hi: "टोली" },
   CEREMONY: { en: "Family", te: "కుటుంబం", hi: "परिवार" },
   ANNIVERSARY: { en: "Family", te: "కుటుంబం", hi: "परिवार" },
 };

@@ -3,7 +3,9 @@ import type { EventKind } from "@hub/db";
 import { ui, type Locale, type UIKey } from "@hub/shared/i18n";
 import { PAGE_PATHS, type PageType } from "@hub/shared/pages";
 import { hostsPageLabel } from "./eventCopy.ts";
-import type { NavItem } from "@/themes/types";
+
+/** One entry in the site nav. Defined here (lib) and re-exported by themes/types, so lib never imports from themes. */
+export type NavItem = { href: string; label: string; current: boolean };
 
 const NAV_LABEL: Partial<Record<PageType, UIKey>> = {
   HOME: "home",
