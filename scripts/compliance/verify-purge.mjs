@@ -144,7 +144,7 @@ export async function verifyPurge(query, eventId) {
     "dead-jobs",
     dead.length === 0 ? "PASS" : "WARN",
     "DEAD INDEX_FACES / PROCESS_PHOTO jobs for the event's photos",
-    dead.length === 0 ? "none" : `${dead.map((j) => `#${j.id} ${j.type}`).join(", ")}: do not use 'Retry dead' for these (it would rebuild the index); cancel them`,
+    dead.length === 0 ? "none" : `${dead.map((j) => `#${j.id} ${j.type}`).join(", ")}: do not use 'Retry dead' for INDEX_FACES/PROCESS_PHOTO (it revives every dead job of that type, in all events, and would rebuild the index); delete these rows with the scoped, audited statement in runbook 1.4`,
   );
 
   const matches = await count(

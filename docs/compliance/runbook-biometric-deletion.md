@@ -81,8 +81,30 @@ Exit code 0 and `RESULT: PASS` means all of these hold for that event in that da
 | `Event.faceSearchEnabled` (WARN if on) | new uploads would be embedded again; a WARN does not fail the run, but turn it off (1.1) unless the studio wants a new index |
 | `Event.faceIndexPurgedAt` set | the handler completed |
 | `AuditLog 'faceindex.purge' row` | the worker's own record, with counts and the job id; it must not be older than `faceIndexPurgedAt`, so a row from an earlier purge does not count |
-| `DEAD INDEX_FACES / PROCESS_PHOTO jobs` (WARN) | the admin jobs page's "Retry dead" would revive them and rebuild the index; cancel them instead |
+| `DEAD INDEX_FACES / PROCESS_PHOTO jobs` (WARN) | the admin jobs page's "Retry dead" would revive them and rebuild the index; do not use it for these types (it acts on every dead job of the type, in all events, and "Cancel" only applies to QUEUED jobs). Delete them with the statement below |
 | `PhotoMatch` / `BiometricConsent` (INFO) | rows kept on purpose; see biometrics.md |
+
+Removing DEAD index jobs for one event (platform operator; `ref` is a ticket id, as in 2.2). It deletes
+only dead `INDEX_FACES`/`PROCESS_PHOTO` rows whose photo belongs to the event, and audits the count:
+
+```sql
+\set event_id  '<eventId>'
+\set studio_id '<studioId>'
+\set ref       '<ticket id>'
+WITH del AS (
+  DELETE FROM "Job"
+   WHERE type IN ('INDEX_FACES', 'PROCESS_PHOTO') AND status = 'DEAD'
+     AND payload->>'photoId' IN (SELECT id FROM "Photo" WHERE "eventId" = :'event_id')
+  RETURNING type)
+INSERT INTO "AuditLog"("studioId", "eventId", action, target, data)
+SELECT NULLIF(:'studio_id', ''), :'event_id', 'job.delete', :'ref',
+       jsonb_build_object('reason', 'dead index jobs after biometric purge', 'count', count(*))
+  FROM del
+RETURNING data;
+```
+
+Until WRK-020 lands (it does not cover dead jobs; see its criteria), this and "do not press Retry dead
+for these types" are the only protection.
 
 Exit code 1 means a `FAIL` line: do not report the purge as done. Exit code 2 is a usage error, a
 refusal (missing or forbidden database name), or any failure to run the checks at all (cannot
@@ -116,7 +138,7 @@ output prove it was done.
 
 Tell the requester: the live face index for the event is deleted; saved photo matches are kept
 because they hold no face data (deleted per person on request, section 2); copies in backups expire
-on the schedule in `docs/ops/backups.md`. Leave face search off unless the studio wants a new
+per `docs/ops/backups.md`. Leave face search off unless the studio wants a new
 index; re-enabling does not rebuild one for existing photos, and the gallery "Re-index faces" button
 only enqueues `CLUSTER_FACES` (biometrics.md L11).
 
@@ -243,12 +265,14 @@ DOC-003 (`docs/ops/backups.md`); this runbook does not describe them.
 
 What you must do here:
 
-1. In the request record, state the backup retention from `docs/ops/backups.md` as the date by which
-   the data will have left backups.
+1. In the request record, state the date by which the data will have left backups, taken from
+   `docs/ops/backups.md`.
 2. After any restore, re-run section 1 for every event purged after the restore point and section 2
    for every person deleted after it. Per-person deletions cannot be replayed from the database
    alone; a record kept outside it is LEG-008. Until it exists, keep your own list of
-   section 2 requests (reference, date, user or guest id) somewhere outside Postgres.
+   section 2 requests (ticket id, date, user or guest id) somewhere outside Postgres. That list
+   names people who asked for deletion: store it with the same access control and retention care as
+   the data it describes, not in a shared spreadsheet or chat.
 
 ## 4. What this runbook cannot do
 

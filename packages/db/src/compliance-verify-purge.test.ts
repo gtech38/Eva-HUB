@@ -4,6 +4,8 @@
  *
  * Lives in packages/db because this package owns the Postgres test harness and is collected by
  * `pnpm test`; the script itself sits in scripts/ because operators run it from the repo root.
+ * (The @hub/scripts package collects only top-level `scripts/*.test.mjs`, has no Prisma client, and
+ * does not collect `scripts/compliance/`.)
  *
  * The purged fixture replicates the SQL of workers/media/hub_worker/handlers/purge_face_index.py.
  * The real handler is exercised against the same script by
@@ -358,6 +360,41 @@ describe.skipIf(!runDb)(runDb ? "verify-purge against Postgres" : `verify-purge 
       expect(result.ok).toBe(true);
     },
   );
+
+  it("the DEAD-job remedy is one an operator can carry out: no 'cancel' (QUEUED-only), no per-type 'Retry dead'", async () => {
+    const f = await fixture("dead-wording", { purged: true });
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Job"(type, payload, status, "dedupeKey") VALUES ('INDEX_FACES', $1::jsonb, 'DEAD'::"JobStatus", $2)`,
+      JSON.stringify({ photoId: f.photoId, run }),
+      `${run}:dead-wording`,
+    );
+    const dead = (await verifyPurge(query, f.eventId)).checks.find((c) => c.id === "dead-jobs");
+    expect(dead?.status).toBe("WARN");
+    expect(dead?.detail).not.toMatch(/cancel/i);
+    expect(dead?.detail).toMatch(/Retry dead/);
+    expect(dead?.detail).toMatch(/delete/i);
+  });
+
+  // Scoping guards: another event's work must never change this event's verdict.
+  it("a queued index job for another event's photo does not fail this event", async () => {
+    const mine = await fixture("scope-pending-mine", { purged: true, faceSearch: false });
+    await fixture("scope-pending-other", { purged: true, pendingJob: "INDEX_FACES" });
+    const result = await verifyPurge(query, mine.eventId);
+    expect(statusOf(result.checks, "pending-jobs")).toBe("PASS");
+    expect(result.ok).toBe(true);
+  });
+
+  it("a DEAD index job for another event's photo does not warn about this event", async () => {
+    const mine = await fixture("scope-dead-mine", { purged: true });
+    const other = await fixture("scope-dead-other", { purged: true });
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Job"(type, payload, status, "dedupeKey") VALUES ('INDEX_FACES', $1::jsonb, 'DEAD'::"JobStatus", $2)`,
+      JSON.stringify({ photoId: other.photoId, run }),
+      `${run}:scope-dead-other`,
+    );
+    const result = await verifyPurge(query, mine.eventId);
+    expect(statusOf(result.checks, "dead-jobs")).toBe("PASS");
+  });
 
   it("only ever issues SELECT statements", async () => {
     const f = await fixture("readonly", { purged: true });

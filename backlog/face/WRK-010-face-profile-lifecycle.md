@@ -12,7 +12,7 @@ epic: EPIC-FACE
 
 ## Scope
 - `_match_profiles`: when new matches are written for a user in this run (count of inserted rows > 0, not updates), `UPDATE "FaceProfile" SET "lastUsedAt" = now(), "purgeAfter" = now() + interval '3 years'` and insert `Message(purpose: GALLERY_READY → add FACE_MATCHES to MessagePurpose, channel EMAIL)` + `SEND_MESSAGE {template: "face_matches", count, eventId}` with `dedupe_key face-matches:<eventId>:<userId>:<day>` so bursts coalesce to one email per day.
-- `_match_profiles` must skip guests with `Guest.faceSearchOptOut = true` (it joins `Guest` but ignores the flag; also tracked in WRK-020). Added from the LEG-005 review: without it an operator's event-scoped delete of a person's matches is undone by the next `CLUSTER_FACES`.
+- `_match_profiles` skipping guests with `Guest.faceSearchOptOut` is owned by WRK-020 (with its acceptance criterion); do not duplicate it here. Do not regress it while changing this function.
 - Only notify when the event is `LIVE` and `galleryPublishedAt` is set.
 - Stale handling: `_match_profiles` selects only `modelVersion = MODEL_VERSION`; a startup check in `__main__.py` marks `FaceProfile.stale = true` where `modelVersion <> MODEL_VERSION` (audited `faceprofile.stale`, count); web `gallery/me/page.tsx` shows "Your saved face signature needs a fresh selfie" when `stale` and the search route resets `stale=false` on a new `remember=on` search (it already upserts).
 - Web `/api/face/search`: on a self search by a user with a profile, also refresh `lastUsedAt/purgeAfter` (currently only on upsert path — verify and test).
