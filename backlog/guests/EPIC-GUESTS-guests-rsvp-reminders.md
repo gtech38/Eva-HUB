@@ -14,6 +14,7 @@ Households, guests, per-guest sub-event invites, RSVP, CSV import, invitations a
 - WRK-002 FIRE_REMINDER selects pending households and queues messages
 - ADM-012 Reminder rules and RSVP deadline enforcement
 - ADM-009 RSVP report exports and vendor meal counts
+- ADM-029 Let hosts, planners and vendors open their event's admin pages
 - ADM-010 Google Contacts import
 - ADM-011 Google OAuth app verification (external)
 - ADM-028 Parse admin date inputs in the event's timezone; startsOn-only events end at local end of day
