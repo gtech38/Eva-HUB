@@ -10,6 +10,7 @@ The gallery works end to end locally but several pieces are POC-grade: album pag
 
 ## Children
 - WEB-017 Keyset pagination and virtualised album grid
+- WEB-033 Page live selfie-search results instead of returning up to 500 DTOs
 - SHR-007 S3 CORS and multipart presign helpers
 - ADM-014 Resumable multipart uploader
 - WRK-005 S3 hygiene jobs: rotate derivatives on hide, delete objects, abort stale multipart uploads

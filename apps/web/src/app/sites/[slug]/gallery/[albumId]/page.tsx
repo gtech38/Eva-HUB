@@ -1,12 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { prisma } from "@hub/db";
 import { t } from "@hub/shared/i18n";
 import { requireViewer } from "@/lib/site";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
 import { PhotoGrid } from "@/components/gallery/PhotoGrid";
 import { galleryStrings } from "@/lib/gallery-strings";
-import { visibleVisibilities, visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
+import { findVisibleAlbum, listAlbumPage, countAlbumPhotos } from "@/lib/gallery";
+import { encodeCursor } from "@/lib/galleryCursor";
 
 export const dynamic = "force-dynamic";
 
@@ -18,12 +18,12 @@ export default async function AlbumPage({ params }: { params: Promise<{ albumId:
   const { albumId } = await params;
   const S = galleryStrings(locale);
 
-  const album = await prisma.album.findFirst({ where: { id: albumId, eventId: event.id, visibility: { in: visibleVisibilities(viewer) } } });
+  const album = await findVisibleAlbum(event.id, viewer, albumId);
   if (!album) notFound();
 
-  const photos = await prisma.photo.findMany({ where: visiblePhotoWhere(event.id, viewer, { albumId }), orderBy: [{ sortKey: "asc" }, { createdAt: "asc" }] });
-  const entitled = await isEntitledFullRes(event.id, viewer.principal.userId);
-  const dtos = await toPhotoDTOs(photos, viewer, { entitled });
+  // Only the first page is rendered here; PhotoGrid fetches the rest from /api/gallery/<albumId>.
+  const [first, total] = await Promise.all([listAlbumPage(event.id, viewer, album.id), countAlbumPhotos(event.id, viewer, album.id)]);
+  const more = { endpoint: `/api/gallery/${album.id}`, nextCursor: first.nextCursor && encodeCursor(first.nextCursor) };
 
   return (
     <div>
@@ -32,8 +32,12 @@ export default async function AlbumPage({ params }: { params: Promise<{ albumId:
           ← {S.backToGallery}
         </Link>
       </p>
-      <PageHeader title={t(album.title as object, locale)} intro={`${photos.length} ${S.photos}`} />
-      {dtos.length === 0 ? <EmptyState title={S.empty} body={S.emptyBody} /> : <PhotoGrid photos={dtos} strings={S} canFavorite={viewer.can("favorites")} />}
+      <PageHeader title={t(album.title as object, locale)} intro={`${total} ${S.photos}`} />
+      {first.photos.length === 0 ? (
+        <EmptyState title={S.empty} body={S.emptyBody} />
+      ) : (
+        <PhotoGrid photos={first.photos} strings={S} canFavorite={viewer.can("favorites")} more={more} total={total} />
+      )}
     </div>
   );
 }

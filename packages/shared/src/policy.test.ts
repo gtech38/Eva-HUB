@@ -51,6 +51,24 @@ describe("can()", () => {
     expect(can(assigned, "studio.manage", r)).toBe(false);
   });
 
+  it("registry.claim: only a guest of the event, including via an invitation link (docs/02 section 4)", () => {
+    const guest = base({ guestOf: new Set(["e1"]) });
+    expect(can(guest, "registry.claim", r)).toBe(true);
+    expect(can(base({ authMethod: "INVITE_LINK", guestOf: new Set(["e1"]) }), "registry.claim", r)).toBe(true);
+    expect(can(guest, "registry.claim", { studioId: "s1", eventId: "e2" })).toBe(false);
+    expect(can(base({ eventRoles: { e1: ["HOST"] } }), "registry.claim", r)).toBe(false);
+    expect(can(base({ studioRoles: { s1: "OWNER" } }), "registry.claim", r)).toBe(false);
+    expect(can(base({ eventRoles: { e1: ["VENDOR"] } }), "registry.claim", r)).toBe(false);
+  });
+
+  it("registry.claim: a platform admin who is not a guest of the event is refused (docs/02 section 4: guests only)", () => {
+    expect(can(base({ isPlatformAdmin: true }), "registry.claim", r)).toBe(false);
+    expect(can(base({ isPlatformAdmin: true, guestOf: new Set(["e2"]) }), "registry.claim", r)).toBe(false);
+    expect(can(base({ isPlatformAdmin: true, guestOf: new Set(["e1"]) }), "registry.claim", r)).toBe(true);
+    // No event in scope: nothing to claim against.
+    expect(can(base({ isPlatformAdmin: true, guestOf: new Set(["e1"]) }), "registry.claim", { studioId: "s1" })).toBe(false);
+  });
+
   it("tenant isolation: roles in another studio grant nothing", () => {
     const other = base({ studioRoles: { s2: "OWNER" }, eventRoles: { e2: ["HOST"] } });
     expect(can(other, "site.view", r)).toBe(false);
