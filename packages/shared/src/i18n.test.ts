@@ -8,8 +8,7 @@ describe("UI strings", () => {
     }
   });
 
-  it("has the expired-invitation heading and help (ADM-005)", () => {
+  it("has the expired-invitation heading (ADM-005)", () => {
     expect(ui("inviteExpired", "en")).toBe("This link has expired");
-    expect(ui("inviteExpiredHelp", "en")).toBe("Enter your email or phone and we'll send you a new one.");
   });
 });

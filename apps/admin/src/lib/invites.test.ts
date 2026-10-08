@@ -6,10 +6,6 @@ const guest = { id: "g1", householdId: "h1", firstName: "Lakshmi", lastName: "Ra
 const link = "http://priya-arjun.localhost:3000/i/tok";
 
 describe("admin invites (presentation only)", () => {
-  it("the expiry rule is not defined here; it lives in @hub/shared/invites", () => {
-    expect("inviteExpiry" in invites).toBe(false);
-  });
-
   it("buildMessages puts the personal link in every channel", () => {
     const m = invites.buildMessages(event, guest, link, "");
     expect(m.subject).toBe("You're invited: Priya & Arjun");

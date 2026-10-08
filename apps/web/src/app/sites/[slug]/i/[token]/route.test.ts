@@ -27,9 +27,9 @@ let studioId = "";
 let guestId = "";
 let n = 0;
 
-async function token(o: { expiresAt: Date; revokedAt?: Date | null }) {
+async function token(o: { expiresAt: Date; revokedAt?: Date | null; guestId?: string }) {
   const raw = `${run}-${++n}`;
-  const row = await prisma.inviteToken.create({ data: { tokenHash: hashToken(raw), guestId, channel: "EMAIL", sentTo: `${run}@localhost`, expiresAt: o.expiresAt, revokedAt: o.revokedAt ?? null } });
+  const row = await prisma.inviteToken.create({ data: { tokenHash: hashToken(raw), guestId: o.guestId ?? guestId, channel: "EMAIL", sentTo: `${run}@localhost`, expiresAt: o.expiresAt, revokedAt: o.revokedAt ?? null } });
   return { raw, row };
 }
 
@@ -61,25 +61,36 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+/** Every dead link: same redirect, no cookie, and the token is not stamped as used. */
+async function expectRejected(raw: string, tokenId?: string) {
+  const res = await open(raw);
+  expect(res.status).toBe(307);
+  expect(res.headers.get("location")).toBe(`${ORIGIN}/?invite=expired`);
+  expect(res.headers.get("set-cookie")).toBeNull();
+  if (tokenId) expect((await prisma.inviteToken.findUniqueOrThrow({ where: { id: tokenId } })).lastUsedAt).toBeNull();
+}
+
 describe.skipIf(!dbUp)(suite, () => {
   it("an expired token lands on the sign-in form with the expiry notice, without a session", async () => {
-    const { raw } = await token({ expiresAt: new Date(Date.now() - DAY) });
-    const res = await open(raw);
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/?invite=expired`);
-    expect(res.headers.get("set-cookie")).toBeNull();
+    const { raw, row } = await token({ expiresAt: new Date(Date.now() - DAY) });
+    await expectRejected(raw, row.id);
   });
 
   it("a revoked token lands on the same expiry notice", async () => {
-    const { raw } = await token({ expiresAt: new Date(Date.now() + 30 * DAY), revokedAt: new Date() });
-    const res = await open(raw);
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/?invite=expired`);
-    expect(res.headers.get("set-cookie")).toBeNull();
+    const { raw, row } = await token({ expiresAt: new Date(Date.now() + 30 * DAY), revokedAt: new Date() });
+    await expectRejected(raw, row.id);
   });
 
   it("an unknown token lands on the same expiry notice", async () => {
-    const res = await open(`${run}-nope`);
-    expect(res.headers.get("location")).toBe(`${ORIGIN}/?invite=expired`);
+    await expectRejected(`${run}-nope`);
+  });
+
+  it("another event's token lands on the same expiry notice", async () => {
+    const other = await prisma.event.create({ data: { studioId, slug: `${run}-other`, title: { en: "other" }, theme: "LUXURY" } });
+    const hh = await prisma.household.create({ data: { studioId, eventId: other.id, name: "other" } });
+    const g = await prisma.guest.create({ data: { studioId, eventId: other.id, householdId: hh.id, firstName: "Other" } });
+    const { raw, row } = await token({ expiresAt: new Date(Date.now() + 30 * DAY), guestId: g.id });
+    await expectRejected(raw, row.id);
   });
 
   it("a live token opens an INVITE_LINK session that ends when the token expires", async () => {

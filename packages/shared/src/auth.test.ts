@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionExpiry } from "./auth.ts";
+import { createSession, sessionExpiry } from "./auth.ts";
 
 const DAY = 864e5;
 const NOW = new Date("2026-10-08T12:00:00Z");
@@ -21,11 +21,28 @@ describe("sessionExpiry", () => {
     expect(sessionExpiry("INVITE_LINK", NOW, TTL, tokenExpiresAt)).toEqual(tokenExpiresAt);
   });
 
-  it("invite sessions without a known token expiry fall back to INVITE_SESSION_TTL_DAYS", () => {
-    expect(sessionExpiry("INVITE_LINK", NOW, TTL)).toEqual(plusDays(90));
+  it("an invite session minted 1 ms before the token expires is still in the future at `now`", () => {
+    const tokenExpiresAt = new Date(NOW.getTime() + 1);
+    expect(sessionExpiry("INVITE_LINK", NOW, TTL, tokenExpiresAt).getTime()).toBeGreaterThan(NOW.getTime());
   });
+});
 
-  it("token expiry does not cap non-invite sessions", () => {
-    expect(sessionExpiry("EMAIL_LINK", NOW, TTL, plusDays(1))).toEqual(plusDays(30));
+describe("createSession types", () => {
+  it("INVITE_LINK requires the event scope and the token expiry at compile time", () => {
+    // Never called: `pnpm typecheck` fails if any @ts-expect-error below stops being an error.
+    const typeOnly = () => {
+      // @ts-expect-error INVITE_LINK without options
+      void createSession("u", "INVITE_LINK");
+      // @ts-expect-error INVITE_LINK without inviteExpiresAt
+      void createSession("u", "INVITE_LINK", { guestScopeEventId: "e" });
+      // @ts-expect-error INVITE_LINK without guestScopeEventId
+      void createSession("u", "INVITE_LINK", { inviteExpiresAt: NOW });
+      // @ts-expect-error sessionExpiry for INVITE_LINK without the token expiry
+      void sessionExpiry("INVITE_LINK", NOW, TTL);
+      void createSession("u", "INVITE_LINK", { guestScopeEventId: "e", inviteExpiresAt: NOW, now: NOW });
+      void createSession("u", "EMAIL_LINK");
+      void createSession("u", "EMAIL_LINK", { now: NOW });
+    };
+    expect(typeof typeOnly).toBe("function");
   });
 });

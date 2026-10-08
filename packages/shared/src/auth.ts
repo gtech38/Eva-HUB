@@ -44,28 +44,38 @@ export function decodeCookie(raw: string | undefined | null): string | null {
 
 // ── sessions ──
 
+type SessionTtl = { sessionDays: number; inviteDays: number };
+type NonInviteMethod = Exclude<AuthMethod, "INVITE_LINK">;
+
 /**
  * When a session minted at `now` expires. INVITE_LINK sessions get `inviteDays` but never
- * outlive the invitation token they were opened with (docs/02 §2 rule 3).
+ * outlive the invitation token they were opened with (docs/02 §2 rule 3), so the token's
+ * expiry is required for them.
  */
-export function sessionExpiry(
-  authMethod: AuthMethod,
-  now: Date,
-  ttl: { sessionDays: number; inviteDays: number },
-  inviteExpiresAt?: Date,
-): Date {
+export function sessionExpiry(authMethod: "INVITE_LINK", now: Date, ttl: SessionTtl, inviteExpiresAt: Date): Date;
+export function sessionExpiry(authMethod: NonInviteMethod, now: Date, ttl: SessionTtl): Date;
+export function sessionExpiry(authMethod: AuthMethod, now: Date, ttl: SessionTtl, inviteExpiresAt?: Date): Date {
   if (authMethod !== "INVITE_LINK") return new Date(now.getTime() + ttl.sessionDays * 864e5);
-  const byTtl = now.getTime() + ttl.inviteDays * 864e5;
-  return new Date(inviteExpiresAt ? Math.min(byTtl, inviteExpiresAt.getTime()) : byTtl);
+  return new Date(Math.min(now.getTime() + ttl.inviteDays * 864e5, inviteExpiresAt!.getTime()));
 }
 
-/** `inviteExpiresAt`: the invitation token's expiry, which caps an INVITE_LINK session. */
-export async function createSession(userId: string, authMethod: AuthMethod, guestScopeEventId?: string, inviteExpiresAt?: Date) {
+/** `now`: pass the instant the caller validated against, so the session cannot be born expired. */
+export type SessionOptions = { now?: Date };
+/** An invite session is scoped to one event and capped at its token's expiry. */
+export type InviteSessionOptions = SessionOptions & { guestScopeEventId: string; inviteExpiresAt: Date };
+
+export function createSession(userId: string, authMethod: "INVITE_LINK", opts: InviteSessionOptions): ReturnType<typeof insertSession>;
+export function createSession(userId: string, authMethod: NonInviteMethod, opts?: SessionOptions): ReturnType<typeof insertSession>;
+export function createSession(userId: string, authMethod: AuthMethod, opts: SessionOptions & Partial<InviteSessionOptions> = {}) {
   const e = env();
-  const expiresAt = sessionExpiry(authMethod, new Date(), { sessionDays: e.SESSION_TTL_DAYS, inviteDays: e.INVITE_SESSION_TTL_DAYS }, inviteExpiresAt);
-  const s = await prisma.session.create({
-    data: { userId, authMethod, guestScopeEventId, expiresAt },
-  });
+  const ttl = { sessionDays: e.SESSION_TTL_DAYS, inviteDays: e.INVITE_SESSION_TTL_DAYS };
+  const now = opts.now ?? new Date();
+  const expiresAt = authMethod === "INVITE_LINK" ? sessionExpiry(authMethod, now, ttl, opts.inviteExpiresAt!) : sessionExpiry(authMethod, now, ttl);
+  return insertSession({ userId, authMethod, guestScopeEventId: opts.guestScopeEventId, expiresAt, authedAt: now });
+}
+
+async function insertSession(data: { userId: string; authMethod: AuthMethod; guestScopeEventId?: string; expiresAt: Date; authedAt: Date }) {
+  const s = await prisma.session.create({ data });
   return { session: s, cookie: encodeCookie(s.id) };
 }
 

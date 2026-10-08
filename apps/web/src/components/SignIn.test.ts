@@ -33,8 +33,9 @@ describe("SignIn", () => {
     const html = render("invite=expired");
     expect(html).toContain('name="contact"');
     expect(html).toContain('type="submit"');
-    expect(headings(html).some((h) => /expired/i.test(h!))).toBe(true);
-    expect(html).toContain("Enter your email or phone and we&#x27;ll send you a new one.");
+    expect(headings(html)).toContain("This link has expired");
+    // The form's own label already asks for an email or phone; no second help line.
+    expect(html).not.toContain("send you a new one");
   });
 
   it("the expiry heading follows the site locale", () => {
