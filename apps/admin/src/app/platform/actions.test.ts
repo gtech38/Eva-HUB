@@ -2,7 +2,7 @@
  * Wiring test for the platform `retryJob` server action: form parsing, the session, the revalidation
  * and the result shape. The rules themselves (platform.admin, FAILED/DEAD only, finishedAt reset, audit)
  * are tested in src/lib/jobActions.test.ts. next/cache and the session are mocked; Postgres is real
- * (skipped with a message when unreachable).
+ * (skipped with a message when unreachable locally; a failure when CI is set, see test/dbGuard.ts).
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@hub/db";
@@ -14,13 +14,13 @@ vi.mock("@/lib/auth", async (importOriginal) => ({ ...(await importOriginal<type
 import { revalidatePath } from "next/cache";
 import { requireSignedIn } from "@/lib/auth";
 import { retryJob } from "./actions";
+import { postgresUp } from "../../../test/dbGuard";
 
 const run = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
 const T = `TEST_ADM022_ACTIONS_${run}`;
 const ACTOR = `test-actor-adm022-actions-${run}`;
 
-const dbUp = await prisma.$queryRaw`SELECT 1`.then(() => true, () => false);
-if (!dbUp) console.log("# apps/admin platform/actions: Postgres unreachable -- skipping");
+const dbUp = await postgresUp("retryJob server action"); // skipped locally without Postgres, a failure when CI is set
 
 afterAll(async () => {
   if (dbUp) {

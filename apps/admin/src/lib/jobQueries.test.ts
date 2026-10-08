@@ -9,6 +9,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
+import { postgresUp } from "../../test/dbGuard";
 import { cancelJob, dbNow, loadDurations, loadJobBuckets, loadJobHealth, loadWorkers, recentJobs, retryDeadOfType } from "./jobQueries";
 
 const run = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
@@ -18,9 +19,8 @@ const OTHER_EVENT = `${EVENT}-other`;
 const HOUR = 3_600_000;
 const WORKER = `test-worker-adm022-${run}`;
 
-const dbUp = await prisma.$queryRaw`SELECT 1`.then(() => true, () => false);
-const suite = dbUp ? "job queries against Postgres" : "job queries against Postgres [skipped: Postgres unreachable at DATABASE_URL]";
-if (!dbUp) console.log("# apps/admin jobQueries: Postgres unreachable -- skipping");
+const suite = "job queries against Postgres";
+const dbUp = await postgresUp(suite); // skipped locally without Postgres, a failure when CI is set
 
 afterAll(async () => {
   if (dbUp) {

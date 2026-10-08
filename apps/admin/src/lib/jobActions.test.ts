@@ -1,30 +1,35 @@
 /**
  * Authorisation, tenant scoping and auditing of the job actions (ADM-022), tested without Next: the
  * server actions in platform/jobs/actions.ts and events/[eventId]/jobs/actions.ts only parse the form,
- * call these functions and revalidate. Postgres-backed (an existing seeded event supplies the studio);
- * skipped with a message when Postgres is unreachable or nothing is seeded.
+ * call these functions and revalidate. Postgres-backed with its own studio and event (prefixed slugs,
+ * removed in afterAll), so it needs no seed data and shares no rows with other suites. Without Postgres
+ * it is skipped with a message locally and FAILS when CI is set (test/dbGuard.ts).
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
 import type { Principal } from "@hub/shared";
 import { cancelJobAs, retryDeadJobsAs, retryJobAs } from "./jobActions";
 import { ForbiddenError } from "./auth";
+import { postgresUp } from "../../test/dbGuard";
 
 const run = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
 const T = `TEST_ADM022_ACT_${run}`;
 const ACTOR = `test-actor-adm022-${run}`;
 const HOUR = 3_600_000;
+const SUITE = "job actions against Postgres";
 
-const dbUp = await prisma.$queryRaw`SELECT 1`.then(() => true, () => false);
-const event = dbUp ? await prisma.event.findFirst({ select: { id: true, studioId: true } }) : null;
-const ready = dbUp && event !== null;
-const suite = ready ? "job actions against Postgres" : "job actions against Postgres [skipped: Postgres unreachable or no seeded event]";
-if (!ready) console.log("# apps/admin jobActions: Postgres unreachable or no seeded event -- skipping");
+const dbUp = await postgresUp(SUITE);
+
+/** This suite's own tenant; set in beforeAll. */
+let event: { id: string; studioId: string } | undefined;
+const made: { studio?: string; event?: string } = {};
 
 afterAll(async () => {
   if (dbUp) {
     await prisma.job.deleteMany({ where: { type: { startsWith: T } } });
     await prisma.auditLog.deleteMany({ where: { actorUserId: ACTOR } });
+    if (made.event) await prisma.event.deleteMany({ where: { id: made.event } });
+    if (made.studio) await prisma.studio.deleteMany({ where: { id: made.studio } });
   }
   await prisma.$disconnect();
 });
@@ -36,13 +41,21 @@ const owner = () => principal({ studioRoles: { [event!.studioId]: "OWNER" } });
 const staff = () => principal({ studioRoles: { [event!.studioId]: "STAFF" } });
 const platformAdmin = () => principal({ isPlatformAdmin: true });
 
-/** A scheduled (never due in real time) job carrying the seeded event's id. */
+/** A scheduled (never due in real time) job carrying this suite's event id. */
 const scheduled = (extra: Partial<Parameters<typeof prisma.job.create>[0]["data"]> = {}) =>
   prisma.job.create({ data: { type: T, payload: { eventId: event!.id }, runAt: new Date(Date.now() + HOUR), ...extra } });
 const status = async (id: bigint) => (await prisma.job.findUniqueOrThrow({ where: { id } })).status;
 const auditRows = (action: string, target: string) => prisma.auditLog.findMany({ where: { actorUserId: ACTOR, action, target } });
 
-describe.skipIf(!ready)(suite, () => {
+describe.skipIf(!dbUp)(SUITE, () => {
+  beforeAll(async () => {
+    const studio = await prisma.studio.create({ data: { slug: `t-adm022-${run}`, name: `ADM-022 ${run}` } });
+    made.studio = studio.id;
+    const e = await prisma.event.create({ data: { studioId: studio.id, slug: `adm022-${run}`, title: { en: `ADM-022 ${run}` }, theme: "LUXURY" } });
+    made.event = e.id;
+    event = { id: e.id, studioId: studio.id };
+  });
+
   describe("event-scoped cancel (studio.manage: owner only)", () => {
     const input = (id: bigint, over: { studioId?: string; eventId?: string } = {}) => ({ id, scope: { studioId: event!.studioId, eventId: event!.id, ...over } });
 
