@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { etaSeconds, percentile, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
+import { cancelRefusal, etaSeconds, percentile, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
@@ -125,6 +125,17 @@ describe("etaSeconds", () => {
 
   it("is zero when nothing is due, even without a duration sample", () => {
     expect(etaSeconds([t("PROCESS_PHOTO", 0, null)], 1)).toBe(0);
+  });
+});
+
+describe("cancelRefusal", () => {
+  it("job.cancel is refused for RUNNING jobs", () => {
+    expect(cancelRefusal("RUNNING")).toMatch(/running/i);
+  });
+
+  it("refuses finished jobs and allows only QUEUED (due or scheduled)", () => {
+    expect(cancelRefusal("QUEUED")).toBeNull();
+    for (const s of ["SUCCEEDED", "FAILED", "DEAD"] as const) expect(cancelRefusal(s)).toMatch(/only queued/i);
   });
 });
 

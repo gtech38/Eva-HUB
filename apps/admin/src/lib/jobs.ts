@@ -153,6 +153,15 @@ export function etaSeconds(types: ReadonlyArray<Pick<TypeSummary, "queued" | "p5
   return Math.ceil(ms / liveWorkers / 1000);
 }
 
+// ── actions ───────────────────────────────────────────────────────────
+
+/** Why a job may not be cancelled, or null when it may. A RUNNING handler cannot be interrupted safely. */
+export function cancelRefusal(status: JobStatusName): string | null {
+  if (status === "QUEUED") return null;
+  if (status === "RUNNING") return "Job is running; a running job cannot be cancelled.";
+  return `Job is ${status}; only queued jobs can be cancelled.`;
+}
+
 /** The alerting slice of the dashboard, for the health endpoint (INF-014). */
 export function queueHealth(s: JobsSummary, liveWorkers: number) {
   return {
