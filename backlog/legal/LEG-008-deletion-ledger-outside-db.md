@@ -8,16 +8,20 @@ epic: EPIC-LEGAL
 ---
 
 ## Context
-docs/ops/backups.md §7 (DOC-003): a restore to time *T* brings back every embedding purged after *T*. The restore runbook (step 6) re-runs event purges that are due, because `faceIndexPurgeAt` is in the data. But per-person deletions made after *T* leave no trace in the restored database, because their `AuditLog` rows are rolled back too. Those are `FaceProfile` revokes, "remove me" opt-outs (WEB-021) and DSAR deletions (LEG-007). Under CUBI, a restore must not quietly undo a destruction.
+docs/ops/backups.md §7 (DOC-003): a restore to time *T* brings back every embedding purged after *T*, and rolls back the `AuditLog` rows that recorded the purge. Only purges that are *due by date* can be found from the restored data (`faceIndexPurgeAt`). Everything else made after *T* is invisible in the restored database:
+- event-level actions: `faceindex.purge`, `faceindex.purge.request` ("Purge now"), `event.facesearch.disable`/`enable`, and `photo.delete` (whose cascade removes `Face` and `PhotoMatch`);
+- per-person deletions: `FaceProfile` revokes, "remove me" opt-outs (WEB-021) and DSAR deletions (LEG-007).
+
+DOC-003 replays the event-level actions from the **old** instance's `AuditLog` (`docs/ops/replay-export.sql` + `docs/ops/replay-after-restore.sql`). That only works while the old instance survives, which is why the post-restore bound in backups.md §7 is best effort. Per-person deletions have no replayable record at all. Under CUBI, a restore must not quietly undo a destruction.
 
 ## Scope
-- On every person-level deletion (`faceprofile.revoke`, `faceSearchOptOut`, `dsar.completed`, `PhotoMatch` deletions on request), append a minimal record to a store outside the primary Postgres. The record holds the action, subject ids, time and actor, and **no biometric data**. The store could be an append-only object under `ledger/` in the bucket, or the logging backend with long retention; decide in this ticket.
+- On every person-level deletion (`faceprofile.revoke`, `faceSearchOptOut`, `dsar.completed`, `PhotoMatch` deletions on request) **and** every event-level action the DOC-003 replay covers (`faceindex.purge`, `faceindex.purge.request`, `event.facesearch.disable`/`enable`, `photo.delete`), append a minimal record to a store outside the primary Postgres. The record holds the action, subject ids, time and actor, and **no biometric data**. The store could be an append-only object under `ledger/` in the bucket, or the logging backend with long retention; decide in this ticket.
 - `scripts/compliance/replay-deletions.mjs --since <T>`: reads the ledger and re-applies each deletion idempotently against `DATABASE_URL`. It prints PASS/FAIL per record.
 - Add the replay to docs/ops/runbook-restore.md step 6, and to `docs/compliance/runbook-biometric-deletion.md` (LEG-005).
-- Today the runbook replays only event-level actions (`faceindex.purge`, `faceindex.purge.request`, `event.facesearch.disable`/`enable`) from the **old instance's** `AuditLog` via `docs/ops/replay-after-restore.sql` (DOC-003). Extend that file, or replace it with the ledger replay, for the per-person actions, so the post-restore bound in docs/ops/backups.md §7 stops being best effort.
+- Replace the old-instance dependency: the ledger replay covers what `docs/ops/replay-after-restore.sql` does today plus the per-person actions, so the post-restore bound in docs/ops/backups.md §7 stops being best effort. Keep the action names in `scripts/tests/test_restore_contracts.py` in sync.
 
 ## Out of scope
-- Event-level purges, which are already recomputable from `faceIndexPurgeAt`.
+- Purges that are due by date: the runbook's step 6c re-queues them from `faceIndexPurgeAt`, which survives in the restored data.
 
 ## Acceptance criteria
 - [ ] Revoking a face profile writes a ledger record (vitest).
