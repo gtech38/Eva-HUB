@@ -4,7 +4,7 @@
  * dateLine, story) still comes from EventPage and is not affected.
  */
 import type { EventKind } from "@hub/db";
-import { t, type Locale, type LocalizedText } from "@hub/shared/i18n";
+import { t, UI, type Locale, type LocalizedText } from "@hub/shared/i18n";
 
 export const EVENT_KINDS = ["WEDDING", "ENGAGEMENT", "BABY_SHOWER", "BIRTHDAY", "ANNIVERSARY", "CEREMONY", "PARTY", "CORPORATE", "OTHER"] as const satisfies readonly EventKind[];
 
@@ -89,7 +89,7 @@ export function eventCopy(kind: EventKind, locale: Locale): EventCopy {
 }
 
 const HOSTS_LABEL: Partial<Record<EventKind, LocalizedText>> = {
-  WEDDING: { en: "Wedding Party", te: "పెళ్లి బృందం", hi: "शादी की टोली" },
+  WEDDING: UI.party,
   ENGAGEMENT: { en: "Wedding Party", te: "బృందం", hi: "टोली" },
   CEREMONY: { en: "Family", te: "కుటుంబం", hi: "परिवार" },
   ANNIVERSARY: { en: "Family", te: "కుటుంబం", hi: "परिवार" },
