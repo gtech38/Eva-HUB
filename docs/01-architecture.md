@@ -90,7 +90,7 @@ Platform
 ## 4. Event sites and themes
 
 - There are fixed page types: Home, Our Story/About, Schedule, Travel & Stay, Wedding Party, FAQ, Registry, Gallery, and RSVP. Each page type has a typed content schema stored as JSON and validated with Zod.
-- **All three themes ship in the MVP.** To keep that affordable, themes share one set of headless page components (data loading, RSVP form logic, gallery grid, lightbox). A theme supplies only its layout shells, typography, ornaments and tokens. A Storybook-style theme gallery renders every page in every theme × every locale for visual review.
+- **All six themes ship in the MVP** (three wedding, three non-wedding; see docs/05-theme-references.md). To keep that affordable, themes share one set of headless page components (data loading, RSVP form logic, gallery grid, lightbox). A theme supplies only its layout shells, typography, ornaments and tokens. A Storybook-style theme gallery renders every page in every theme × every locale for visual review.
 - **Studio credit.** Every theme's footer shows "Photography by {Studio}", linking to the studio site, with content taken from `Studio.brandJson`. Hosts can't remove it.
 - **Access.** **The whole event site is private.** Every page requires an invited-guest session from a magic link or a sign-in code, or an event or studio membership. There are no public pages and no PIN or share links.
   - **Signed-out visitors** see only a themed sign-in screen: names, monogram and a "Enter your email or phone" form. Entering an address sends a one-time code **only if** that address is on the guest list. The response is always the same ("If you're on the guest list, we've sent you a code"), so the form can't be used to find out who's invited.

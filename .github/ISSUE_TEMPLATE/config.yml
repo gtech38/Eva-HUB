@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Planned work (backlog as code)
+    url: https://github.com/gtech38/Eva-HUB/blob/main/backlog/README.md
+    about: Feature and chore tickets are authored as files under backlog/ and synced with `pnpm backlog:sync`. Add a file there instead of opening a blank issue.

@@ -12,9 +12,9 @@
   --accent-fg: #ffffff;
   --line: #e4e0d8;
   --radius: 4px;
-  --font-display: var(--font-lora);
+  --font-display: var(--font-inria);
   --font-body: var(--font-inter);
-  --font-script: var(--font-great-vibes);
+  --font-script: var(--font-pinyon);
 }
 
 html {
@@ -31,14 +31,14 @@ body {
 /* ─── Shared primitives ─── */
 .btn {
   @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium tracking-wide transition-colors disabled:opacity-50;
-  border-radius: var(--radius);
+  border-radius: var(--radius-btn, var(--radius));
   background: var(--accent);
   color: var(--accent-fg);
 }
 .btn:hover { filter: brightness(1.08); }
 .btn-ghost {
   @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm transition-colors;
-  border-radius: var(--radius);
+  border-radius: var(--radius-btn, var(--radius));
   border: 1px solid var(--line);
   color: var(--fg);
   background: transparent;
@@ -46,7 +46,7 @@ body {
 .btn-ghost:hover { background: var(--surface); }
 .input {
   @apply w-full px-3 py-2.5 text-base outline-none;
-  border-radius: var(--radius);
+  border-radius: var(--radius-btn, var(--radius));
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--fg);
@@ -62,49 +62,120 @@ body {
 .nav-link { @apply text-sm tracking-wide transition-opacity hover:opacity-70; }
 .nav-link[aria-current="page"] { color: var(--accent); }
 
-/* ─── Hindu Traditional ornaments (pure CSS, no images) ─── */
-.rangoli-band {
-  height: 14px;
+/* ─── Luxury (ref: Velvet Promise) ─── */
+.velvet {
+  background-color: var(--accent-2);
   background-image:
-    radial-gradient(circle at 7px 7px, var(--accent) 2.5px, transparent 3px),
-    radial-gradient(circle at 21px 7px, var(--accent-2) 1.5px, transparent 2px);
-  background-size: 28px 14px;
-  background-repeat: repeat-x;
+    radial-gradient(ellipse at 20% 10%, rgba(255, 255, 255, 0.07), transparent 45%),
+    radial-gradient(ellipse at 80% 90%, rgba(0, 0, 0, 0.35), transparent 55%),
+    repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.025) 0 2px, transparent 2px 7px),
+    repeating-linear-gradient(25deg, rgba(0, 0, 0, 0.06) 0 3px, transparent 3px 11px);
 }
-.paisley-frame {
-  position: relative;
+.gold-frame {
+  border: 1px solid var(--accent);
+  box-shadow: inset 0 0 0 4px var(--bg), inset 0 0 0 5px var(--accent);
 }
-.paisley-frame::before,
-.paisley-frame::after {
-  content: "";
-  position: absolute;
-  inset-inline: 0;
-  height: 10px;
-  background-image: repeating-linear-gradient(90deg, var(--accent) 0 10px, transparent 10px 14px, var(--accent-2) 14px 18px, transparent 18px 28px);
-  opacity: 0.85;
-}
-.paisley-frame::before { top: 0; }
-.paisley-frame::after { bottom: 0; }
-.scallop {
-  height: 12px;
-  background-image: radial-gradient(circle at 10px -4px, transparent 10px, var(--accent) 11px, var(--accent) 12px, transparent 13px);
-  background-size: 20px 12px;
-  background-repeat: repeat-x;
-}
-
-/* ─── Luxury ornaments ─── */
 .hairline {
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
 }
+/* First letter of each name set in script, as the reference does with "V" and "P". */
+.initial-script { display: inline-block; }
+.initial-script::first-letter {
+  font-family: var(--font-script), cursive;
+  font-size: 1.45em;
+  line-height: 0;
+  margin-right: 0.02em;
+}
 
-/* ─── Romantic ornaments ─── */
-.blush-glow {
-  background: radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
-    radial-gradient(ellipse at 90% 100%, color-mix(in srgb, var(--accent-2) 30%, transparent), transparent 55%);
+/* ─── Romantic (ref: Vow and Bloom) ─── */
+.ivory-sky {
+  background: linear-gradient(180deg, #f4efe7 0%, #efe6dd 55%, #e9dfd4 100%);
+}
+.petals { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.petal {
+  position: absolute;
+  top: -6%;
+  width: 14px;
+  height: 20px;
+  border-radius: 60% 60% 60% 60% / 70% 70% 50% 50%;
+  background: color-mix(in srgb, var(--accent) 85%, white);
+  opacity: 0.85;
+  transform: rotate(20deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .petal { animation: petal-fall linear infinite; }
+}
+@keyframes petal-fall {
+  0%   { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 0.9; }
+  100% { transform: translate3d(var(--drift, 40px), 115vh, 0) rotate(420deg); opacity: 0; }
+}
+
+/* ─── Hindu Traditional (ref: Jashn + Shaadi gold frame) ─── */
+.paper {
+  background-color: var(--bg);
+  background-image: radial-gradient(circle at 50% 0%, rgba(184, 146, 62, 0.08), transparent 60%);
+}
+.gold-double-frame {
+  position: relative;
+  border: 1px solid var(--accent-2);
+}
+.gold-double-frame::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px solid var(--accent-2);
+  pointer-events: none;
+  opacity: 0.7;
+}
+.ornament-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--accent-2);
+}
+.ornament-line::before,
+.ornament-line::after {
+  content: "";
+  height: 1px;
+  width: 4rem;
+  background: linear-gradient(90deg, transparent, currentColor);
+}
+.ornament-line::after { background: linear-gradient(90deg, currentColor, transparent); }
+.maroon-panel {
+  background-color: var(--accent);
+  background-image:
+    radial-gradient(ellipse at 30% 20%, rgba(255, 255, 255, 0.06), transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(0, 0, 0, 0.35), transparent 60%);
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .fade-in { animation: fade-in 500ms ease-out both; }
 }
 @keyframes fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ─── Telugu Traditional ornaments ─── */
+/* Toran: mango-leaf garland along the top edge (leaf shapes from radial gradients). */
+.toran {
+  height: 18px;
+  background-image:
+    radial-gradient(ellipse 7px 10px at 9px 2px, var(--accent-3) 98%, transparent 100%),
+    radial-gradient(circle at 9px 15px, var(--accent-2) 2.2px, transparent 3px);
+  background-size: 18px 18px;
+  background-repeat: repeat-x;
+  border-top: 3px solid var(--accent);
+}
+.turmeric-frame {
+  border: 1px solid var(--accent-2);
+  box-shadow: inset 0 0 0 5px var(--surface), inset 0 0 0 6px var(--accent);
+}
+
+/* ─── Midnight Gala ─── */
+.gala-glow {
+  background:
+    radial-gradient(ellipse at 85% 20%, rgba(196, 154, 37, 0.22), transparent 55%),
+    radial-gradient(ellipse at 10% 100%, rgba(255, 255, 255, 0.05), transparent 50%),
+    var(--bg);
+}

@@ -21,7 +21,7 @@ The scope you picked: gallery with face search, event page, guest list and RSVP.
 
 **Event site**
 
-- **All three themes**: Luxury, High-Class Romantic and Elegant Hindu Traditional. Build the shared headless page components first, then the three theme shells on top of them. Expect themes to be the largest front-end item in Phase 1, and get design comps for each before building.
+- **All six themes**: Luxury, High-Class Romantic, Elegant Hindu Traditional, Nursery Sage, Telugu Traditional, Midnight Gala (docs/05). Build the shared headless page components first, then the three theme shells on top of them. Expect themes to be the largest front-end item in Phase 1, and get design comps for each before building.
 - Fixed pages: Home, About, Schedule (sub-events), Travel, FAQ, Gallery, RSVP.
 - "Photography by {Studio}" credit in every theme's footer.
 - i18n plumbing with English content. Telugu and Hindi catalogs can land in Phase 2 without schema changes.
@@ -123,12 +123,13 @@ The scope you picked: gallery with face search, event page, guest list and RSVP.
 | Gallery access | Invited guests only. No PIN or share links. A `galleryOnly` guest flag covers photo-only viewers. |
 | Searching for kids | Allowed for adults in the child's household, under guardian consent, with no stored profile. |
 | Studio branding | A "Photography by {Studio}" credit in the event site footer |
-| First template | All three ship in Phase 1 |
+| First template | All six ship in Phase 1 (three wedding + baby shower, Telugu ceremony, gala) |
 | Studio domain | `yourstudio.com` stays a placeholder behind the `ROOT_DOMAIN` config value |
 
 | Face index retention | Set by admins only: a studio default of 365 days, with a per-event override. Always finite (30–730 days). Hosts can't change it. |
 | Invitation recipients | Every adult guest with a contact, on every channel they have (email and SMS) |
 | Public pages | None. The whole site is behind a magic link or sign-in code, and signed-out visitors see a sign-in screen. |
+| Legal pages (resolved 2026-10-08) | The one exception: `/legal/privacy` and `/legal/terms` on the root domain are served without a session, because Stripe, Google OAuth verification and 10DLC each need a public privacy-policy URL. Nothing else is public; event subdomains stay fully gated. See LEG-003. |
 
 ### Still open
 

@@ -154,6 +154,22 @@ enum ThemeKey {
   LUXURY
   ROMANTIC
   HINDU_TRADITIONAL
+  NURSERY_SAGE       // baby shower: sage, cream, champagne gold
+  TELUGU_TRADITIONAL // non-wedding Telugu/Hindu ceremonies: turmeric, kumkum, mango-leaf green
+  MIDNIGHT_GALA      // parties and galas: black, champagne, clean sans
+}
+
+// What the event is. Themes choose their copy ("are getting married" vs "turns fifty") from this.
+enum EventKind {
+  WEDDING
+  ENGAGEMENT
+  BABY_SHOWER
+  BIRTHDAY
+  ANNIVERSARY
+  CEREMONY   // gruhapravesam, annaprasana, upanayanam, half-saree, naming ceremony…
+  PARTY      // gala, launch, reunion
+  CORPORATE
+  OTHER
 }
 
 enum EventStatus {
@@ -171,6 +187,7 @@ model Event {
   startsOn      DateTime?
   timezone      String      @default("America/Chicago")
   status        EventStatus @default(DRAFT)
+  kind          EventKind   @default(WEDDING)
   theme         ThemeKey
   themeOverrides Json?      // accent colors, hero image key, monogram
   defaultLocale String      @default("en")

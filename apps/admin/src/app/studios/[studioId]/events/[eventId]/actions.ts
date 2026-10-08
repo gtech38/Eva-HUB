@@ -1,6 +1,7 @@
 "use server";
 
 import { z } from "zod";
+import { EventKindSchema, ThemeKeySchema } from "@/lib/eventSchemas";
 import { revalidatePath } from "next/cache";
 import { prisma, enqueue } from "@hub/db";
 import { env, PAGE_SCHEMAS, type PageType } from "@hub/shared";
@@ -26,7 +27,8 @@ const EventSettings = z.object({
   startsOn: z.string().optional(),
   timezone: z.string().min(1, "Timezone is required"),
   status: z.enum(["DRAFT", "LIVE", "COMPLETED", "ARCHIVED"]),
-  theme: z.enum(["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL"]),
+  theme: ThemeKeySchema,
+  kind: EventKindSchema,
   monogram: z.string().max(12).optional(),
   enabledLocales: z.array(z.enum(["en", "te", "hi"])).min(1, "Enable at least one locale"),
   defaultLocale: z.enum(["en", "te", "hi"]),
@@ -44,7 +46,7 @@ export async function updateEventSettings(_p: ActionState, fd: FormData): Promis
     const retentionRaw = str(fd, "faceIndexRetentionDays");
     const input = EventSettings.parse({
       title: localized(fd, "title"), slug: str(fd, "slug"), startsOn: str(fd, "startsOn") || undefined, timezone: str(fd, "timezone"),
-      status: str(fd, "status"), theme: str(fd, "theme"), monogram: str(fd, "monogram") || undefined,
+      status: str(fd, "status"), theme: str(fd, "theme"), kind: str(fd, "kind") || before.kind, monogram: str(fd, "monogram") || undefined,
       enabledLocales: locales, defaultLocale: str(fd, "defaultLocale"), faceSearchEnabled: bool(fd, "faceSearchEnabled"),
       faceIndexRetentionDays: retentionRaw === "" ? null : retentionRaw,
     });
@@ -67,7 +69,7 @@ export async function updateEventSettings(_p: ActionState, fd: FormData): Promis
         where: { id: eventId },
         data: {
           title: input.title, slug: input.slug, startsOn: input.startsOn ? new Date(`${input.startsOn}T00:00:00`) : null, timezone: input.timezone,
-          status: input.status, theme: input.theme,
+          status: input.status, theme: input.theme, kind: input.kind,
           themeOverrides: { ...((before.themeOverrides as object) ?? {}), monogram: input.monogram ?? null },
           enabledLocales: input.enabledLocales, defaultLocale: input.defaultLocale,
           faceSearchEnabled: input.faceSearchEnabled, faceIndexRetentionDays: input.faceIndexRetentionDays,
@@ -89,7 +91,7 @@ export async function updateEventSettings(_p: ActionState, fd: FormData): Promis
     if (before.faceSearchEnabled !== input.faceSearchEnabled) {
       await audit({ studioId, eventId, actorUserId: p.userId, action: input.faceSearchEnabled ? "event.facesearch.enable" : "event.facesearch.disable", target: eventId });
     }
-    await audit({ studioId, eventId, actorUserId: p.userId, action: "event.settings.update", target: eventId, data: { slugChanged: before.slug !== input.slug, status: input.status } });
+    await audit({ studioId, eventId, actorUserId: p.userId, action: "event.settings.update", target: eventId, data: { slugChanged: before.slug !== input.slug, status: input.status, ...(before.theme !== input.theme ? { theme: { from: before.theme, to: input.theme } } : {}), ...(before.kind !== input.kind ? { kind: { from: before.kind, to: input.kind } } : {}) } });
     revalidatePath(`/studios/${studioId}`, "layout");
     return { ok: true, message: "Settings saved." };
   });

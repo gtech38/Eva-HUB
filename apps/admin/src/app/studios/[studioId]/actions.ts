@@ -1,6 +1,8 @@
 "use server";
 
 import { z } from "zod";
+import { EventKindSchema, ThemeKeySchema } from "@/lib/eventSchemas";
+import { monogramFor } from "@hub/shared/names";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@hub/db";
 import { env, parsePage, type PageType } from "@hub/shared";
@@ -139,7 +141,8 @@ export async function deleteProduct(_p: ActionState, fd: FormData): Promise<Acti
 const CreateEvent = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(2, "Slug is required").max(60).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Lowercase letters, digits and dashes only"),
-  theme: z.enum(["LUXURY", "ROMANTIC", "HINDU_TRADITIONAL"]),
+  theme: ThemeKeySchema,
+  kind: EventKindSchema,
   startsOn: z.string().optional(),
   timezone: z.string().min(1),
   hostEmail: EmailSchema("Enter a valid email").or(z.literal("")),
@@ -153,7 +156,7 @@ export async function createEvent(_p: ActionState, fd: FormData): Promise<Action
     const p = await requireSignedIn();
     const studioId = str(fd, "studioId");
     authorize(p, "event.create", { studioId });
-    const input = CreateEvent.parse({ title: str(fd, "title"), slug: str(fd, "slug"), theme: str(fd, "theme"), startsOn: str(fd, "startsOn") || undefined, timezone: str(fd, "timezone") || "America/Chicago", hostEmail: str(fd, "hostEmail"), hostUserId: str(fd, "hostUserId") || undefined });
+    const input = CreateEvent.parse({ title: str(fd, "title"), slug: str(fd, "slug"), theme: str(fd, "theme"), kind: str(fd, "kind") || "WEDDING", startsOn: str(fd, "startsOn") || undefined, timezone: str(fd, "timezone") || "America/Chicago", hostEmail: str(fd, "hostEmail"), hostUserId: str(fd, "hostUserId") || undefined });
 
     if (RESERVED_SLUGS.has(input.slug)) return { ok: false, error: "Please fix the highlighted fields.", fieldErrors: { slug: ["That slug is reserved"] } };
     const hostname = `${input.slug}.${env().ROOT_DOMAIN}`;
@@ -178,10 +181,11 @@ export async function createEvent(_p: ActionState, fd: FormData): Promise<Action
           slug: input.slug,
           title: { en: input.title },
           theme: input.theme,
+          kind: input.kind,
           startsOn: input.startsOn ? new Date(`${input.startsOn}T00:00:00`) : null,
           timezone: input.timezone,
           status: "DRAFT",
-          themeOverrides: { monogram: input.title.split(/\s*(?:&|and)\s*/i).map((s) => s.trim()[0]?.toUpperCase() ?? "").filter(Boolean).join("&") || null },
+          themeOverrides: { monogram: monogramFor(input.title) || null },
         },
       });
       await tx.domain.create({ data: { hostname, studioId, eventId: ev.id, isPrimary: true, verifiedAt: new Date() } });
@@ -195,7 +199,7 @@ export async function createEvent(_p: ActionState, fd: FormData): Promise<Action
       return ev;
     });
 
-    await audit({ studioId, eventId: event.id, actorUserId: p.userId, action: "event.create", target: event.id, data: { slug: input.slug, theme: input.theme, hostUserId } });
+    await audit({ studioId, eventId: event.id, actorUserId: p.userId, action: "event.create", target: event.id, data: { slug: input.slug, theme: input.theme, kind: input.kind, hostUserId } });
     revalidatePath(`/studios/${studioId}`, "layout");
     return { ok: true, message: "Event created.", data: { eventId: event.id } };
   });
