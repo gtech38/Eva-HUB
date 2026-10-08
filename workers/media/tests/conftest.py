@@ -14,6 +14,7 @@ at its own database (or stop the consumer) before running it.
 """
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from typing import Any, Mapping
@@ -34,6 +35,8 @@ def conn():
     try:
         c = connect(autocommit=True)
     except psycopg.OperationalError as exc:  # pragma: no cover
+        if os.environ.get("CI"):  # a skipped database test proves nothing; CI must fail loudly
+            raise
         pytest.skip(f"postgres not reachable: {exc}")
     yield c
     c.close()

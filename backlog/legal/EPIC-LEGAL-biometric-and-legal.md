@@ -13,6 +13,8 @@ Face search indexes every face in a gallery, including people who never opted in
 - LEG-002 Host agreement draft
 - LEG-003 Privacy policy and terms of service drafts
 - LEG-005 Biometric compliance checklist (CUBI, COPPA) and data-deletion runbook
+- SHR-025 Keep child guests off user accounts and out of self-search
+- SHR-026 Face search must not run from an invitation-link session
 - LEG-007 DSAR / "delete my data" flow spec and data retention matrix
 - LEG-006 Texas attorney review (external)
 - DB-005 BiometricConsent.consentLocale column

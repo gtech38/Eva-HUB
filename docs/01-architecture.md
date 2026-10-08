@@ -213,6 +213,7 @@ CUBI requires **informed consent before capturing a biometric identifier** for a
   - **Always finite:** the window must be between 30 and 730 days, and there is no "keep forever" option. A bounded window is what makes the CUBI retention position defensible.
   - **Changes are audited and recomputed:** every change writes an `AuditLog` row, and the event's `faceIndexPurgeAt` is recalculated. Saved `PhotoMatch` lists survive the purge because they contain no biometric data. Face profiles follow their own rules: deleted on revoke, or after 3 years unused.
 - **Before launch.** Have a Texas attorney review the consent text and the host agreement before going live. This is a design input, not a formality.
+- **What the code does today, and where it falls short of the above:** [docs/compliance/biometrics.md](compliance/biometrics.md) (requirement, control, evidence, gaps). Deletion procedure and its check: [docs/compliance/runbook-biometric-deletion.md](compliance/runbook-biometric-deletion.md).
 
 ## 7. Messaging
 
