@@ -17,8 +17,10 @@ from typing import Any, Mapping
 import psycopg
 import pytest
 
+from psycopg.types.json import Jsonb
+
 from hub_worker import jobs
-from hub_worker.db import connect
+from hub_worker.db import connect, new_id, vec_literal
 
 WORKER_ID = "pytest"
 CLAIM_TIMEOUT_S = 0.25  # long enough for timestamp(3) rounding, short enough to expose a real delay
@@ -107,3 +109,74 @@ def queue(conn, stale_test_jobs_swept, request, monkeypatch):
     monkeypatch.setattr(jobs, "enqueue", tracked_enqueue)
     yield q
     q.cleanup()
+
+
+class Tenant:
+    """A throwaway studio + event; rows hung off it are removed by `cleanup()`."""
+
+    def __init__(self, conn: psycopg.Connection) -> None:
+        self.conn = conn
+        tag = uuid.uuid4().hex[:10]
+        self.studio_id = f"test-studio-{tag}"
+        self.event_id = f"test-event-{tag}"
+        self.user_ids: list[str] = []
+        with conn.cursor() as cur:
+            cur.execute(
+                'INSERT INTO "Studio"(id, slug, name) VALUES (%s, %s, %s)',
+                (self.studio_id, self.studio_id, "pytest studio"),
+            )
+            cur.execute(
+                '''INSERT INTO "Event"(id, "studioId", slug, title, theme, "updatedAt")
+                   VALUES (%s, %s, %s, %s, 'LUXURY'::"ThemeKey", now())''',
+                (self.event_id, self.studio_id, self.event_id, Jsonb({"en": "pytest"})),
+            )
+
+    def add_user(self) -> str:
+        user_id = f"test-user-{uuid.uuid4().hex[:10]}"
+        with self.conn.cursor() as cur:
+            cur.execute('INSERT INTO "User"(id, "updatedAt") VALUES (%s, now())', (user_id,))
+        self.user_ids.append(user_id)
+        return user_id
+
+    def add_photo(self) -> str:
+        photo_id = new_id()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                '''INSERT INTO "Photo"(id, "studioId", "eventId", "originalKey", "originalBytes",
+                                       checksum, filename, status)
+                   VALUES (%s, %s, %s, %s, 0, %s, %s, 'READY'::"PhotoStatus")''',
+                (photo_id, self.studio_id, self.event_id, f"orig/{photo_id}.jpg", photo_id, f"{photo_id}.jpg"),
+            )
+        return photo_id
+
+    def add_face(self, photo_id: str, embedding: list[float], quality: float = 0.9) -> str:
+        face_id = new_id()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                '''INSERT INTO "Face"(id, "eventId", "photoId", bbox, quality, "modelVersion", embedding)
+                   VALUES (%s, %s, %s, %s, %s, 'pytest', %s::vector)''',
+                (face_id, self.event_id, photo_id, Jsonb({"x": 0, "y": 0, "w": 1, "h": 1}), quality,
+                 vec_literal(embedding)),
+            )
+        return face_id
+
+    def cleanup(self) -> None:
+        e, s = self.event_id, self.studio_id
+        with self.conn.cursor() as cur:
+            cur.execute('DELETE FROM "PhotoMatch" pm USING "Photo" p WHERE pm."photoId" = p.id AND p."eventId" = %s', (e,))
+            cur.execute('DELETE FROM "Face" WHERE "eventId" = %s', (e,))
+            cur.execute('DELETE FROM "FaceCluster" WHERE "eventId" = %s', (e,))
+            cur.execute('DELETE FROM "Photo" WHERE "eventId" = %s', (e,))
+            cur.execute('DELETE FROM "ZipExport" WHERE "eventId" = %s', (e,))
+            cur.execute('DELETE FROM "AuditLog" WHERE "eventId" = %s OR "studioId" = %s', (e, s))
+            cur.execute('DELETE FROM "Event" WHERE id = %s', (e,))
+            cur.execute('DELETE FROM "Studio" WHERE id = %s', (s,))
+            cur.execute('DELETE FROM "User" WHERE id = ANY(%s)', (self.user_ids,))
+
+
+@pytest.fixture
+def tenant(conn):
+    """A private studio + event for tests that write tenant-owned rows; removed afterwards."""
+    t = Tenant(conn)
+    yield t
+    t.cleanup()
