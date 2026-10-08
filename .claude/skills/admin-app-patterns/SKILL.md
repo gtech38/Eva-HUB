@@ -18,14 +18,15 @@ description: Use when building or changing anything in apps/admin (studio/platfo
 | `src/app/page.tsx` | `requireAdmin()` then redirect: platform admin -> `/platform`, one studio -> `/studios/{id}`, else `/studios` |
 | `src/app/login/{page,actions,LoginForm}.tsx` | magic-link login; notices via `?reauth=1`, `?denied=1`, `?expired=1`, `?signedout=1` |
 | `src/app/auth/{callback,signout}/route.ts` | session mint / destroy |
-| `src/app/platform/{layout,page,jobs,audit,users}/` + `actions.ts` | platform admin: studios list + `createStudio`, Jobs (`retryJob`), Audit, Users |
+| `src/app/platform/{layout,page,jobs,audit,users}/` + `actions.ts` | platform admin: studios list + `createStudio`, Jobs (`retryJob`; `jobs/actions.ts` has cancel and "retry dead of type"), Audit, Users |
 | `src/app/studios/page.tsx` | studio switcher when a user has several |
 | `src/app/studios/[studioId]/{layout,page,settings,staff,contacts,pricing}/` + `actions.ts` | studio scope: `requireAdmin(studioId)`, `Shell` sidebar with Studio + Events sections |
 | `src/app/studios/[studioId]/events/new/` | `NewEventForm` + `createEvent` |
-| `src/app/studios/[studioId]/events/[eventId]/{layout,page,settings,members,pages,schedule,guests,invites,gallery,registry}/` + `actions.ts` | event scope: breadcrumb header, `EventTabs`, one `actions.ts` for settings/members/pages/schedule/registry, separate `actions.ts` under `guests/`, `invites/`, `gallery/` |
+| `src/app/studios/[studioId]/events/[eventId]/{layout,page,settings,members,pages,schedule,guests,invites,gallery,registry,jobs}/` + `actions.ts` | event scope: breadcrumb header, `EventTabs`, one `actions.ts` for settings/members/pages/schedule/registry, separate `actions.ts` under `guests/`, `invites/`, `gallery/`, `jobs/` (owner-only cancel; the Jobs tab shows the event's `payload.eventId` jobs and hides worker identities) |
 | `src/lib/auth.ts` | `getPrincipal`, `authorize`, `isStale`, `requireSignedIn`, `requireAdmin`, `requirePlatformAdmin`, `visibleStudios` |
 | `src/lib/action.ts` | `ActionState`, `act()`, `fromZod()`, `formObject()`, `str/bool/opt/localized`, `EmailSchema()` |
 | `src/lib/data.ts` | `getStudio`, `getEvent` (both `notFound()` on miss, React `cache`), `studioEvents`, `THEMES` swatches, `PAGE_ORDER` |
+| `src/lib/{jobs,jobQueries,jobActions}.ts`, `src/components/JobHealth.tsx` | jobs dashboard (ADM-022): `jobs.ts` pure metrics (`summarizeJobs`, `workerStatuses`, `etaSeconds`, `publicError`, `cancelRefusal`); `jobQueries.ts` SQL (database clock, bucket aggregate, percentiles, heartbeats, `recentJobs`, `cancelJob`); `jobActions.ts` authorisation + tenant check + audit for cancel/retry (tested; the `actions.ts` files only parse, call, revalidate); `JobHealth` is the shared presentational block (has a `renderToString` test) |
 | `src/lib/{audit,users,guests,invites,csv,format}.ts` | `audit()`, `userForEmail()` (unverified contact, never links guests), `syncInvites()`, invite copy, RFC-4180 CSV, `lt/fmt*/slugify/fullName/pct` |
 | `src/components/{Shell,ui,forms,ThemePicker}.tsx` | layout + primitives (see `tailwind-themes` for classes) |
 | `src/app/api/upload/route.ts` | server-side upload proxy (see `s3-object-storage`) |
@@ -71,6 +72,10 @@ Under `src/app/platform/<page>/`; layout already enforces `requirePlatformAdmin(
 Export: route handler returning `toCsv(rows)` with `Content-Disposition` and an `audit` row (`guests/report/export/route.ts`). Import: `csvRecords(text)` gives snake_case headers; see `guests/import/ImportWizard.tsx` + `guests/actions.ts` for the dry-run pattern; template at `guests/import/template/route.ts`.
 
 ## Gotchas
+- **Keep authorisation out of untested server-action files.** Put `authorize()`, the studio/event tenant check and `audit()` in a `lib/` function that takes a `Principal` (see `lib/jobActions.ts`) and test it with built principals (OWNER, STAFF, INVITE_LINK, stale `authedAt` -> `NEXT_REDIRECT`); the action then needs only a `// tdd-exempt:` wiring note or a small test that mocks `next/cache` and `requireSignedIn` (`platform/actions.test.ts`).
+- A scoped function must take an explicit scope object, not optional ids: blank ids from a malformed form must never fall through to a wider (platform) code path.
+- Component tests: `renderToString` from `react-dom/server` works because `vitest.config.mts` sets `oxc: { jsx: { runtime: "automatic" } }` (tsconfig has `jsx: preserve` for Next). React splits `{a}{b}` text into nodes with `<!-- -->`; assert on one template string.
+- Studio-scoped views must not show platform infrastructure: no worker ids/hostnames, no raw `Job.lastError` (use `publicError()`).
 - `requireAdmin()` without a studioId only checks "has any studio role or is platform admin"; always pass `studioId` in studio routes.
 - `authorize()` calls `redirect()` for stale sessions -- it must run inside `act()` (which rethrows `NEXT_REDIRECT`) or directly in a page, never inside a plain `try/catch`.
 - `notFound()` from `getEvent()` renders the 404 even for a real event in another studio (deliberate: no cross-studio enumeration).
