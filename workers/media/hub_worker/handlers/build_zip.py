@@ -1,6 +1,7 @@
 """BUILD_ZIP {zipExportId}
 
-Stream the originals of an event's downloadable photos (READY, not hidden,
+Stream the originals of an event's downloadable photos (scoped by the row's
+studioId and eventId; READY, not hidden,
 album visibility GUESTS or no album) into zip64 archives, split into parts of
 at most ZIP_PART_BYTES (2 GB default), each built in a temp file and uploaded
 to  s/{studioId}/e/{eventId}/zip/{zipId}-{n}.zip . ZipExport.partKeys/status/
@@ -80,11 +81,11 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
         cur.execute(
             '''SELECT p.id, p.filename, p."originalKey", p."originalBytes", p."sortKey", p."createdAt"
                  FROM "Photo" p LEFT JOIN "Album" a ON a.id = p."albumId"
-                WHERE p."eventId" = %s
+                WHERE p."eventId" = %s AND p."studioId" = %s
                   AND p.status = 'READY'::"PhotoStatus" AND NOT p.hidden
                   AND (p."albumId" IS NULL OR a.visibility = 'GUESTS'::"AlbumVisibility")
                 ORDER BY p."sortKey" NULLS LAST, p."createdAt", p.id''',
-            (zx["eventId"],),
+            (zx["eventId"], zx["studioId"]),
         )
         photos = cur.fetchall()
 

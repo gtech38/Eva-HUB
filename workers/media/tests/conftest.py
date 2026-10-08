@@ -140,14 +140,15 @@ class Tenant:
         self.user_ids.append(user_id)
         return user_id
 
-    def add_photo(self) -> str:
+    def add_photo(self, studio_id: str | None = None) -> str:
+        """A READY photo in this event; `studio_id` overrides the studio (for mismatch tests)."""
         photo_id = new_id()
         with self.conn.cursor() as cur:
             cur.execute(
                 '''INSERT INTO "Photo"(id, "studioId", "eventId", "originalKey", "originalBytes",
                                        checksum, filename, status)
                    VALUES (%s, %s, %s, %s, 0, %s, %s, 'READY'::"PhotoStatus")''',
-                (photo_id, self.studio_id, self.event_id, f"orig/{photo_id}.jpg", photo_id, f"{photo_id}.jpg"),
+                (photo_id, studio_id or self.studio_id, self.event_id, f"orig/{photo_id}.jpg", photo_id, f"{photo_id}.jpg"),
             )
         return photo_id
 
