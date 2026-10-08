@@ -7,6 +7,7 @@ import { FaceSearch, type FaceStrings } from "@/components/gallery/FaceSearch";
 import { galleryStrings } from "@/lib/gallery-strings";
 import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs, type PhotoDTO } from "@/lib/gallery";
 import { fullName } from "@/lib/format";
+import { consentTextsFor } from "@/lib/consentView";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,13 @@ const S = {
     hi: "एक सेल्फ़ी लें और हम वे तस्वीरें ढूँढेंगे जिनमें आप हैं। आपकी सेल्फ़ी केवल एक बार उपयोग होती है और कभी संग्रहीत नहीं की जाती।",
   },
   consentLabel: { en: "I agree to a one-time face search", te: "ఒకసారి ముఖ శోధనకు నేను అంగీకరిస్తున్నాను", hi: "मैं एक बार की चेहरा खोज के लिए सहमत हूँ" },
+  consentLabelGuardian: {
+    en: "I am this child's parent or legal guardian and agree to a one-time face search for them",
+    te: "నేను ఈ పిల్లల తల్లి/తండ్రి లేదా చట్టబద్ధమైన సంరక్షకుడిని, వారి కోసం ఒకసారి ముఖ శోధనకు అంగీకరిస్తున్నాను",
+    hi: "मैं इस बच्चे का माता-पिता या कानूनी अभिभावक हूँ और उनके लिए एक बार की चेहरा खोज के लिए सहमत हूँ",
+  },
+  consentFull: { en: "What you're agreeing to", te: "మీరు దేనికి అంగీకరిస్తున్నారు", hi: "आप किस बात के लिए सहमति दे रहे हैं" },
+  consentVersion: { en: "Consent text version", te: "అంగీకార పాఠం వెర్షన్", hi: "सहमति पाठ संस्करण" },
   consentDetail: {
     en: "A face signature is computed from your selfie and compared with faces in this event's gallery. The selfie is discarded immediately. The gallery's face index is deleted after the studio's retention period.",
     te: "మీ సెల్ఫీ నుండి ముఖ సంతకం లెక్కించబడి ఈ ఈవెంట్ గ్యాలరీలోని ముఖాలతో పోల్చబడుతుంది. సెల్ఫీ వెంటనే తొలగించబడుతుంది.",
@@ -52,7 +60,10 @@ function faceStrings(locale: Locale): FaceStrings {
     title: "",
     intro: g("intro"),
     consentLabel: g("consentLabel"),
+    consentLabelGuardian: g("consentLabelGuardian"),
     consentDetail: g("consentDetail"),
+    consentFull: g("consentFull"),
+    consentVersion: g("consentVersion"),
     rememberLabel: g("rememberLabel"),
     rememberDetail: g("rememberDetail"),
     searchFor: g("searchFor"),
@@ -133,7 +144,7 @@ export default async function MyPhotosPage() {
     <div>
       {back}
       <PageHeader title={G.myPhotos} />
-      <FaceSearch strings={F} gallery={G} subjects={subjects} canRemember={canRemember} canFavorite={viewer.can("favorites")} previous={{ me, family }} />
+      <FaceSearch strings={F} consentTexts={consentTextsFor(locale)} gallery={G} subjects={subjects} canRemember={canRemember} canFavorite={viewer.can("favorites")} previous={{ me, family }} />
     </div>
   );
 }

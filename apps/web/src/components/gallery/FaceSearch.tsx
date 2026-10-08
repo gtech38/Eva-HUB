@@ -3,12 +3,18 @@
 import { useRef, useState } from "react";
 import type { PhotoDTO } from "@/lib/gallery";
 import { PhotoGrid, type GalleryStrings } from "./PhotoGrid";
+import type { ConsentTexts } from "@/lib/consentView";
+import { ConsentText } from "./ConsentText";
 
 export type FaceStrings = {
   title: string;
   intro: string;
   consentLabel: string;
+  consentLabelGuardian: string;
   consentDetail: string;
+  /** Disclosure summary for the full consent text ("What you're agreeing to"). */
+  consentFull: string;
+  consentVersion: string;
   rememberLabel: string;
   rememberDetail: string;
   searchFor: string;
@@ -28,6 +34,7 @@ type Result = { subject: string; photos: PhotoDTO[] };
 
 type Props = {
   strings: FaceStrings;
+  consentTexts: ConsentTexts;
   gallery: GalleryStrings;
   subjects: Subject[];
   canRemember: boolean;
@@ -35,7 +42,7 @@ type Props = {
   previous: { me: PhotoDTO[]; family: Array<{ guestId: string; name: string; photos: PhotoDTO[] }> };
 };
 
-export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavorite, previous }: Props) {
+export function FaceSearch({ strings: S, consentTexts, gallery, subjects, canRemember, canFavorite, previous }: Props) {
   const [subject, setSubject] = useState(subjects[0]?.id ?? "me");
   const [consent, setConsent] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -78,7 +85,15 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
         {subjects.length > 1 && (
           <label className="mt-5 block text-sm">
             <span className="mb-1 block text-muted">{S.searchFor}</span>
-            <select value={subject} onChange={(e) => setSubject(e.target.value)} className="input">
+            <select
+              value={subject}
+              onChange={(e) => {
+                // Consent is per subject: searching for yourself and for a child are different texts.
+                setSubject(e.target.value);
+                setConsent(false);
+              }}
+              className="input"
+            >
               {subjects.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.label}
@@ -91,10 +106,17 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
         <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm">
           <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1 h-4 w-4 accent-[var(--accent)]" />
           <span>
-            <span className="font-medium">{S.consentLabel}</span>
+            <span className="font-medium">{subject === "me" ? S.consentLabel : S.consentLabelGuardian}</span>
             <span className="mt-1 block text-muted">{S.consentDetail}</span>
           </span>
         </label>
+        <ConsentText
+          key={subject === "me" ? "self" : "guardian"}
+          summary={S.consentFull}
+          versionLabel={S.consentVersion}
+          text={subject === "me" ? consentTexts.self : consentTexts.guardian}
+          testId="face-consent-text"
+        />
 
         {canRemember && subject === "me" && (
           <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm">
@@ -104,6 +126,9 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
               <span className="mt-1 block text-muted">{S.rememberDetail}</span>
             </span>
           </label>
+        )}
+        {canRemember && subject === "me" && (
+          <ConsentText summary={S.consentFull} versionLabel={S.consentVersion} text={consentTexts.profile} testId="face-profile-consent-text" />
         )}
 
         <div className="mt-6">
