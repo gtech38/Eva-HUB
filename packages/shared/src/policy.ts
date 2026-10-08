@@ -28,7 +28,8 @@ export type Action =
   | "event.members.manage"
   | "guests.manage"
   | "invites.send"
-  | "rsvp.report"
+  | "rsvp.report"             // headcounts and meal totals (vendors: this only)
+  | "rsvp.report.names"       // name-level RSVP lists and exports
   | "rsvp.respond"            // own household
   | "registry.manage"
   | "registry.claim"          // guest marks an item purchased
@@ -48,7 +49,7 @@ export type Resource = { studioId: string; eventId?: string };
 const ELEVATED: ReadonlySet<Action> = new Set<Action>([
   "platform.admin", "studio.manage", "studio.view", "event.create", "event.settings",
   "event.content.edit", "event.members.manage", "guests.manage", "invites.send",
-  "rsvp.report", "registry.manage", "photos.upload", "albums.manage", "photos.hide",
+  "rsvp.report", "rsvp.report.names", "registry.manage", "photos.upload", "albums.manage", "photos.hide",
   "proofing.edit", "entitlements.grant",
 ]);
 
@@ -84,6 +85,7 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     case "guests.manage": return isOwner || hostish || has("PLANNER");
     case "invites.send": return isOwner || hostish || has("PLANNER");
     case "rsvp.report": return isOwner || isStaff || hostish || has("PLANNER") || has("VENDOR");
+    case "rsvp.report.names": return isOwner || assignedStaff || hostish || has("PLANNER");
     case "rsvp.respond": return isGuest || hostish;
     case "registry.manage": return isOwner || hostish;
     case "registry.claim": return isGuest;

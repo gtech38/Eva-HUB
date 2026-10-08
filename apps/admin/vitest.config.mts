@@ -5,6 +5,8 @@ import { exclude, include } from "../../vitest.shared.mts";
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig({
+  // tsconfig has "jsx": "preserve" for Next; render tests (react-dom/server) need JSX compiled.
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     alias: {
       // Same as tsconfig.json "paths": { "@/*": ["./src/*"] }.
