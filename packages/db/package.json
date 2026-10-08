@@ -15,7 +15,8 @@
     "reset": "prisma migrate reset --force",
     "seed": "tsx prisma/seed.ts",
     "studio": "prisma studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

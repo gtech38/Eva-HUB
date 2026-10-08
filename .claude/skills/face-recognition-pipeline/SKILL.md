@@ -1,0 +1,98 @@
+---
+name: face-recognition-pipeline
+description: Use when touching face detection, embedding, clustering, selfie search or biometric privacy: hub_worker/face.py, handlers/index_faces.py, cluster_faces.py, purge_face_index.py, api.py (/embed-selfie), apps/web/src/app/api/face/search/route.ts and gallery/me page. Covers YuNet+SFace models (download, licences, sha256), 128-d L2-normalized embeddings, FACE_MATCH_THRESHOLD and cluster distance, bbox normalization, quality score, the SQL match query, PhotoMatch/BiometricConsent/FaceProfile writes, what is biometric vs not, purge semantics, and scripts/bench_faces.py.
+---
+
+# Face recognition pipeline
+
+## When this applies
+- Any change to how faces are found, embedded, matched, clustered or purged.
+- Consent copy, retention, "remember my face", guardian search.
+- Tuning thresholds or swapping the model.
+
+## Where things live
+
+| Path | What |
+|---|---|
+| `workers/media/hub_worker/face.py` | YuNet (`cv2.FaceDetectorYN`, score 0.8, NMS 0.3, top-k 5000) + SFace (`cv2.FaceRecognizerSF`) singletons; `detect()` (long edge <= 1600, drops faces < 24 px, largest first), `embed()` (alignCrop + feature, L2-normalized 128-d), `normalize_bbox()`, `face_quality()` |
+| `hub_worker/config.py` | `MODEL_VERSION = "yunet-2023mar+sface-2021dec"`, `FACE_MATCH_THRESHOLD` (0.363), `FACE_CLUSTER_DISTANCE` (default `1 - threshold` = 0.637), `FACE_MIN_QUALITY` (0.3), `FACE_MODEL_DIR` |
+| `hub_worker/handlers/index_faces.py` | `INDEX_FACES {photoId}`: embed on the `web` derivative, replace `Face` rows, stamp `facesIndexedAt`, enqueue `CLUSTER_FACES` (dedupe `cluster:{eventId}`, +20 s) |
+| `hub_worker/handlers/cluster_faces.py` | average-linkage agglomerative clustering (cosine), reconciles `FaceCluster` ids/labels/`suppressed`, `_match_profiles()` -> `PhotoMatch(PROFILE_AUTO)`, audit `faceindex.cluster`, self-`Requeue` on late arrivals |
+| `hub_worker/handlers/purge_face_index.py` | deletes `Face` + `FaceCluster`, clears `Photo.facesIndexedAt`, sets `Event.faceIndexPurgedAt`, drops queued cluster job, audit `faceindex.purge`; keeps `PhotoMatch` |
+| `hub_worker/api.py` | `POST /embed-selfie` (multipart `file`, 20 MB cap, 10 req/s token bucket) -> `{ok, embedding[128], model, faces, quality}` or `{ok:false, reason: no_face|bad_image|too_large|rate_limited}`; `GET /health` |
+| `apps/web/src/app/api/face/search/route.ts` | consent + subject checks, forward selfie to worker, SQL match, visibility filter, write `PhotoMatch`/`BiometricConsent`/`AuditLog`, optional `FaceProfile` upsert |
+| `apps/web/src/app/sites/[slug]/gallery/me/page.tsx` + `components/gallery/FaceSearch.tsx` | consent UI, subject picker (me / children in household), results, previous matches |
+| `apps/web/src/lib/face.ts` | `CONSENT_TEXT_VERSION = "v1-2026-10"` (bump when copy changes), `FaceSearchReason` |
+| `apps/admin/.../events/[eventId]/settings/page.tsx` + `actions.ts` | `faceSearchEnabled`, retention override (30-730), "Purge face index now" (`PURGE_FACE_INDEX`), gallery `reindexFaces` (`CLUSTER_FACES`) |
+| `scripts/download_models.py`, `scripts/bench_faces.py` | model fetch (LFS pointer -> media.githubusercontent, sha256 pinned), accuracy/throughput bench |
+| `tests/test_face_synthetic.py` | geometry/quality/embedding unit tests; model-backed tests skip without ONNX |
+
+## Models and licences
+| Model | File | Licence | sha256 (pinned in `download_models.py`) |
+|---|---|---|---|
+| YuNet 2023mar (detect) | `face_detection_yunet_2023mar.onnx` (0.23 MB) | MIT | `8f2383e4...52fa4` |
+| SFace 2021dec (embed) | `face_recognition_sface_2021dec.onnx` (38.7 MB) | Apache-2.0 | `0ba9fbfa...34e79` |
+Both from opencv_zoo. `*.onnx` is git-ignored; `make models` fetches. Switching models = new `MODEL_VERSION`, re-index every event, set `FaceProfile.stale = true` (embeddings do not convert).
+
+## Conventions in this repo
+- **Embeddings are 128-d float32, L2-normalized** -> cosine similarity is a dot product and pgvector `1 - (a <=> b)`. `Face.embedding`/`FaceProfile.embedding` are `vector(128)`; the web route asserts `embedding.length === 128` and every value finite before inlining the literal.
+- **Thresholds:** similarity >= `FACE_MATCH_THRESHOLD` (0.363, OpenCV's SFace "same person" value) for search and profile auto-match; clustering cuts at cosine *distance* `FACE_CLUSTER_DISTANCE` (0.637). Average linkage over-merges on big weddings; ~0.55 is the stricter candidate. Measure before changing (bench).
+- **bbox** is `{x,y,w,h}` normalized 0..1 of the analyzed image (same ratios as the full image), rounded to 5 dp.
+- **quality** = `score * min(1, width_px/80) * clip(laplacian_var/150, 0.2, 1)`; faces below `FACE_MIN_QUALITY` are stored but not clustered.
+- **Match SQL** (web route and `_match_profiles` are the same shape): `SELECT f."photoId", MAX(1 - (f.embedding <=> $vec)) AS score FROM "Face" f JOIN "Photo" p ... LEFT JOIN "FaceCluster" c ... WHERE f."eventId" = $event AND p.status='READY' AND NOT p.hidden AND COALESCE(c.suppressed,false)=false GROUP BY f."photoId" HAVING MAX(...) >= $thr ORDER BY score DESC LIMIT 500`. Exact scan, no ANN index (<= ~15k faces per event).
+- **Then album visibility** via `visiblePhotoWhere(eventId, viewer, { id: { in } })` -- face results never bypass gallery rules.
+- **Writes per search (one transaction):** `PhotoMatch` upsert (`SELFIE` keyed `userId_photoId`, or `GUARDIAN` keyed `subjectGuestId_photoId`), `BiometricConsent` (`SEARCH_SELF` | `SEARCH_GUARDIAN`, `consentTextVersion`, salted `ipHash`), `AuditLog face.search` with candidate/visible counts. With `remember=on` and an adult self-search: `BiometricConsent FACE_PROFILE` (eventId null) + raw `INSERT ... ON CONFLICT ("userId") DO UPDATE` into `FaceProfile` (`purgeAfter = now + 3 years`) + audit `consent.grant`.
+- **Guardian search:** subject must be an `isChild` guest in the viewer's household, not `faceSearchOptOut`; no profile is ever created for a child. Results attach to the child's guest row and show under "Family photos".
+- **Per-event switch:** `Event.faceSearchEnabled` gates the route (400 `disabled`), the "Find me" link, and `INDEX_FACES` (skips). `Guest.faceSearchOptOut` returns `opted_out`. `FaceCluster.suppressed` ("remove me") excludes a cluster from matching and survives re-clustering by majority vote.
+- **Retention:** `Event.faceIndexPurgeAt = galleryPublishedAt + (event override ?? studio default) days`, recomputed on settings changes (admin actions audit `event.retention.change` / `studio.retention.change`). Admins can purge now. Nothing yet schedules the purge automatically at `faceIndexPurgeAt` (docs/04: Phase 2) -- a `PURGE_FACE_INDEX` job with `runAt` is the intended mechanism.
+
+## Biometric vs not
+| Biometric (purged / revocable) | Not biometric (kept) |
+|---|---|
+| `Face.embedding` (+ bbox/quality rows), `FaceCluster` | `PhotoMatch` (photo ids + scores) |
+| `FaceProfile.embedding` | `BiometricConsent` (who/when/what version) |
+| Selfie bytes: in memory only in web (forwarded `File`) and worker (`del data`), never persisted, never logged | `AuditLog` counts |
+
+## Common tasks
+
+### Change a threshold
+1. Bench: `make bench DIR=/path/to/labelled/jpegs` with `labels.csv` (`filename,person`); read "best F1 at cosine >= X (cluster distance 1-X)".
+2. Set `FACE_MATCH_THRESHOLD` / `FACE_CLUSTER_DISTANCE` in `.env` (web reads `FACE_MATCH_THRESHOLD` via `env()`, worker via `settings`). Keep them consistent.
+3. Re-cluster: admin Gallery -> "Re-run face clustering" (`reindexFaces` enqueues `CLUSTER_FACES`).
+4. Test first if changing defaults in code: update `test_backoff`-style constants tests in `tests/test_face_synthetic.py` (e.g. `face_quality` expectations).
+
+### Add a new search error reason
+1. Test first: unit test for the worker (`api.py`) or a node:test for a pure helper mapping reasons -> strings.
+2. Worker returns `{ok:false, reason}`; web route maps it to a status (`fail(reason, 422)`); add the key to `FaceSearchReason` and to `faceStrings().errors` in `gallery/me/page.tsx` in en/te/hi.
+
+### Change consent copy
+Edit `S.consentLabel/consentDetail/rememberDetail` in `gallery/me/page.tsx` and bump `CONSENT_TEXT_VERSION`. Legal review is a design input (docs/01 §6).
+
+### Re-index an event after a model change
+Set new `MODEL_VERSION`, run `make models`, enqueue `INDEX_FACES` for each READY photo (`dedupeKey faces:{photoId}`), then `CLUSTER_FACES`; mark profiles stale: `UPDATE "FaceProfile" SET stale = true;`.
+
+## Gotchas
+- `web` posts to `WORKER_INTERNAL_URL` (`http://localhost:8010`) with a 20 s timeout; worker down -> 503 `unavailable`, UI shows the "temporarily unavailable" string.
+- Phone selfies are EXIF-rotated; the worker decodes with Pillow (`open_oriented`) before OpenCV, otherwise YuNet finds nothing.
+- `/embed-selfie` picks the largest face; multiple faces are allowed (`faces` is returned) -- the `multiple_faces` reason exists in web strings but the worker never emits it.
+- `PhotoMatch` has two unique keys; the CHECK that exactly one subject is set is documented but not in the migration (see `prisma-postgres`).
+- `CLUSTER_FACES` dedupe is a no-op while RUNNING; the handler re-queues itself when photos were indexed during the run. Do not "fix" by removing the dedupe key.
+- Clusters are per event; there is deliberately no cross-event "who is this" lookup, and profiles only match events where the user is a non-deleted guest with unrevoked consent.
+- Hidden albums (`HIDDEN`) are excluded from profile auto-match in SQL but the selfie route relies on the later `visiblePhotoWhere` filter; both end at the same visibility.
+- Studio owners/staff cannot selfie-search (`can("face.search")` is hosts/guests only) -- by design, tested in `policy.test.ts`.
+
+## Verification
+```bash
+cd workers/media && make models && make test        # model-backed tests no longer skipped
+curl -s -F file=@/path/selfie.jpg localhost:8010/embed-selfie | jq '.ok, (.embedding|length), .faces'
+# end-to-end: upload photos in admin, wait for READY, sign in as a guest, /gallery/me -> search; then
+docker compose -f infra/docker-compose.yml exec postgres psql -U hub -d hub -c 'SELECT source,count(*) FROM "PhotoMatch" GROUP BY 1; SELECT kind,count(*) FROM "BiometricConsent" GROUP BY 1;'
+```
+
+## References
+- `docs/01-architecture.md` §6 (pipeline, "remember my face", guardian search, model licensing, CUBI)
+- `docs/03-data-model.md` §2.9-2.10 (where biometric data lives; PhotoMatch is not biometric)
+- `workers/media/README.md` "Face pipeline notes"
+- OpenCV YuNet/SFace: https://github.com/opencv/opencv_zoo/tree/main/models
+- pgvector operators: https://github.com/pgvector/pgvector#querying
+- Related skills: `python-media-worker`, `prisma-postgres`, `guest-site-patterns`
