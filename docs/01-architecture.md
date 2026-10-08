@@ -197,7 +197,10 @@ The schema stores `modelVersion` and the embedding dimension, so switching model
 
 CUBI requires **informed consent before capturing a biometric identifier** for a commercial purpose. It bans selling the data, and it requires destruction within a reasonable time, **no later than one year after the purpose expires**. The Attorney General enforces it, with penalties up to $25k per violation (Meta settled for $1.4B in 2024). How the platform handles it:
 
-- **Searchers.** Searchers give explicit, versioned consent (`BiometricConsent`) before the selfie screen appears. The selfie is processed in memory only.
+- **Searchers.** Searchers give explicit, versioned consent (`BiometricConsent`) before the selfie screen appears. The selfie is processed temporarily and never saved (not strictly in memory: the worker's multipart parser spools uploads over 1 MB to a temp file).
+  - **Consent texts are versioned files.** The exact words (checkbox label, summary and full text, in en/te/hi) live in `legal/consent/v<N>/<kind>.<locale>.md` and are bundled at build time through `?raw` imports in `@hub/shared/consent` (server-only by convention; client components receive resolved strings as props). Each consent row stores `KIND:version`, e.g. `SEARCH_SELF:v1-2026-10`. Wording changes create a new version directory; old ones stay bundled so any stored consent can be shown (admin `/platform/legal`). Rules: `legal/consent/README.md`.
+  - **Proof of what was shown.** The client posts the `KIND:version` and locale it displayed; the search route rejects anything but the current text with `409 consent_stale` before the selfie reaches the worker, and records the locale in the audit row.
+  - **Production guard.** Face search is disabled in production while any current consent file lacks `reviewed_by` (set only after the attorney review, LEG-006). "Remember my face" stays hidden until owners can revoke it (WEB-006).
 - **Everyone else in the photos.** Indexing every face in a gallery computes face geometry for people who never opted in. This is the main legal exposure. Mitigations:
   - The host agreement makes the host responsible for notifying guests.
   - The invitation, the RSVP page and the gallery all carry a notice.
