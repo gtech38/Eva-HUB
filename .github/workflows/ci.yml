@@ -84,11 +84,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: Prisma generate + migrate
+      - name: Prisma generate + migrate + drift check
         working-directory: packages/db
         run: |
           pnpm exec prisma generate
           pnpm exec prisma migrate deploy
+          # migrations and schema.prisma must agree: no drift after deploy (exit 2 = differences)
+          pnpm exec prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
 
       - name: Typecheck
         run: pnpm typecheck
