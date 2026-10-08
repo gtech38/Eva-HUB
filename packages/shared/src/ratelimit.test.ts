@@ -3,18 +3,23 @@
  *
  * The same contract runs against the in-memory store and the Postgres store (Liskov: callers cannot
  * tell them apart). Time is injected through `now`; nothing sleeps. The Postgres suite needs the
- * local stack (pnpm infra:up) and is skipped with a message when it is unreachable. Every key is
- * prefixed with a per-run marker so the file is rerunnable without db:reset.
+ * local stack (pnpm infra:up): skipped with a message locally, and FAILS when CI is set, so a green
+ * CI run means the atomicity test ran. Every key is prefixed with a per-run marker so the file is
+ * rerunnable without db:reset.
  */
+import { createHash } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
-import { acquireSlot, hashRateKey, limit,memoryRateLimitStore, pgRateLimitStore, type RateLimitStore } from "./ratelimit.ts";
+import { acquireSlot, hashRateKey, limit, memoryRateLimitStore, pgRateLimitStore, SWEEP_BATCH, type RateLimitStore } from "./ratelimit.ts";
+
+const SECRET = "test-ratelimit-secret-0123456789";
+process.env.AUTH_SECRET = SECRET; // limit() reads the HMAC key at call time
 
 const run = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const created: string[] = []; // hashes written by this run, deleted in afterAll
 const key = (s: string) => {
   const k = `${run}:${s}`;
-  created.push(hashRateKey(k));
+  created.push(hashRateKey(k, SECRET));
   return k;
 };
 const NOW = new Date("2026-10-08T12:00:00.000Z");
@@ -26,7 +31,30 @@ const dbUp = await prisma.$queryRaw`SELECT 1 FROM "RateLimit" LIMIT 1`.then(
   () => false,
 );
 const skipReason = "Postgres (with the RateLimit table) unreachable at DATABASE_URL; run pnpm infra:up && pnpm db:migrate";
-if (!dbUp) console.log(`# packages/shared ratelimit: ${skipReason} -- skipping the Postgres store`);
+const inCi = Boolean(process.env.CI) && !["0", "false"].includes(process.env.CI!);
+if (!dbUp && inCi) {
+  describe("limit() against Postgres", () => {
+    it("requires Postgres when CI is set", () => {
+      throw new Error(skipReason);
+    });
+  });
+} else if (!dbUp) console.log(`# packages/shared ratelimit: ${skipReason} -- skipping the Postgres store`);
+
+describe("key hashing", () => {
+  it("keys are HMAC-SHA256 under AUTH_SECRET, not a plain (dictionary-reversible) sha256", async () => {
+    const k = "signInAddress:priya@localhost";
+    const plain = createHash("sha256").update(k).digest("hex");
+    expect(hashRateKey(k, SECRET)).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashRateKey(k, SECRET)).not.toBe(plain);
+    expect(hashRateKey(k, SECRET)).not.toBe(hashRateKey(k, "another-secret-0123456789"));
+    const r = await limit(k, { max: 1, windowSec: 60 }, { store: memoryRateLimitStore(), now: NOW, random: never });
+    expect(r.keyHash).toBe(hashRateKey(k, SECRET));
+  });
+
+  it("refuses to run without a usable secret", async () => {
+    await expect(limit("k", { max: 1, windowSec: 60 }, { store: memoryRateLimitStore(), secret: "short" })).rejects.toThrow(/AUTH_SECRET/);
+  });
+});
 
 afterAll(async () => {
   if (dbUp) await prisma.$executeRaw`DELETE FROM "RateLimit" WHERE "key" = ANY(${created})`;
@@ -132,7 +160,7 @@ describe.skipIf(!dbUp)(dbUp ? "limit() on Postgres only" : `limit() on Postgres 
     const results = await Promise.all(Array.from({ length: 50 }, () => limit(k, { max: 7, windowSec: 60 }, { store, now: NOW, random: never })));
     expect(results.filter((r) => r.ok)).toHaveLength(7);
     expect(results.filter((r) => r.tripped)).toHaveLength(1);
-    const [row] = await prisma.$queryRaw<Array<{ count: number }>>`SELECT "count" FROM "RateLimit" WHERE "key" = ${hashRateKey(k)}`;
+    const [row] = await prisma.$queryRaw<Array<{ count: number }>>`SELECT "count" FROM "RateLimit" WHERE "key" = ${hashRateKey(k, SECRET)}`;
     expect(row?.count, "every hit counted exactly once").toBe(50);
   });
 
@@ -141,16 +169,30 @@ describe.skipIf(!dbUp)(dbUp ? "limit() on Postgres only" : `limit() on Postgres 
     const slots = await Promise.all(Array.from({ length: 20 }, () => acquireSlot(k, { max: 3, windowSec: 60 }, { store, now: NOW })));
     expect(slots.filter((s) => s.ok)).toHaveLength(3);
     await Promise.all(slots.map((s) => s.release()));
-    const [row] = await prisma.$queryRaw<Array<{ count: number }>>`SELECT "count" FROM "RateLimit" WHERE "key" = ${hashRateKey(k)}`;
+    const [row] = await prisma.$queryRaw<Array<{ count: number }>>`SELECT "count" FROM "RateLimit" WHERE "key" = ${hashRateKey(k, SECRET)}`;
     expect(row?.count, "all granted slots returned, refused ones never counted").toBe(0);
   });
 
-  it("stores sha256(key), never the raw address", async () => {
+  it("stores HMAC(key), never the raw address", async () => {
     const k = key("signInAddress:priya@localhost");
     const r = await limit(k, { max: 5, windowSec: 60 }, { store, now: NOW, random: never });
-    expect(r.keyHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(r.keyHash).toBe(hashRateKey(k));
+    expect(r.keyHash).toBe(hashRateKey(k, SECRET));
     const raw = await prisma.$queryRaw<unknown[]>`SELECT 1 FROM "RateLimit" WHERE "key" LIKE ${`%${run}%`}`;
     expect(raw).toStrictEqual([]);
+  });
+
+  it(`one janitor sweep deletes at most SWEEP_BATCH (${SWEEP_BATCH}) expired rows`, async () => {
+    const prefix = `${run}-sweep-`;
+    const n = SWEEP_BATCH + 100;
+    try {
+      await prisma.$executeRaw`
+        INSERT INTO "RateLimit" ("key", "count", "resetAt")
+        SELECT ${prefix} || g, 1, ${NOW.toISOString()}::timestamptz - interval '1 hour' FROM generate_series(1, ${n}::int) g`;
+      await store.sweep(NOW);
+      const [left] = await prisma.$queryRaw<Array<{ n: number }>>`SELECT count(*)::int AS n FROM "RateLimit" WHERE "key" LIKE ${`${prefix}%`}`;
+      expect(left!.n).toBeGreaterThanOrEqual(n - SWEEP_BATCH);
+    } finally {
+      await prisma.$executeRaw`DELETE FROM "RateLimit" WHERE "key" LIKE ${`${prefix}%`}`;
+    }
   });
 });

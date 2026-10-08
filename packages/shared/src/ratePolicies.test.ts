@@ -1,30 +1,34 @@
 /**
- * SHR-003 policies: the numbers from the ticket, env overrides, audit on trip, client IP trust.
- * Pure: memory store and a recording audit sink, injected clock.
+ * SHR-003 policies: the agreed numbers, bounded env overrides validated once, audit on trip.
+ * Pure: memory store and a recording audit sink, injected clock. (Client IP: clientIp.test.ts.)
  */
 import { describe, expect, it } from "vitest";
 import { hashRateKey, memoryRateLimitStore } from "./ratelimit.ts";
-import { clientIp, RATE_LIMITS, ratePolicies, rateLimiter, type RateAuditEntry } from "./ratePolicies.ts";
+import { addressAtIp, RATE_LIMITS, ratePolicies, rateLimiter, validateRateLimitConfig, type RateAuditEntry } from "./ratePolicies.ts";
 
+const SECRET = "test-policies-secret-0123456789";
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const at = (sec: number) => new Date(NOW.getTime() + sec * 1000);
 
 function harness(env: Record<string, string | undefined> = {}) {
   const audits: RateAuditEntry[] = [];
-  const limiter = rateLimiter({ store: memoryRateLimitStore(), audit: async (e) => void audits.push(e), env, random: () => 1 });
+  const limiter = rateLimiter({ store: memoryRateLimitStore(), audit: async (e) => void audits.push(e), env, random: () => 1, secret: SECRET });
   return { limiter, audits };
 }
 
-describe("RATE_LIMITS defaults (ticket SHR-003)", () => {
+describe("RATE_LIMITS defaults (ticket SHR-003 + review)", () => {
   it("match the agreed numbers", () => {
     expect(RATE_LIMITS).toStrictEqual({
-      signInAddress: { max: 5, windowSec: 15 * 60 },
-      signInIp: { max: 30, windowSec: 15 * 60 },
+      signInIp: { max: 60, windowSec: 15 * 60 },
+      signInAddressIp: { max: 5, windowSec: 15 * 60 },
+      signInAddress: { max: 20, windowSec: 15 * 60 },
       otpVerifyAddress: { max: 10, windowSec: 15 * 60 },
-      inviteIp: { max: 60, windowSec: 60 * 60 },
+      inviteIp: { max: 200, windowSec: 60 * 60 },
       faceSearchUser: { max: 10, windowSec: 60 * 60 },
       faceSearchConcurrent: { max: 3, windowSec: 60 },
-      adminMagicLinkAddress: { max: 5, windowSec: 15 * 60 },
+      adminMagicLinkIp: { max: 60, windowSec: 15 * 60 },
+      adminMagicLinkAddressIp: { max: 5, windowSec: 15 * 60 },
+      adminMagicLinkAddress: { max: 20, windowSec: 15 * 60 },
     });
   });
 });
@@ -35,52 +39,72 @@ describe("ratePolicies(env)", () => {
   });
 
   it("RATE_LIMIT_<POLICY>=max/windowSec overrides one policy", () => {
-    const p = ratePolicies({ RATE_LIMIT_SIGN_IN_ADDRESS: "2/60", RATE_LIMIT_FACE_SEARCH_CONCURRENT: " 1/30 " });
-    expect(p.signInAddress).toStrictEqual({ max: 2, windowSec: 60 });
+    const p = ratePolicies({ RATE_LIMIT_SIGN_IN_ADDRESS_IP: "2/60", RATE_LIMIT_FACE_SEARCH_CONCURRENT: " 1/30 " });
+    expect(p.signInAddressIp).toStrictEqual({ max: 2, windowSec: 60 });
     expect(p.faceSearchConcurrent).toStrictEqual({ max: 1, windowSec: 30 });
     expect(p.signInIp).toStrictEqual(RATE_LIMITS.signInIp);
   });
 
-  it.each(["5", "5/0", "0/60", "-1/60", "a/b", "5/60/1", "1.5/60"])("rejects a malformed override %j loudly", (bad) => {
-    expect(() => ratePolicies({ RATE_LIMIT_INVITE_IP: bad })).toThrow(/RATE_LIMIT_INVITE_IP/);
+  it.each(["5", "5/0", "0/60", "-1/60", "a/b", "5/60/1", "1.5/60", "1000001/60", "5/604801", "99999999999/60"])(
+    "rejects a malformed or out-of-bounds override %j loudly",
+    (bad) => {
+      expect(() => ratePolicies({ RATE_LIMIT_INVITE_IP: bad })).toThrow(/RATE_LIMIT_INVITE_IP/);
+    },
+  );
+});
+
+describe("validateRateLimitConfig (called at server boot)", () => {
+  it("passes for the defaults and throws for a bad override or a bad TRUSTED_PROXY_HOPS", () => {
+    expect(() => validateRateLimitConfig({})).not.toThrow();
+    expect(() => validateRateLimitConfig({ RATE_LIMIT_SIGN_IN_IP: "lots" })).toThrow(/RATE_LIMIT_SIGN_IN_IP/);
+    expect(() => validateRateLimitConfig({ TRUSTED_PROXY_HOPS: "0" })).toThrow(/TRUSTED_PROXY_HOPS/);
+  });
+
+  it("a limiter parses its overrides once, at construction, not per request", () => {
+    expect(() => rateLimiter({ env: { RATE_LIMIT_INVITE_IP: "nope" }, secret: SECRET })).toThrow(/RATE_LIMIT_INVITE_IP/);
   });
 });
 
 describe("rateLimiter().check", () => {
   it("counts per policy and value: one address tripping does not limit another", async () => {
     const { limiter } = harness();
-    for (let i = 0; i < 5; i++) expect((await limiter.check("signInAddress", "a@x.test", { now: at(i) })).ok).toBe(true);
-    expect((await limiter.check("signInAddress", "a@x.test", { now: at(5) })).ok).toBe(false);
-    expect((await limiter.check("signInAddress", "b@x.test", { now: at(6) })).ok).toBe(true);
-    expect((await limiter.check("adminMagicLinkAddress", "a@x.test", { now: at(7) })).ok, "policies are separate counters").toBe(true);
+    for (let i = 0; i < 20; i++) expect((await limiter.check("signInAddress", "a@x.test", { now: at(i) })).ok).toBe(true);
+    expect((await limiter.check("signInAddress", "a@x.test", { now: at(20) })).ok).toBe(false);
+    expect((await limiter.check("signInAddress", "b@x.test", { now: at(21) })).ok).toBe(true);
+    expect((await limiter.check("adminMagicLinkAddress", "a@x.test", { now: at(22) })).ok, "policies are separate counters").toBe(true);
   });
 
-  it("writes one auth.rate_limited audit row per trip, with the hashed key and never the raw value", async () => {
+  it("addressAtIp keys the strict limit on the pair, so another network keeps its own budget", async () => {
+    const { limiter } = harness();
+    for (let i = 0; i < 5; i++) await limiter.check("signInAddressIp", addressAtIp("a@x.test", "6.6.6.6"), { now: NOW });
+    expect((await limiter.check("signInAddressIp", addressAtIp("a@x.test", "6.6.6.6"), { now: NOW })).ok).toBe(false);
+    expect((await limiter.check("signInAddressIp", addressAtIp("a@x.test", "203.0.113.9"), { now: NOW })).ok).toBe(true);
+  });
+
+  it("writes one auth.rate_limited audit row per trip, with the HMAC key and never the raw value", async () => {
     const { limiter, audits } = harness();
     const ctx = { studioId: "studio-1", eventId: "event-1", now: NOW };
-    for (let i = 0; i < 8; i++) await limiter.check("signInAddress", "priya@localhost", ctx);
+    for (let i = 0; i < 8; i++) await limiter.check("signInAddressIp", "priya@localhost", ctx);
     expect(audits).toStrictEqual([
       {
         action: "auth.rate_limited",
         studioId: "studio-1",
         eventId: "event-1",
         actorUserId: null,
-        data: { policy: "signInAddress", key: hashRateKey("signInAddress:priya@localhost"), retryAfterSec: 900 },
+        data: { policy: "signInAddressIp", key: hashRateKey("signInAddressIp:priya@localhost", SECRET), retryAfterSec: 900 },
       },
     ]);
     expect(JSON.stringify(audits)).not.toContain("priya");
   });
 
-  it("a null value (client IP unknown) is not limited and not counted", async () => {
+  it("a null value (development, no proxy header) is not limited, and the result serialises cleanly", async () => {
     const { limiter, audits } = harness({ RATE_LIMIT_SIGN_IN_IP: "1/60" });
-    for (let i = 0; i < 3; i++) expect((await limiter.check("signInIp", null, { now: NOW })).ok).toBe(true);
+    for (let i = 0; i < 3; i++) {
+      const r = await limiter.check("signInIp", null, { now: NOW });
+      expect(r.ok).toBe(true);
+      expect(JSON.parse(JSON.stringify(r)).remaining).toBeTypeOf("number");
+    }
     expect(audits).toStrictEqual([]);
-  });
-
-  it("reads env overrides at call time", async () => {
-    const { limiter } = harness({ RATE_LIMIT_INVITE_IP: "1/60" });
-    expect((await limiter.check("inviteIp", "203.0.113.9", { now: NOW })).ok).toBe(true);
-    expect((await limiter.check("inviteIp", "203.0.113.9", { now: NOW })).ok).toBe(false);
   });
 
   it("an audit failure does not turn a refusal into a pass", async () => {
@@ -91,6 +115,7 @@ describe("rateLimiter().check", () => {
       },
       env: { RATE_LIMIT_INVITE_IP: "1/60" },
       random: () => 1,
+      secret: SECRET,
     });
     await limiter.check("inviteIp", "203.0.113.9", { now: NOW });
     expect((await limiter.check("inviteIp", "203.0.113.9", { now: NOW })).ok).toBe(false);
@@ -98,30 +123,21 @@ describe("rateLimiter().check", () => {
 });
 
 describe("rateLimiter().acquire", () => {
-  it("faceSearchConcurrent: the 4th concurrent holder is refused and audited once", async () => {
+  it("faceSearchConcurrent: refusals are audited once per lease window, not once per request", async () => {
     const { limiter, audits } = harness();
     const ctx = { studioId: "s", eventId: "e", actorUserId: "user-1", now: NOW };
     const held = await Promise.all([1, 2, 3].map(() => limiter.acquire("faceSearchConcurrent", "user-1", ctx)));
     expect(held.every((s) => s.ok)).toBe(true);
-    const fourth = await limiter.acquire("faceSearchConcurrent", "user-1", ctx);
-    expect(fourth.ok).toBe(false);
+    for (let i = 0; i < 4; i++) expect((await limiter.acquire("faceSearchConcurrent", "user-1", { ...ctx, now: at(i) })).ok).toBe(false);
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({ action: "auth.rate_limited", actorUserId: "user-1", data: { policy: "faceSearchConcurrent" } });
+
+    // A new window (lease TTL 60 s) audits again on its first refusal.
+    for (let i = 0; i < 3; i++) await limiter.acquire("faceSearchConcurrent", "user-1", { ...ctx, now: at(61 + i) });
+    await limiter.acquire("faceSearchConcurrent", "user-1", { ...ctx, now: at(65) });
+    await limiter.acquire("faceSearchConcurrent", "user-1", { ...ctx, now: at(66) });
+    expect(audits).toHaveLength(2);
+
     await held[0]!.release();
-    expect((await limiter.acquire("faceSearchConcurrent", "user-1", ctx)).ok).toBe(true);
-  });
-});
-
-describe("clientIp", () => {
-  const h = (init: Record<string, string>) => new Headers(init);
-
-  it("takes the first hop of x-forwarded-for (the client, as written by our reverse proxy)", () => {
-    expect(clientIp(h({ "x-forwarded-for": "203.0.113.9, 10.0.0.2, 10.0.0.1" }))).toBe("203.0.113.9");
-    expect(clientIp(h({ "x-forwarded-for": "  2001:db8::1 " }))).toBe("2001:db8::1");
-  });
-
-  it("is null when no proxy header is present", () => {
-    expect(clientIp(h({}))).toBeNull();
-    expect(clientIp(h({ "x-forwarded-for": " , 10.0.0.1" }))).toBeNull();
   });
 });

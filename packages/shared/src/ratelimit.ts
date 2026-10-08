@@ -1,13 +1,19 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { prisma as defaultPrisma, Prisma, type PrismaClient } from "@hub/db";
 
 /**
  * Fixed-window rate limiting on Postgres (no Redis by design, SHR-003).
  *
  * `limit(key, { max, windowSec })` counts one hit for `key` and says whether it is within `max` hits
- * per window. The key is stored as sha256(key) only, so callers pass `"<policy>:<value>"` and the raw
- * address / IP never reaches the table. Time is injectable (`now`) so windows are testable without
+ * per window. The key is stored as HMAC-SHA256(AUTH_SECRET, key) only, so callers pass
+ * `"<policy>:<value>"` and neither the raw address / IP nor a dictionary-reversible plain hash of it
+ * reaches the table or the audit log. Time is injectable (`now`) so windows are testable without
  * sleeping.
+ *
+ * Accepted limitations: windows are computed from the app server's clock (`now`), so servers whose
+ * clocks disagree by a few seconds see slightly different window edges; and a lease holder slower than
+ * the lease TTL can, after the lease lapses and restarts, release a slot it no longer counts in, so
+ * concurrency can briefly undercount. Both err by seconds / one slot, not by orders of magnitude.
  */
 
 export type RateWindow = { max: number; windowSec: number };
@@ -18,7 +24,7 @@ export type LimitResult = {
   remaining: number;
   /** Seconds until the window resets; 0 when `ok`. */
   retryAfterSec: number;
-  /** sha256 of the key: the only form that may be logged or audited. */
+  /** HMAC of the key: the only form that may be logged or audited. */
   keyHash: string;
   /** True for exactly the first rejected hit of a window (audit once, not on every hit). */
   tripped: boolean;
@@ -39,7 +45,7 @@ export interface RateLimitStore {
   lease(keyHash: string, max: number, ttlSec: number, now: Date): Promise<{ granted: boolean; resetAt: Date }>;
   /** Give back one slot (never below zero). */
   release(keyHash: string): Promise<void>;
-  /** Delete windows that ended before `now`. */
+  /** Delete at most `SWEEP_BATCH` windows that ended before `now`. */
   sweep(now: Date): Promise<void>;
 }
 
@@ -48,19 +54,28 @@ export type LimitOptions = {
   store?: RateLimitStore;
   /** Janitor dice; the sweep runs when `random() < JANITOR_RATE`. */
   random?: () => number;
+  /** HMAC key; defaults to AUTH_SECRET. */
+  secret?: string;
 };
 
 /** Share of `limit()` calls that also delete expired rows. */
 export const JANITOR_RATE = 0.01;
+/** Upper bound on rows one sweep deletes, so the 1 % of callers that sweep pay a bounded cost. */
+export const SWEEP_BATCH = 500;
 
-export const hashRateKey = (key: string) => createHash("sha256").update(key).digest("hex");
+export function hashRateKey(key: string, secret: string): string {
+  if (secret.length < 16) throw new Error("rate limit keys need AUTH_SECRET (at least 16 characters)");
+  return createHmac("sha256", secret).update(key).digest("hex");
+}
+
+const secretOf = (opts: { secret?: string }) => opts.secret ?? process.env.AUTH_SECRET ?? "";
 
 let defaultStore: RateLimitStore | undefined;
 
 export async function limit(key: string, w: RateWindow, opts: LimitOptions = {}): Promise<LimitResult> {
   const now = opts.now ?? new Date();
   const store = opts.store ?? (defaultStore ??= pgRateLimitStore(defaultPrisma));
-  const keyHash = hashRateKey(key);
+  const keyHash = hashRateKey(key, secretOf(opts));
   const { count, resetAt } = await store.hit(keyHash, w.windowSec, now);
   if ((opts.random ?? Math.random)() < JANITOR_RATE) {
     await store.sweep(now).catch((err: unknown) => console.warn("[ratelimit] sweep failed", (err as Error).message));
@@ -87,7 +102,7 @@ export type Slot = Omit<LimitResult, "remaining" | "tripped"> & {
 export async function acquireSlot(key: string, w: RateWindow, opts: Omit<LimitOptions, "random"> = {}): Promise<Slot> {
   const now = opts.now ?? new Date();
   const store = opts.store ?? (defaultStore ??= pgRateLimitStore(defaultPrisma));
-  const keyHash = hashRateKey(key);
+  const keyHash = hashRateKey(key, secretOf(opts));
   const { granted, resetAt } = await store.lease(keyHash, w.max, w.windowSec, now);
   let held = granted;
   return {
@@ -143,7 +158,12 @@ export function pgRateLimitStore(db: Pick<PrismaClient, "$queryRaw" | "$executeR
       await db.$executeRaw(Prisma.sql`UPDATE "RateLimit" SET "count" = GREATEST("count" - 1, 0) WHERE "key" = ${keyHash}`);
     },
     async sweep(now) {
-      await db.$executeRaw(Prisma.sql`DELETE FROM "RateLimit" WHERE "resetAt" < ${now.toISOString()}::timestamptz`);
+      // Bounded and index-driven (RateLimit_resetAt_idx); SKIP LOCKED never waits on a row in use.
+      await db.$executeRaw(Prisma.sql`
+        DELETE FROM "RateLimit" WHERE "key" IN (
+          SELECT "key" FROM "RateLimit" WHERE "resetAt" < ${now.toISOString()}::timestamptz
+          LIMIT ${SWEEP_BATCH}::int FOR UPDATE SKIP LOCKED
+        )`);
     },
   };
 }
@@ -174,7 +194,11 @@ export function memoryRateLimitStore(): RateLimitStore {
       if (cur) rows.set(keyHash, { ...cur, count: Math.max(0, cur.count - 1) });
     },
     async sweep(now) {
-      for (const [k, v] of rows) if (v.resetAt.getTime() < now.getTime()) rows.delete(k);
+      let n = 0;
+      for (const [k, v] of rows) {
+        if (n >= SWEEP_BATCH) break;
+        if (v.resetAt.getTime() < now.getTime()) (rows.delete(k), n++);
+      }
     },
   };
 }
