@@ -98,6 +98,8 @@ TDD_GATE=off                         # env: disable the gate for a session; neve
 - The gate keys on file *existence*, not content. An empty test file is cheating yourself; the post-edit hook will run it and it will pass vacuously. Write the assertion.
 - Python tests run from `workers/media`; relative imports need `hub_worker.` prefix.
 - Seed emails lack a TLD (`priya@localhost`); don't use `z.string().email()` in validation you test against seed data.
+- Render tests (`renderToStaticMarkup(<Card .../>)` from `react-dom/server`, `*.test.tsx`) work in `apps/admin` because `vitest.config.mts` sets `oxc: { jsx: { runtime: "automatic" } }` (tsconfig keeps `jsx: "preserve"` for Next, which the test transformer cannot parse). Do the same in another app's config before adding its first `.tsx` test. For a server-component page, stub only the session gate (`vi.mock("@/lib/auth")`) and `next/navigation`, and let the real loaders run (see `guests/report/page.test.tsx`).
+- Postgres-backed tests seed their own rows (`apps/admin/test/reportFixture.ts`: record each id as the row is created, delete in `afterAll`), skip locally when Postgres is down, and must **fail** when `CI` is set so a green CI cannot hide an unrun privacy check.
 
 ## References
 - `backlog/README.md` — ticket format; acceptance criteria drive tests
