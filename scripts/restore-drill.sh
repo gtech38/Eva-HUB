@@ -6,15 +6,16 @@
 #   scripts/restore-drill.sh <backup.dump>
 #
 # Target (throwaway, always created by this script and always removed afterwards):
-#   default             a fresh pgvector/pgvector:pg16 container on a random localhost port
+#   default             a fresh pgvector/pgvector:pg16 container on a random localhost port, named
+#                       hub-restore-drill-<db>-<random> with a data volume of the same name
 #   RESTORE_SERVER_URL  instead, a new database on this server, e.g. the compose Postgres:
 #                       postgresql://hub:hub@localhost:5433/postgres
 #   RESTORE_DB_NAME     throwaway database name; must look like <name>_restore_<suffix>
-#                       (default hub_restore_<UTC timestamp>). An existing database is never reused.
+#                       (default hub_restore_<UTC timestamp>_<random>). An existing database,
+#                       container or volume is never reused, and never removed.
 # Expected data:
 #   <backup.dump>.manifest (written by scripts/backup-db.sh from the dump's own snapshot), or
-#   SOURCE_DATABASE_URL    count/checksum a live database instead (it may have moved on since the dump;
-#                          tables whose rows backup-db.sh leaves out, BACKUP_EXCLUDE_DATA, count as empty).
+#   SOURCE_DATABASE_URL    count/checksum a live database instead (it may have moved on since the dump).
 #   The run refuses (exit 2) when the manifest is empty or, unless DRILL_SKIP_PRISMA=1, has no
 #   _prisma_migrations line, and fails when it compares zero tables: it cannot pass vacuously.
 # Other: DRILL_SKIP_PRISMA=1 skips `prisma migrate status` (no node toolchain);
@@ -28,7 +29,8 @@ LOG_TAG=restore-drill
 
 [ $# -eq 1 ] && [ "${1#-}" = "$1" ] || die "usage: scripts/restore-drill.sh <backup.dump>" 2
 DUMP=$1
-NAME=${RESTORE_DB_NAME:-hub_restore_$(date -u +%Y%m%d%H%M%S)}
+# random suffix: two drills started in the same second must never share a name
+NAME=${RESTORE_DB_NAME:-hub_restore_$(date -u +%Y%m%d%H%M%S)_$(rand_hex)}
 
 # Matches the WHOLE string: a line-oriented grep would accept "ok_restore_x<newline>anything".
 # The name is interpolated into CREATE / DROP DATABASE, so it must be a plain identifier.
@@ -74,13 +76,20 @@ target_run() {
 }
 
 provision_container() {
-  # CONTAINER doubles as the name of its data volume, so teardown can remove exactly that volume
-  CONTAINER="hub-restore-drill-$NAME"
-  docker run -d --rm --name "$CONTAINER" --label "hub.restore-drill=$NAME" \
-    -v "$CONTAINER:/var/lib/postgresql/data" \
+  # The container's name doubles as its data volume's name, so teardown removes exactly that
+  # volume. Random suffix + refuse-if-exists + claim-only-after-success: teardown can never
+  # remove a container or volume this run did not create.
+  local candidate i
+  candidate="hub-restore-drill-$NAME-$(rand_hex)"
+  if docker container inspect "$candidate" >/dev/null 2>&1 || docker volume inspect "$candidate" >/dev/null 2>&1; then
+    die "a container or volume named $candidate already exists; refusing to use or remove it" 2
+  fi
+  docker run -d --rm --name "$candidate" --label "hub.restore-drill=$NAME" \
+    -v "$candidate:/var/lib/postgresql/data" \
     -e POSTGRES_USER=drill -e POSTGRES_PASSWORD=drill -e POSTGRES_DB="$NAME" \
-    -p 127.0.0.1::5432 "$PG_TOOLS_IMAGE" >/dev/null
-  local i
+    -p 127.0.0.1::5432 "$PG_TOOLS_IMAGE" >/dev/null ||
+    die "could not start the throwaway Postgres container $candidate"
+  CONTAINER=$candidate
   # TCP check: the image's init phase only listens on the socket, so this means "really up".
   for i in $(seq 1 120); do
     docker exec "$CONTAINER" pg_isready -q -h 127.0.0.1 -U drill -d "$NAME" && break
@@ -123,8 +132,8 @@ log "dump: $DUMP ($(wc -c <"$DUMP" | tr -d ' ') bytes), expected data from: $EXP
 if [ "$EXPECTED_FROM" = manifest ]; then
   LC_ALL=C sort "$DUMP.manifest" >"$WORK/expected"
 else
-  # same exclusion rule as backup-db.sh: the dump does not contain those tables' rows
-  pg_manifest pg_run "$(tool_url "$(libpq_url "$SOURCE_DATABASE_URL")")" "" "${BACKUP_EXCLUDE_DATA-$DEFAULT_EXCLUDE_DATA}" >"$WORK/expected" </dev/null
+  pg_manifest pg_run "$(tool_url "$(libpq_url "$SOURCE_DATABASE_URL")")" >"$WORK/expected" </dev/null ||
+    die "could not read the live source database (SOURCE_DATABASE_URL)"
 fi
 # A drill that compares nothing must not pass: an empty or truncated manifest is a failure, and
 # so is one that does not cover Prisma's own table (it proves the schema came back, not just rows).
@@ -144,7 +153,9 @@ STATUS=0
 migrate_status || STATUS=1
 T3=$(now)
 
-pg_manifest target_run "$TARGET_TOOL_URL" >"$WORK/actual" </dev/null
+# psql exits 3 on a script error; keep the documented contract (1 = restore failed or differs)
+pg_manifest target_run "$TARGET_TOOL_URL" >"$WORK/actual" </dev/null ||
+  die "could not read the restored database (manifest query failed)"
 echo "row counts and checksums (source = $EXPECTED_FROM, restored = $NAME):"
 compare_manifests "$WORK/expected" "$WORK/actual" || STATUS=1
 T4=$(now)

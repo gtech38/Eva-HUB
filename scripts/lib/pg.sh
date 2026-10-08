@@ -12,12 +12,6 @@ HUB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PG_TOOLS_IMAGE="${PG_TOOLS_IMAGE:-pgvector/pgvector:pg16}"
 PG_TOOLS_MIN_MAJOR=16
 TAB="$(printf '\t')"
-# Tables whose ROWS are not copied into logical dumps: the gallery face index is recomputed from
-# the originals (INDEX_FACES + CLUSTER_FACES), so keeping its embeddings in every dump only
-# lengthens how long biometric data outlives its purge (docs/ops/backups.md §7). FaceProfile is
-# not reproducible and stays in. Override with BACKUP_EXCLUDE_DATA (empty string = exclude nothing).
-# shellcheck disable=SC2034 # read by backup-db.sh and restore-drill.sh, which source this file
-DEFAULT_EXCLUDE_DATA="Face FaceCluster"
 
 log() { printf '[%s] %s\n' "${LOG_TAG:-hub}" "$*" >&2; }
 
@@ -26,6 +20,9 @@ die() {
   log "error: $1"
   exit "${2:-1}"
 }
+
+# rand_hex -> 8 random lowercase hex digits (for throwaway names)
+rand_hex() { od -An -N4 -tx1 /dev/urandom | tr -d ' \n'; }
 
 now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time' 2>/dev/null || date +%s; }
 
@@ -107,6 +104,27 @@ tool_url() {
   if [ "$PG_MODE" = docker ]; then docker_host_url "$1"; else printf '%s' "$1"; fi
 }
 
+# percent_decode STRING -> STRING with %XX sequences decoded and nothing else interpreted.
+# (printf %b on the whole string would also turn a literal "\n" in a password into a newline.)
+percent_decode() {
+  local s=$1 out="" hex
+  while [ -n "$s" ]; do
+    case $s in
+      %[0-9A-Fa-f][0-9A-Fa-f]*)
+        hex=${s:1:2}
+        # shellcheck disable=SC2059 # the format is a single \xHH escape built from two checked hex digits
+        out="$out$(printf "\\x$hex")"
+        s=${s:3}
+        ;;
+      *)
+        out="$out${s:0:1}"
+        s=${s:1}
+        ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 # split_password ARGS… -> sets PG_ARGV (array, ARGS with any URL password removed) and PG_PW
 # (percent-decoded). Command lines are world-readable via `ps`; a password goes in PGPASSWORD,
 # which lives only in the child's environment.
@@ -116,8 +134,7 @@ split_password() {
   local a
   for a in "$@"; do
     if [[ $a =~ ^(.*://[^:/@]*):([^@]*)@(.*)$ ]]; then
-      PG_PW=${BASH_REMATCH[2]}
-      PG_PW=$(printf '%b' "${PG_PW//%/\\x}")
+      PG_PW=$(percent_decode "${BASH_REMATCH[2]}")
       a="${BASH_REMATCH[1]}@${BASH_REMATCH[3]}"
     fi
     PG_ARGV+=("$a")
@@ -151,31 +168,22 @@ pg_exec() {
   )
 }
 
-# manifest_sql [SNAPSHOT [EXCLUDED_TABLES]] -> psql script printing "<table>\t<rows>\t<md5>" for
-# every ordinary table in schema public (not views, sequences, other schemas or large objects;
-# tables owned by extensions are skipped).
+# manifest_sql [SNAPSHOT] -> psql script printing "<table>\t<rows>\t<md5>" for every ordinary
+# table in schema public (not views, sequences, other schemas or large objects; tables owned by
+# extensions are skipped).
 #
 # The checksum is order-independent: md5 of the sorted per-row md5s, with the session pinned to
 # UTC / ISO dates / C collation so the text form of every row is identical on source and restore.
 # It is NOT memory-bounded: string_agg holds 32 bytes per row, so a table with 100 M rows needs
 # about 3 GB in the server session. Fine for this product's data; revisit if a table gets huge.
 #
-# EXCLUDED_TABLES (space-separated) are tables whose rows are left out of the dump
-# (pg_dump --exclude-table-data). Their manifest line is the empty table (0 rows, md5 of ''),
-# which is what a correct restore of that dump contains. Pass nothing when summarising a restore.
+# Every table's rows are dumped and checked, the face index included: FaceCluster.suppressed
+# ("remove me from face search") and host labels can't be recomputed from the originals.
 manifest_sql() {
-  local snapshot_stmt="" excluded_array="ARRAY[]::text[]" t
+  local snapshot_stmt=""
   if [ -n "${1:-}" ]; then
     printf '%s' "$1" | grep -Eq '^[0-9A-Fa-f-]+$' || die "invalid snapshot id '$1'"
     snapshot_stmt="SET TRANSACTION SNAPSHOT '$1';"
-  fi
-  if [ -n "${2:-}" ]; then
-    excluded_array="ARRAY["
-    for t in $2; do
-      [[ $t =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "invalid table name '$t' in the exclude list" 2
-      excluded_array="$excluded_array'$t',"
-    done
-    excluded_array="${excluded_array%,}]"
   fi
   cat <<SQL
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
@@ -185,12 +193,9 @@ SET LOCAL DateStyle = 'ISO, YMD';
 SET LOCAL IntervalStyle = 'postgres';
 SET LOCAL extra_float_digits = 1;
 SET LOCAL bytea_output = 'hex';
-SELECT CASE WHEN c.relname = ANY ($excluded_array)
-  THEN format('SELECT %L, 0::bigint, md5('''')', c.relname)
-  ELSE format(
-    'SELECT %L, count(*), md5(coalesce(string_agg(md5(t::text), '''' ORDER BY md5(t::text) COLLATE "C"), '''')) FROM %I.%I AS t',
-    c.relname, n.nspname, c.relname)
-  END
+SELECT format(
+  'SELECT %L, count(*), md5(coalesce(string_agg(md5(t::text), '''' ORDER BY md5(t::text) COLLATE "C"), '''')) FROM %I.%I AS t',
+  c.relname, n.nspname, c.relname)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relkind = 'r'
@@ -200,11 +205,11 @@ COMMIT;
 SQL
 }
 
-# pg_manifest RUNNER URL [SNAPSHOT [EXCLUDED_TABLES]] -> manifest lines, sorted by table name.
+# pg_manifest RUNNER URL [SNAPSHOT] -> manifest lines, sorted by table name.
 # RUNNER is pg_run or any function with the same signature (e.g. one that docker-execs).
 pg_manifest() {
-  local runner=$1 url=$2 snapshot=${3:-} excluded=${4:-}
-  manifest_sql "$snapshot" "$excluded" |
+  local runner=$1 url=$2 snapshot=${3:-}
+  manifest_sql "$snapshot" |
     "$runner" psql "$url" -X -q -A -t -F "$TAB" -v ON_ERROR_STOP=1 -f - |
     LC_ALL=C sort
 }

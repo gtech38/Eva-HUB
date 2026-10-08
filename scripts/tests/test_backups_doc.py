@@ -66,3 +66,28 @@ def test_section_7_states_the_real_destruction_bound_not_a_flat_36_days() -> Non
     assert "at most 36 days" not in s7
     assert "38 days" in s7  # normal operation: 35 + 1 noncurrent + ~2 days lifecycle lag
     assert re.search(r"7[0-9] days", s7), "the post-restore worst case is stated too"
+
+
+def test_post_restore_bound_is_conditional_on_replaying_from_the_old_instance() -> None:
+    s7 = _section("7.")
+    sentence = re.search(r"[^.|]*7[0-9] days[^|]*", s7)
+    assert sentence
+    restore_row = s7[s7.index("After an incident restore"):]
+    restore_row = restore_row[: restore_row.index("\n")]
+
+    assert "old instance" in restore_row
+    assert "best effort" in restore_row.lower()
+    assert "LEG-008" in restore_row
+
+
+def test_dumps_carry_the_whole_face_index_and_the_docs_say_so() -> None:
+    # Face/FaceCluster hold "remove me" opt-outs (suppressed) and host labels: they are not reproducible
+    for heading in ("1.", "4.", "7."):
+        section = _section(heading)
+        assert "rows are left out" not in section.lower(), heading
+        assert "not dumped" not in section.lower(), heading
+        assert "BACKUP_EXCLUDE_DATA" not in section, heading
+    s1 = _section("1.")
+    face_row = next(line for line in s1.splitlines() if line.startswith("| Face index"))
+    assert "suppressed" in face_row and "label" in face_row
+    assert "**No" in face_row, "the face index is not fully replaceable"

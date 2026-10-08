@@ -11,10 +11,9 @@
 # snapshot is one open REPEATABLE READ transaction for the length of the dump; on a large, busy
 # database that holds back vacuum's xmin horizon, so schedule backups off-peak.
 #
-# The ROWS of Face and FaceCluster are not dumped (their tables are; the manifest lists them as
-# empty): the gallery face index is recomputed from the originals, and leaving embeddings out of
-# every dump shortens how long biometric data outlives a purge. BACKUP_EXCLUDE_DATA="" dumps
-# everything; BACKUP_EXCLUDE_DATA="Face FaceCluster Other" overrides the list. docs/ops/backups.md §7.
+# Every table is dumped in full, the face index included: FaceCluster holds "remove me from face
+# search" (suppressed) and host labels, which cannot be recomputed from the originals. The
+# biometric data this keeps in backups is bounded by retention (docs/ops/backups.md §7).
 #
 # Env: DATABASE_URL (else the repo .env) — the source; only read, never written.
 #      --upload / BACKUP_UPLOAD=1: copy both files to
@@ -36,7 +35,7 @@ UPLOAD="${BACKUP_UPLOAD:-0}"
 for arg in "$@"; do
   case "$arg" in
     --upload) UPLOAD=1 ;;
-    -h | --help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     -*) usage ;;
     *) [ -z "$OUT" ] || usage; OUT=$arg ;;
   esac
@@ -48,13 +47,6 @@ SOURCE=$(libpq_url "$(env_or_dotenv DATABASE_URL)")
 [ -n "$SOURCE" ] || die "DATABASE_URL is not set (env or .env)" 2
 init_pg_tools
 SRC=$(tool_url "$SOURCE")
-
-EXCLUDE_DATA=${BACKUP_EXCLUDE_DATA-$DEFAULT_EXCLUDE_DATA} # unset -> default; set but empty -> exclude nothing
-DUMP_EXCLUDES=()
-for table in $EXCLUDE_DATA; do
-  [[ $table =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "invalid table name '$table' in BACKUP_EXCLUDE_DATA" 2
-  DUMP_EXCLUDES+=("--exclude-table-data=public.\"$table\"")
-done
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/hub-backup.XXXXXX")
 HOLDER_PID=""
@@ -119,10 +111,9 @@ T0=$(now)
 log "source: database '$(url_db "$SOURCE")'"
 hold_snapshot
 log "snapshot $SNAPSHOT"
-[ -z "$EXCLUDE_DATA" ] || log "rows of these tables are not dumped: $EXCLUDE_DATA"
-pg_run pg_dump "$SRC" --format=custom --snapshot="$SNAPSHOT" ${DUMP_EXCLUDES[@]+"${DUMP_EXCLUDES[@]}"} >"$OUT.partial"
+pg_run pg_dump "$SRC" --format=custom --snapshot="$SNAPSHOT" >"$OUT.partial"
 T1=$(now)
-pg_manifest pg_run "$SRC" "$SNAPSHOT" "$EXCLUDE_DATA" >"$OUT.manifest.partial"
+pg_manifest pg_run "$SRC" "$SNAPSHOT" >"$OUT.manifest.partial"
 release_snapshot
 [ -s "$OUT.manifest.partial" ] || die "manifest is empty: no tables in schema public?"
 chmod 600 "$OUT.partial" "$OUT.manifest.partial"

@@ -27,8 +27,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
-psycopg = pytest.importorskip("psycopg")
-
 ROOT = Path(__file__).resolve().parents[2]
 BACKUP = ROOT / "scripts" / "backup-db.sh"
 DRILL = ROOT / "scripts" / "restore-drill.sh"
@@ -52,6 +50,19 @@ def _unavailable(reason: str) -> None:
     if os.environ.get("CI"):
         raise RuntimeError(f"restore-drill tests cannot run in CI: {reason}")
     pytest.skip(reason, allow_module_level=True)
+
+
+def _skip_or_fail(reason: str) -> None:
+    """The same rule inside a single test: a CI run must not go green by skipping it."""
+    if os.environ.get("CI"):
+        pytest.fail(f"cannot run in CI: {reason}")
+    pytest.skip(reason)
+
+
+try:
+    import psycopg
+except ImportError:  # pragma: no cover - environment dependent
+    _unavailable("psycopg is not installed")
 
 
 def _source_url() -> str:
@@ -297,17 +308,23 @@ def test_vector_json_bytea_and_time_columns_restore_with_identical_checksums(typ
     assert _reported_counts(proc.stdout)["TypedColumns"] == (2, 2)
 
 
-def _s3() -> dict[str, str] | None:
+LOCAL_S3_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
+
+
+def _s3() -> tuple[dict[str, str] | None, str]:
+    """Local S3 config, or (None, why not). Never a remote endpoint: the test uploads a real dump."""
     keys = ("S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY")
     cfg = {k: os.environ.get(k) or _env_file_value(k) or "" for k in keys}
     if not all(cfg.values()):
-        return None
+        return None, "S3_* settings are missing"
     host = urlsplit(cfg["S3_ENDPOINT"])
+    if host.hostname not in LOCAL_S3_HOSTS:
+        return None, f"S3_ENDPOINT {host.hostname} is not local; the upload test only writes to a loopback bucket"
     try:
         socket.create_connection((host.hostname, host.port or 80), timeout=2).close()
     except OSError:
-        return None
-    return cfg
+        return None, f"local S3 at {cfg['S3_ENDPOINT']} is not reachable"
+    return cfg, ""
 
 
 def _aws(cfg: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
@@ -324,14 +341,27 @@ def _aws(cfg: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.skipif(_s3() is None, reason="local S3 (RustFS) is not reachable")
+def test_upload_test_refuses_a_non_local_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("S3_ENDPOINT", "https://abc123.r2.cloudflarestorage.com")
+    monkeypatch.setenv("S3_BUCKET", "prod-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "k")
+    monkeypatch.setenv("S3_SECRET_KEY", "s")
+
+    cfg, why = _s3()
+
+    assert cfg is None
+    assert "not local" in why
+
+
 def test_backup_upload_copies_dump_and_manifest_under_backup_prefix(tmp_path: Path) -> None:
-    cfg = _s3()
+    cfg, why = _s3()
+    if cfg is None:
+        _skip_or_fail(why)
     assert cfg is not None
     prefix = f"backup/pg-test-{secrets.token_hex(4)}"
     out = tmp_path / "up.dump"
     try:
-        proc = _run(BACKUP, str(out), "--upload", BACKUP_S3_PREFIX=prefix)
+        proc = _run(BACKUP, str(out), "--upload", BACKUP_S3_PREFIX=prefix, **cfg)
         assert proc.returncode == 0, _out(proc)
 
         listing = _aws(cfg, "s3", "ls", f"s3://{cfg['S3_BUCKET']}/{prefix}/")
@@ -425,8 +455,43 @@ def test_drill_fails_on_a_truncated_dump(dump: Path, tmp_path: Path) -> None:
     name = _scratch_name()
     proc = _server_drill(cut, name)
 
-    assert proc.returncode != 0, _out(proc)
+    assert proc.returncode == 1, _out(proc)
+    assert "pg_restore failed" in _out(proc)
     assert "PASS" not in proc.stdout
+    assert not _database_exists(name)
+
+
+def _pg_dump_without_rows_of(table: str, out: Path) -> None:
+    """A dump of the source that silently lacks one table's rows: pg_restore will succeed on it."""
+    parts = urlsplit(SOURCE)
+    host, net = parts.hostname or "localhost", ["--network", "host"]
+    if os.uname().sysname != "Linux":
+        net = []
+        host = "host.docker.internal" if host in {"localhost", "127.0.0.1"} else host
+    with out.open("wb") as fh:
+        proc = subprocess.run(
+            ["docker", "run", "--rm", *net, "-e", "PGPASSWORD", "pgvector/pgvector:pg16",
+             "pg_dump", "-h", host, "-p", str(parts.port or 5432), "-U", parts.username or "postgres",
+             "-d", SOURCE_DB, "--format=custom", f'--exclude-table-data=public."{table}"'],
+            stdout=fh, stderr=subprocess.PIPE, env={**os.environ, "PGPASSWORD": parts.password or ""},
+        )
+    assert proc.returncode == 0, proc.stderr.decode()
+
+
+def test_drill_fails_when_the_restore_succeeds_but_rows_are_missing(dump: Path, tmp_path: Path) -> None:
+    lossy = tmp_path / "lossy.dump"
+    # Rsvp has rows in the seed and no foreign key points at it, so pg_restore succeeds without them
+    # (dropping Guest rows instead would make pg_restore itself fail on Rsvp's foreign key)
+    _pg_dump_without_rows_of("Rsvp", lossy)
+    # the source's real manifest says Rsvp has rows; the dump does not carry them
+    Path(f"{lossy}.manifest").write_text(Path(f"{dump}.manifest").read_text())
+    name = _scratch_name()
+    proc = _server_drill(lossy, name)
+
+    assert proc.returncode == 1, _out(proc)
+    assert "pg_restore failed" not in _out(proc), "the restore itself must succeed; only the comparison catches it"
+    assert re.search(r"^\s*Rsvp\s+[1-9]\d*\s+0\s+MISMATCH \(row count differs\)", proc.stdout, re.M), _out(proc)
+    assert "restore drill: FAIL" in proc.stdout
     assert not _database_exists(name)
 
 
@@ -451,8 +516,9 @@ def test_drill_fails_when_a_table_in_the_restore_is_missing_from_the_manifest(du
     assert re.search(r"^\s*Guest\s+-\s+\d+\s+MISMATCH \(not in source\)", proc.stdout, re.M), _out(proc)
 
 
-@pytest.mark.skipif(shutil.which("pnpm") is None, reason="pnpm is not installed")
 def test_drill_fails_when_prisma_migrate_status_fails(tmp_path: Path, make_source) -> None:  # type: ignore[no-untyped-def]
+    if shutil.which("pnpm") is None:
+        _skip_or_fail("pnpm is not installed")
     # Prisma's bookkeeping table exists but no migration is recorded as applied
     url = make_source(
         'CREATE TABLE "_prisma_migrations" (id varchar(36) PRIMARY KEY, checksum varchar(64) NOT NULL,'
@@ -489,45 +555,84 @@ def test_container_drill_removes_its_data_volume(dump: Path) -> None:
     assert volumes == []
 
 
-def test_face_and_facecluster_rows_are_left_out_of_the_dump_and_the_drill_still_passes(
+def test_face_index_rows_with_opt_outs_and_host_labels_are_dumped_and_verified(
     tmp_path: Path, make_source  # type: ignore[no-untyped-def]
 ) -> None:
+    # FaceCluster.suppressed ("remove me from face search") and the host's label cannot be recomputed
+    # from the originals; cluster_faces carries them over only through Face."clusterId". Leaving
+    # either table out of a dump would make opted-out people searchable again after a restore.
     url = make_source(
-        'CREATE TABLE "FaceCluster" (id text PRIMARY KEY, label text)',
+        'CREATE TABLE "FaceCluster" (id text PRIMARY KEY, label text, suppressed boolean NOT NULL DEFAULT false)',
         'CREATE TABLE "Face" (id text PRIMARY KEY, "clusterId" text REFERENCES "FaceCluster"(id), embedding vector(3))',
         'CREATE TABLE "FaceProfile" (id text PRIMARY KEY, embedding vector(3))',
-        "INSERT INTO \"FaceCluster\" VALUES ('c1', 'Bride')",
-        "INSERT INTO \"Face\" VALUES ('f1', 'c1', '[1,2,3]'), ('f2', NULL, '[4,5,6]')",
+        "INSERT INTO \"FaceCluster\" VALUES ('c1', 'Bride', false), ('c2', NULL, true)",
+        "INSERT INTO \"Face\" VALUES ('f1', 'c1', '[1,2,3]'), ('f2', 'c2', '[4,5,6]')",
         "INSERT INTO \"FaceProfile\" VALUES ('p1', '[7,8,9]')",
     )
     out = tmp_path / "faces.dump"
-    backup = _run(BACKUP, str(out), DATABASE_URL=url)
+    # a leftover opt-out knob must not be able to drop them either
+    backup = _run(BACKUP, str(out), DATABASE_URL=url, BACKUP_EXCLUDE_DATA="Face FaceCluster")
     assert backup.returncode == 0, _out(backup)
     manifest = {ln.split("\t")[0]: int(ln.split("\t")[1]) for ln in _manifest_lines(out)}
-    # reproducible gallery face index is not copied; the non-reproducible profile embedding is
-    assert manifest == {"Face": 0, "FaceCluster": 0, "FaceProfile": 1}
+    assert manifest == {"Face": 2, "FaceCluster": 2, "FaceProfile": 1}
 
-    proc = _server_drill(out, _scratch_name(), DRILL_SKIP_PRISMA="1")
-    assert proc.returncode == 0, _out(proc)  # restored Face/FaceCluster really are empty, tables exist
-    assert _reported_counts(proc.stdout) == {"Face": (0, 0), "FaceCluster": (0, 0), "FaceProfile": (1, 1)}
+    name = _scratch_name()
+    proc = _server_drill(out, name, DRILL_SKIP_PRISMA="1")
+    assert proc.returncode == 0, _out(proc)
+    assert _reported_counts(proc.stdout) == {"Face": (2, 2), "FaceCluster": (2, 2), "FaceProfile": (1, 1)}
 
-    full = tmp_path / "faces-full.dump"
-    assert _run(BACKUP, str(full), DATABASE_URL=url, BACKUP_EXCLUDE_DATA="").returncode == 0
-    full_manifest = {ln.split("\t")[0]: int(ln.split("\t")[1]) for ln in _manifest_lines(full)}
-    assert full_manifest == {"Face": 2, "FaceCluster": 1, "FaceProfile": 1}
+    # and the checksum is what proves the opt-out survived: flip it in the manifest and the drill fails
+    flipped = _tampered(out, tmp_path, "FaceCluster", 2, "0" * 32)
+    bad = _server_drill(flipped, _scratch_name(), DRILL_SKIP_PRISMA="1")
+    assert bad.returncode == 1, _out(bad)
+    assert re.search(r"^\s*FaceCluster\s+2\s+2\s+MISMATCH \(checksum differs\)", bad.stdout, re.M), _out(bad)
 
 
 def _docker_shim(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """A `docker` wrapper that logs every argv, so tests can prove no password is passed on a command line."""
+    """A `docker` wrapper that logs every argv (to prove what reaches a command line).
+
+    With SHIM_FAIL_RUN_D=1 in the environment, `docker run -d …` fails as if the name were taken.
+    """
     log = tmp_path / "docker-argv.log"
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
     real = shutil.which("docker")
     assert real
     shim = shim_dir / "docker"
-    shim.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{log}"\nexec "{real}" "$@"\n')
+    shim.write_text(
+        "#!/bin/bash\n"
+        f'printf "%s\\n" "$*" >> "{log}"\n'
+        'if [ "${SHIM_FAIL_RUN_D:-}" = 1 ] && [ "$1" = run ] && [ "$2" = -d ]; then\n'
+        '  echo "docker: Error response from daemon: Conflict. The container name is already in use." >&2\n'
+        "  exit 125\n"
+        "fi\n"
+        f'exec "{real}" "$@"\n'
+    )
     shim.chmod(0o755)
     return {"PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}", "PG_TOOLS": "docker"}, log
+
+
+def test_container_teardown_never_removes_what_the_drill_did_not_create(dump: Path, tmp_path: Path) -> None:
+    env, log = _docker_shim(tmp_path)
+    proc = _drill(dump, RESTORE_DB_NAME=_scratch_name(), SHIM_FAIL_RUN_D="1", **env)
+
+    assert proc.returncode != 0, _out(proc)
+    argv = log.read_text()
+    assert "run -d" in argv
+    # the run failed, so the name may belong to someone else: nothing may be removed under it
+    assert not re.search(r"^rm ", argv, re.M), argv
+    assert "volume rm" not in argv, argv
+
+
+def test_default_throwaway_names_do_not_collide_within_a_second(dump: Path, tmp_path: Path) -> None:
+    names = set()
+    for i in range(2):
+        run_dir = tmp_path / f"run{i}"
+        run_dir.mkdir()
+        env, log = _docker_shim(run_dir)
+        _drill(dump, SHIM_FAIL_RUN_D="1", **env)  # stops right after the name is chosen
+        names.update(re.findall(r"--name (hub-restore-drill-\S+)", log.read_text()))
+    assert len(names) == 2, names
 
 
 def test_passwords_never_appear_on_a_command_line(tmp_path: Path) -> None:
@@ -544,6 +649,10 @@ def test_passwords_never_appear_on_a_command_line(tmp_path: Path) -> None:
     assert "://" in argv, "the shim saw the tool invocations"
     assert not re.search(r"://[^/@\s]*:[^@\s]+@", argv), "a URL with an inline password reached a command line"
     assert "PGPASSWORD=" not in argv, "the password value itself must not be on the command line either"
+    # the container drill mounts a named volume of its own and removes exactly that volume
+    mounted = re.findall(r"-v (hub-restore-drill-\S+):/var/lib/postgresql/data", argv)
+    assert len(mounted) == 1, argv
+    assert f"volume rm -f {mounted[0]}" in argv, argv
 
 
 def _runbook_sql_blocks() -> list[str]:
@@ -551,42 +660,112 @@ def _runbook_sql_blocks() -> list[str]:
     return re.findall(r"```sql\n(.*?)```", text, re.S)
 
 
-@pytest.mark.skipif(
-    SOURCE_DB == "hub" and not os.environ.get("CI"),
-    reason="never run write-then-rollback SQL on the shared local hub database (CI's is a disposable service container)",
+REPLAY_SQL = ROOT / "docs" / "ops" / "replay-after-restore.sql"
+SHARED_HUB_SKIP = pytest.mark.skipif(
+    SOURCE_DB == "hub",
+    reason="never run write-then-rollback SQL on a database named hub (CI uses hub_ci; locally use your own DB)",
 )
-def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue(make_source) -> None:  # type: ignore[no-untyped-def]
+
+
+def _jobs(conn, type_: str, key: str, ids: list[str]) -> dict[str, tuple]:  # type: ignore[no-untyped-def]
+    return {
+        r[0]: r[1:]
+        for r in conn.execute(
+            f"SELECT payload->>'{key}', status::text, attempts, \"lockedBy\", \"lastError\", payload, \"runAt\" > now() + interval '1 hour'"
+            ' FROM "Job" WHERE type = %s AND payload->>%s = ANY(%s)',
+            (type_, key, ids),
+        ).fetchall()
+    }
+
+
+@SHARED_HUB_SKIP
+def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue() -> None:
     blocks = _runbook_sql_blocks()
     purge = next(b for b in blocks if "PURGE_FACE_INDEX" in b)
     with psycopg.connect(SOURCE) as conn:
         try:
-            events = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 2').fetchall()]
-            assert len(events) == 2
+            events = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 3').fetchall()]
+            assert len(events) == 3
             conn.execute(
                 'UPDATE "Event" SET "faceIndexPurgeAt" = now() - interval \'1 day\', "faceIndexPurgedAt" = NULL WHERE id = ANY(%s)',
                 (events,),
             )
-            for eid, status in zip(events, ("RUNNING", "DEAD")):
+            # RUNNING, DEAD, and QUEUED-in-the-future with a stale payload: the three branches of jobs.enqueue
+            for eid, status, run_at in zip(events, ("RUNNING", "DEAD", "QUEUED"), ("now()", "now()", "now() + interval '1 day'")):
                 conn.execute(
-                    'INSERT INTO "Job"(type, payload, status, attempts, "lockedBy", "lockedAt", "lastError", "dedupeKey")'
-                    " VALUES ('PURGE_FACE_INDEX', %s::jsonb, %s::\"JobStatus\", 3, 'w1', now(), 'boom', %s)",
-                    (f'{{"eventId": "{eid}"}}', status, f"purge-face:{eid}:restore"),
+                    'INSERT INTO "Job"(type, payload, status, attempts, "lockedBy", "lockedAt", "lastError", "runAt", "dedupeKey")'
+                    f" VALUES ('PURGE_FACE_INDEX', %s::jsonb, %s::\"JobStatus\", 3, 'w1', now(), 'boom', {run_at}, %s)",
+                    (f'{{"eventId": "{eid}", "stale": true}}', status, f"purge-face:{eid}:restore"),
                 )
             conn.execute(purge)
-            rows = {
-                r[0]: r[1:]
-                for r in conn.execute(
-                    'SELECT payload->>\'eventId\', status::text, attempts, "lockedBy", "lastError" FROM "Job"'
-                    " WHERE type = 'PURGE_FACE_INDEX' AND payload->>'eventId' = ANY(%s)",
-                    (events,),
-                ).fetchall()
-            }
+            rows = _jobs(conn, "PURGE_FACE_INDEX", "eventId", events)
+            fresh = {"eventId": events[2]}
             # RUNNING rows belong to a live worker: untouched (same rule as jobs.enqueue)
-            assert rows[events[0]] == ("RUNNING", 3, "w1", "boom")
-            # finished/dead rows are reset: requeued with attempts 0 and no stale lock or error
-            assert rows[events[1]] == ("QUEUED", 0, None, None)
+            assert rows[events[0]][:4] == ("RUNNING", 3, "w1", "boom")
+            # finished/dead rows are reset: requeued with attempts 0, no stale lock or error, fresh payload
+            assert rows[events[1]][:4] == ("QUEUED", 0, None, None)
+            assert rows[events[1]][4] == {"eventId": events[1]}
+            # QUEUED rows keep their attempts and the later runAt, get the fresh payload, lose the stale lock
+            assert rows[events[2]][:4] == ("QUEUED", 3, None, None)
+            assert rows[events[2]][4] == fresh
+            assert rows[events[2]][5] is True, "runAt = GREATEST(existing, new): the later time is kept"
             for block in blocks:
                 if block is not purge:
                     conn.execute(block)  # every other runbook SQL block is valid against the real schema
         finally:
             conn.rollback()
+
+
+@SHARED_HUB_SKIP
+def test_replay_re_applies_purges_and_face_search_toggles_from_the_old_audit_log() -> None:
+    with psycopg.connect(SOURCE) as conn:
+        try:
+            ev = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 4').fetchall()]
+            assert len(ev) == 4
+            disabled, toggled_back, purged, requested = ev
+            conn.execute('UPDATE "Event" SET "faceSearchEnabled" = true WHERE id = ANY(%s)', (ev,))
+            conn.execute('UPDATE "Event" SET "faceSearchEnabled" = false WHERE id = %s', (toggled_back,))
+            # what the old instance's AuditLog recorded after the restore point T
+            conn.execute('CREATE TEMP TABLE replay_audit (action text, "eventId" text, "createdAt" timestamptz)')
+            conn.execute(
+                "INSERT INTO replay_audit VALUES"
+                " ('event.facesearch.disable', %s, now() - interval '3 hours'),"
+                " ('event.facesearch.disable', %s, now() - interval '3 hours'),"
+                " ('event.facesearch.enable',  %s, now() - interval '2 hours'),"
+                " ('faceindex.purge',          %s, now() - interval '2 hours'),"
+                " ('faceindex.purge.request',  %s, now() - interval '1 hour'),"
+                " ('faceindex.purge',          %s, now() - interval '1 hour')",
+                (disabled, toggled_back, toggled_back, purged, requested, purged),
+            )
+            # indexing work queued at T for a purged event must not run and re-create embeddings
+            conn.execute(
+                'INSERT INTO "Job"(type, payload, status, "dedupeKey") VALUES'
+                " ('CLUSTER_FACES', %s::jsonb, 'QUEUED'::\"JobStatus\", %s)",
+                (f'{{"eventId": "{purged}"}}', f"cluster:{purged}"),
+            )
+
+            conn.execute(REPLAY_SQL.read_text())
+
+            enabled = dict(conn.execute('SELECT id, "faceSearchEnabled" FROM "Event" WHERE id = ANY(%s)', (ev,)).fetchall())
+            assert enabled[disabled] is False  # disabled after T: stays disabled
+            assert enabled[toggled_back] is True  # last toggle after T wins
+            assert enabled[purged] is True and enabled[requested] is True  # untouched by the toggle replay
+            purges = _jobs(conn, "PURGE_FACE_INDEX", "eventId", ev)
+            assert set(purges) == {purged, requested}  # once each, even with two audit rows for `purged`
+            assert all(v[0] == "QUEUED" for v in purges.values())
+            cluster = conn.execute(
+                "SELECT status::text FROM \"Job\" WHERE \"dedupeKey\" = %s", (f"cluster:{purged}",)
+            ).fetchone()
+            assert cluster == ("DEAD",)
+        finally:
+            conn.rollback()
+
+
+def test_runbook_explains_how_to_load_the_replay_and_that_it_needs_the_old_instance() -> None:
+    text = (ROOT / "docs" / "ops" / "runbook-restore.md").read_text()
+    assert "replay-after-restore.sql" in text
+    assert "replay_audit" in text and "\\copy" in text
+    assert "OLD_URL" in text
+    assert "LEG-008" in text
+    # dumps carry the whole face index now; re-indexing after a restore would undo replayed purges
+    assert "SELECT 'INDEX_FACES'" not in text, "no runbook step may re-queue face indexing"
