@@ -10,7 +10,9 @@
  * and no environment fallback for the name, so a typo cannot silently check (or, for a future
  * edit of this script, change) the wrong data.
  *
- * Exit codes: 0 every check passed, 1 at least one FAIL, 2 usage error or refusal.
+ * Exit codes: 0 no FAIL (WARN and INFO lines do not fail the run), 1 at least one FAIL, 2 usage
+ * error, refusal, or any failure to run the checks at all (cannot connect, timeout): in that case
+ * nothing was verified.
  *
  * What it checks mirrors workers/media/hub_worker/handlers/purge_face_index.py; the runbook
  * (docs/compliance/runbook-biometric-deletion.md) explains each line.
@@ -61,7 +63,7 @@ const count = async (query, sql, ...params) => Number((await query(sql, params))
 /**
  * Run every check for one event. `query(sql, params)` must resolve to an array of row objects;
  * only SELECT statements are issued.
- * @returns {Promise<{ok: boolean, checks: Array<{id: string, status: "PASS"|"FAIL"|"INFO", label: string, detail: string}>}>}
+ * @returns {Promise<{ok: boolean, checks: Array<{id: string, status: "PASS"|"FAIL"|"WARN"|"INFO", label: string, detail: string}>}>}
  */
 export async function verifyPurge(query, eventId) {
   const checks = [];
@@ -117,12 +119,33 @@ export async function verifyPurge(query, eventId) {
       WHERE "eventId" = $1 AND action = 'faceindex.purge' ORDER BY "createdAt" DESC, id DESC LIMIT 1`,
     [eventId],
   );
-  if (audit) {
+  // The handler stamps faceIndexPurgedAt and writes the audit row in one transaction, so the newest
+  // audit row must not be older than the stamp. An older row belongs to an earlier purge.
+  if (!audit) {
+    add("audit", "FAIL", "AuditLog 'faceindex.purge' row (newest)", "none: the worker writes this row when the purge job completes");
+  } else if (!purgedAt) {
+    add("audit", "FAIL", "AuditLog 'faceindex.purge' row (newest)", `#${audit.id} at ${asIso(audit.createdAt)} is from an earlier purge; no purge has completed since (faceIndexPurgedAt is NULL)`);
+  } else if (new Date(audit.createdAt) < new Date(purgedAt)) {
+    add("audit", "FAIL", "AuditLog 'faceindex.purge' row (newest)", `#${audit.id} at ${asIso(audit.createdAt)} predates faceIndexPurgedAt ${asIso(purgedAt)}: it records an earlier purge`);
+  } else {
     const d = audit.data ?? {};
     add("audit", "PASS", "AuditLog 'faceindex.purge' row (newest)", `#${audit.id} at ${asIso(audit.createdAt)}: faces=${d.faces} clusters=${d.clusters} photos=${d.photos} jobId=${d.jobId}`);
-  } else {
-    add("audit", "FAIL", "AuditLog 'faceindex.purge' row (newest)", "none: the worker writes this row when the purge job completes");
   }
+
+  // The admin jobs page can revive DEAD jobs ("Retry dead"); a revived index job rebuilds the index.
+  const dead = await query(
+    `SELECT id::text AS id, type FROM "Job"
+      WHERE type IN ('INDEX_FACES', 'PROCESS_PHOTO') AND status = 'DEAD'
+        AND payload->>'photoId' IN (SELECT id FROM "Photo" WHERE "eventId" = $1)
+      ORDER BY id`,
+    [eventId],
+  );
+  add(
+    "dead-jobs",
+    dead.length === 0 ? "PASS" : "WARN",
+    "DEAD INDEX_FACES / PROCESS_PHOTO jobs for the event's photos",
+    dead.length === 0 ? "none" : `${dead.map((j) => `#${j.id} ${j.type}`).join(", ")}: do not use 'Retry dead' for these (it would rebuild the index); cancel them`,
+  );
 
   const matches = await count(
     query,

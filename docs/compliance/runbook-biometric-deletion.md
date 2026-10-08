@@ -17,8 +17,8 @@ Read these first, because they change what you can promise:
 
 ## 0. Before you start
 
-1. Record who asked, when, for which event or person, and a reference (ticket or email). You will
-   put the reference in the audit row.
+1. Record who asked, when, for which event or person, and a **ticket id** (never an email address
+   or a name) to reference the request. You will put the ticket id in the audit row.
 2. Find the database name. **The verify script takes the database name on the command line and has
    no default; it refuses the shared development database `hub` and does not accept names with
    anything but letters, digits and underscores.** It only runs `SELECT`s, in a read-only
@@ -80,7 +80,8 @@ Exit code 0 and `RESULT: PASS` means all of these hold for that event in that da
 | `Queued or running INDEX_FACES / CLUSTER_FACES / PROCESS_PHOTO jobs` none | nothing is about to rebuild the index (`PROCESS_PHOTO` counts only while face search is on, because it enqueues `INDEX_FACES`) |
 | `Event.faceSearchEnabled` (WARN if on) | new uploads would be embedded again; a WARN does not fail the run, but turn it off (1.1) unless the studio wants a new index |
 | `Event.faceIndexPurgedAt` set | the handler completed |
-| `AuditLog 'faceindex.purge' row` | the worker's own record, with counts and the job id |
+| `AuditLog 'faceindex.purge' row` | the worker's own record, with counts and the job id; it must not be older than `faceIndexPurgedAt`, so a row from an earlier purge does not count |
+| `DEAD INDEX_FACES / PROCESS_PHOTO jobs` (WARN) | the admin jobs page's "Retry dead" would revive them and rebuild the index; cancel them instead |
 | `PhotoMatch` / `BiometricConsent` (INFO) | rows kept on purpose; see biometrics.md |
 
 Exit code 1 means a `FAIL` line: do not report the purge as done. Exit code 2 is a usage error, a
@@ -153,14 +154,24 @@ studio-facing tool and studio staff must not be given database access to run it.
 request to the platform operator, who runs it.
 
 Run in `psql` against the target database; set the variables first. The statement deletes saved
-matches (the user's own and any guardian matches for the child), revokes consents, and writes one
+matches (the user's own and any guardian matches for the child), revokes the profile and guardian consents, and writes one
 audit row with **counts only**, no ids of people. Choose the scope:
 
 - **One event** (`event_id` set; the usual case for "remove me from this wedding"): deletes only the
   matches on that event's photos and the child's consents for that event. The cross-event face
   profile and the user's profile consent are **kept**.
 - **All events** (`event_id` empty): also deletes the user's `FaceProfile` and revokes their profile
-  consent.
+  consent. The audit row is then not tied to one event; set `studio_id` to empty as well unless the
+  person only ever appeared in one studio's events (a single row cannot belong to several studios).
+  One-time search consents (`SEARCH_SELF`) are **not** revoked by this statement: nothing is
+  persisted for them beyond the row and the saved matches, and the row is evidence. Guardian
+  consents (`SEARCH_GUARDIAN`) for the named child are revoked.
+
+**An event-scoped delete can be undone.** It keeps the `FaceProfile`, and `CLUSTER_FACES`
+(`_match_profiles`) re-creates `PROFILE_AUTO` matches for any non-deleted guest with a profile on
+its next run, without looking at `Guest.faceSearchOptOut` (WRK-020, WRK-010). Today enrolment is off
+so no profile can exist; if one does, delete it (run the all-events form, or at least the profile
+delete) rather than relying on the event-scoped form or on `faceSearchOptOut`.
 
 `ref` goes into `AuditLog.target`, which is shown to studio and platform admins: use a **ticket id**
 (for example `SUP-123`), never an email address or a name.
@@ -228,8 +239,7 @@ in the photos themselves. Backups still hold the old data until they expire (sec
 Backups and point-in-time recovery contain every embedding that existed when they were taken, until
 that backup expires, and a restore re-creates data you purged. The destruction timeline is therefore
 **purge date + the backup retention tail**. Backup retention and the restore procedure belong to
-DOC-003 (`docs/ops/backups.md`, in PR #135 and not merged when this was written); this runbook does
-not repeat them so there is one source of truth, and will be reconciled with that file once it lands.
+DOC-003 (`docs/ops/backups.md`); this runbook does not describe them.
 
 What you must do here:
 

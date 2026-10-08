@@ -149,8 +149,8 @@ async function fixture(label: string, opts: FixtureOpts = {}) {
 
 afterAll(async () => {
   if (runDb) {
+    await prisma.$executeRawUnsafe(`DELETE FROM "Job" WHERE "dedupeKey" LIKE $1`, `${run}:%`);
     for (const f of created) {
-      await prisma.$executeRawUnsafe(`DELETE FROM "Job" WHERE "dedupeKey" LIKE $1`, `${run}:%`);
       await prisma.$executeRawUnsafe(`DELETE FROM "AuditLog" WHERE "eventId" = $1`, f.eventId);
       await prisma.$executeRawUnsafe(`DELETE FROM "PhotoMatch" WHERE "photoId" = $1`, f.photoId);
       await prisma.$executeRawUnsafe(`DELETE FROM "Face" WHERE "eventId" = $1`, f.eventId);
@@ -325,6 +325,39 @@ describe.skipIf(!runDb)(runDb ? "verify-purge against Postgres" : `verify-purge 
       await conn.close();
     }
   }, 20_000);
+
+  it("an audit row left by an earlier purge does not vouch for a purge that has not completed", async () => {
+    const f = await fixture("stale-audit-no-stamp", { purged: true });
+    await prisma.$executeRawUnsafe(`UPDATE "Event" SET "faceIndexPurgedAt" = NULL WHERE id = $1`, f.eventId);
+    const result = await verifyPurge(query, f.eventId);
+    expect(statusOf(result.checks, "purged-at")).toBe("FAIL");
+    expect(statusOf(result.checks, "audit")).toBe("FAIL");
+    expect(result.ok).toBe(false);
+  });
+
+  it("an audit row older than the purge stamp is not the record of that purge", async () => {
+    const f = await fixture("stale-audit-old", { purged: true });
+    await prisma.$executeRawUnsafe(`UPDATE "AuditLog" SET "createdAt" = now() - interval '1 hour' WHERE "eventId" = $1`, f.eventId);
+    const result = await verifyPurge(query, f.eventId);
+    expect(statusOf(result.checks, "audit")).toBe("FAIL");
+    expect(result.ok).toBe(false);
+  });
+
+  it.each(["INDEX_FACES", "PROCESS_PHOTO"] as const)(
+    "warns about a DEAD %s job for the event: admin 'Retry dead' would revive it and rebuild the index",
+    async (type) => {
+      const f = await fixture(`dead-${type}`, { purged: true });
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "Job"(type, payload, status, "dedupeKey") VALUES ($1, $2::jsonb, 'DEAD'::"JobStatus", $3)`,
+        type,
+        JSON.stringify({ photoId: f.photoId, run }),
+        `${run}:dead-${type}`,
+      );
+      const result = await verifyPurge(query, f.eventId);
+      expect(statusOf(result.checks, "dead-jobs")).toBe("WARN");
+      expect(result.ok).toBe(true);
+    },
+  );
 
   it("only ever issues SELECT statements", async () => {
     const f = await fixture("readonly", { purged: true });
