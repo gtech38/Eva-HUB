@@ -27,8 +27,9 @@ Read these first, because they change what you can promise:
    export DATABASE_URL='postgresql://USER:PASS@HOST:PORT/ANYDB'   # host + credentials only
    node scripts/compliance/verify-purge.mjs <eventId> --database <the real database name>
    ```
-   If your production database is named `hub`, the script will refuse it by design. Use the SQL in
-   section 1.5 instead, or rename the database; do not edit the script's refusal.
+   `hub` is the shared development database. The production database must never be named `hub`
+   (DOC-020 pins this); if it is, rename it rather than editing the script's refusal, and use the SQL
+   in section 1.5 in the meantime.
 3. Find the `eventId` (admin event URL, or `SELECT id, slug, title FROM "Event" WHERE slug = '...'`).
 4. Check the worker is running (admin `/platform/jobs`). The purge is a worker job.
 
@@ -39,7 +40,9 @@ Read these first, because they change what you can promise:
 `INDEX_FACES` does not look at `Event.faceIndexPurgedAt`, so any photo uploaded or reprocessed after
 the purge is embedded again (biometrics.md G4, WRK-020). Switch face search off first:
 admin event **Settings -> "Face search (biometric)" -> untick "Face search enabled for this event" -> Save**. This writes `event.facesearch.disable`
-and makes `INDEX_FACES` skip. It does **not** delete anything by itself.
+and makes `INDEX_FACES` skip. It does **not** delete anything by itself, and an `INDEX_FACES` job that is
+already running can still write faces after the purge commits (biometrics.md L11), so wait for
+running jobs to finish before purging; the verify step catches a late write.
 
 ### 1.2 Trigger the purge
 
@@ -55,9 +58,11 @@ SELECT id, status, attempts, "lastError"
   FROM "Job" WHERE type = 'PURGE_FACE_INDEX' AND payload->>'eventId' = '<eventId>' ORDER BY id DESC LIMIT 3;
 ```
 
-`SUCCEEDED` is the goal. `QUEUED` for long means no worker is claiming it. `FAILED` retries with
-backoff; `DEAD` means it gave up: read `lastError`, fix the cause, and queue the purge again
-(section 1.2). Do not edit `Face` rows by hand.
+`SUCCEEDED` is the goal. A job that failed and will be retried does **not** show `FAILED`: it goes
+back to `QUEUED` with `lastError` set and `runAt` in the future (backoff), so read `lastError` and
+`runAt`, not just `status`. `QUEUED` with a null `lastError` and a past `runAt` for more than a
+minute means no worker is claiming it. `DEAD` means it gave up after its attempts: read `lastError`,
+fix the cause, and queue the purge again (section 1.2). Do not edit `Face` rows by hand.
 
 ### 1.4 Verify
 
@@ -72,13 +77,15 @@ Exit code 0 and `RESULT: PASS` means all of these hold for that event in that da
 | `Face rows` = 0 | no embeddings left for the event |
 | `FaceCluster rows` = 0 | no clusters left |
 | `Photos still marked as face-indexed` = 0 | `Photo.facesIndexedAt` reset by the handler |
-| `Queued or running INDEX_FACES / CLUSTER_FACES jobs` none | nothing is about to rebuild the index |
+| `Queued or running INDEX_FACES / CLUSTER_FACES / PROCESS_PHOTO jobs` none | nothing is about to rebuild the index (`PROCESS_PHOTO` counts only while face search is on, because it enqueues `INDEX_FACES`) |
+| `Event.faceSearchEnabled` (WARN if on) | new uploads would be embedded again; a WARN does not fail the run, but turn it off (1.1) unless the studio wants a new index |
 | `Event.faceIndexPurgedAt` set | the handler completed |
 | `AuditLog 'faceindex.purge' row` | the worker's own record, with counts and the job id |
 | `PhotoMatch` / `BiometricConsent` (INFO) | rows kept on purpose; see biometrics.md |
 
-Exit code 1 means a `FAIL` line: do not report the purge as done. Exit code 2 is a usage error or a
-refusal (missing or forbidden database name).
+Exit code 1 means a `FAIL` line: do not report the purge as done. Exit code 2 is a usage error, a
+refusal (missing or forbidden database name), or any failure to run the checks at all (cannot
+connect, timeout): in that case nothing was verified.
 
 ### 1.5 The same checks by hand
 
@@ -108,14 +115,16 @@ output prove it was done.
 
 Tell the requester: the live face index for the event is deleted; saved photo matches are kept
 because they hold no face data (deleted per person on request, section 2); copies in backups expire
-on the schedule in `docs/ops/backups.md` §7. Leave face search off unless the studio wants a new
-index; re-enabling does not rebuild one for existing photos (biometrics.md L11).
+on the schedule in `docs/ops/backups.md`. Leave face search off unless the studio wants a new
+index; re-enabling does not rebuild one for existing photos, and the gallery "Re-index faces" button
+only enqueues `CLUSTER_FACES` (biometrics.md L11).
 
 ## 2. Per person (guest, user or child)
 
 For a request from a guest, from a guardian for a child, or from a user who revoked consent. Verify
 who is asking first: reply to a verified contact on the account, or confirm with the host. Children:
-only a guardian in the child's household may ask.
+only a guardian in the child's household may ask. The SQL in this section is run by a platform
+operator with database access, never by studio staff (see 2.2).
 
 ### 2.1 Stop matching them in this event
 
@@ -139,26 +148,45 @@ people's photos (L4).
 
 ### 2.2 Delete their data
 
-Run in `psql` against the target database; set the variables first. The statement deletes the face
-profile, revokes consents, deletes saved matches (the user's own and any guardian matches for the
-child) and writes one audit row with **counts only**, no ids of people:
+**Platform operators only.** This is raw SQL against the production database; there is no
+studio-facing tool and studio staff must not be given database access to run it. Studios send the
+request to the platform operator, who runs it.
+
+Run in `psql` against the target database; set the variables first. The statement deletes saved
+matches (the user's own and any guardian matches for the child), revokes consents, and writes one
+audit row with **counts only**, no ids of people. Choose the scope:
+
+- **One event** (`event_id` set; the usual case for "remove me from this wedding"): deletes only the
+  matches on that event's photos and the child's consents for that event. The cross-event face
+  profile and the user's profile consent are **kept**.
+- **All events** (`event_id` empty): also deletes the user's `FaceProfile` and revokes their profile
+  consent.
+
+`ref` goes into `AuditLog.target`, which is shown to studio and platform admins: use a **ticket id**
+(for example `SUP-123`), never an email address or a name.
 
 ```sql
 \set user_id  '<userId or empty string>'
 \set guest_id '<child guestId or empty string>'
+\set event_id '<eventId, or empty string for all events>'
 \set studio_id '<studioId>'
-\set ref      '<ticket or email reference>'
+\set ref      '<ticket id>'
 BEGIN;
 WITH
-  prof     AS (DELETE FROM "FaceProfile" WHERE "userId" = :'user_id' RETURNING 1),
+  prof     AS (DELETE FROM "FaceProfile" WHERE "userId" = :'user_id' AND :'event_id' = '' RETURNING 1),
   consent  AS (UPDATE "BiometricConsent" SET "revokedAt" = now()
-                WHERE ("consentedByUserId" = :'user_id' AND kind = 'FACE_PROFILE' OR "subjectGuestId" = :'guest_id')
-                  AND "revokedAt" IS NULL RETURNING 1),
-  pm_user  AS (DELETE FROM "PhotoMatch" WHERE "userId" = :'user_id' RETURNING 1),
-  pm_child AS (DELETE FROM "PhotoMatch" WHERE "subjectGuestId" = :'guest_id' RETURNING 1),
-  audit    AS (INSERT INTO "AuditLog"("studioId", action, target, data)
-               VALUES (NULLIF(:'studio_id', ''), 'dsar.biometric.delete', :'ref',
-                       jsonb_build_object('profiles', (SELECT count(*) FROM prof),
+                WHERE "revokedAt" IS NULL
+                  AND ((kind = 'FACE_PROFILE' AND "consentedByUserId" = :'user_id' AND :'event_id' = '')
+                       OR ("subjectGuestId" = :'guest_id' AND (:'event_id' = '' OR "eventId" = :'event_id')))
+                RETURNING 1),
+  pm_user  AS (DELETE FROM "PhotoMatch" WHERE "userId" = :'user_id'
+                AND (:'event_id' = '' OR "photoId" IN (SELECT id FROM "Photo" WHERE "eventId" = :'event_id')) RETURNING 1),
+  pm_child AS (DELETE FROM "PhotoMatch" WHERE "subjectGuestId" = :'guest_id'
+                AND (:'event_id' = '' OR "photoId" IN (SELECT id FROM "Photo" WHERE "eventId" = :'event_id')) RETURNING 1),
+  audit    AS (INSERT INTO "AuditLog"("studioId", "eventId", action, target, data)
+               VALUES (NULLIF(:'studio_id', ''), NULLIF(:'event_id', ''), 'dsar.biometric.delete', :'ref',
+                       jsonb_build_object('scope', CASE WHEN :'event_id' = '' THEN 'all-events' ELSE 'event' END,
+                                          'profiles', (SELECT count(*) FROM prof),
                                           'consentsRevoked', (SELECT count(*) FROM consent),
                                           'userMatches', (SELECT count(*) FROM pm_user),
                                           'childMatches', (SELECT count(*) FROM pm_child)))
@@ -183,10 +211,11 @@ Notes:
 
 ```sql
 SELECT (SELECT count(*) FROM "FaceProfile" WHERE "userId" = :'user_id') AS profiles_left,
-       (SELECT count(*) FROM "PhotoMatch" WHERE "userId" = :'user_id' OR "subjectGuestId" = :'guest_id') AS matches_left;
+       (SELECT count(*) FROM "PhotoMatch" WHERE ("userId" = :'user_id' OR "subjectGuestId" = :'guest_id')
+          AND (:'event_id' = '' OR "photoId" IN (SELECT id FROM "Photo" WHERE "eventId" = :'event_id'))) AS matches_left;
 ```
 
-Both must be 0. Then confirm the audit row: `SELECT * FROM "AuditLog" WHERE action = 'dsar.biometric.delete' ORDER BY id DESC LIMIT 1;`.
+`matches_left` must be 0; `profiles_left` must be 0 for an all-events request (an event-scoped one keeps the profile). Then confirm the audit row: `SELECT * FROM "AuditLog" WHERE action = 'dsar.biometric.delete' ORDER BY id DESC LIMIT 1;`.
 
 ### 2.4 Tell the requester the truth
 
@@ -198,13 +227,13 @@ in the photos themselves. Backups still hold the old data until they expire (sec
 
 Backups and point-in-time recovery contain every embedding that existed when they were taken, until
 that backup expires, and a restore re-creates data you purged. The destruction timeline is therefore
-**purge date + the backup retention tail**, and the settings, the drill and the restore steps that
-re-run due purges are in `docs/ops/backups.md` (§7 "Biometric data in backups"; added by DOC-003).
-This runbook does not repeat them so there is one source of truth.
+**purge date + the backup retention tail**. Backup retention and the restore procedure belong to
+DOC-003 (`docs/ops/backups.md`, in PR #135 and not merged when this was written); this runbook does
+not repeat them so there is one source of truth, and will be reconciled with that file once it lands.
 
 What you must do here:
 
-1. In the request record, state the backup tail from `docs/ops/backups.md` §7 as the date by which
+1. In the request record, state the backup retention from `docs/ops/backups.md` as the date by which
    the data will have left backups.
 2. After any restore, re-run section 1 for every event purged after the restore point and section 2
    for every person deleted after it. Per-person deletions cannot be replayed from the database
@@ -222,6 +251,6 @@ What you must do here:
 
 | Date | Where | What | Result |
 |---|---|---|---|
-| 2026-10-08 | Local database `hub_t63`, seed event `priya-arjun` | Sections 1.2-1.6. The seed event has no photos, so two photos, two faces, one cluster and one saved match were inserted by SQL to stand in for an indexed gallery; the purge job was queued with the same `enqueue()` and audit row the admin action writes and run by the real handler through `run_once`. Section 2.2 SQL was run inside a transaction and rolled back against fixture rows. | Before: 4 FAIL. After: `RESULT: PASS`, `faceindex.purge` data `{"faces": 2, "clusters": 1, "photos": 2, "jobId": 3}`. Output is in the LEG-005 pull request. |
+| 2026-10-08 | Local database `hub_t63`, seed event `priya-arjun` | Sections 1.1-1.6, run twice (second run after the review changes, with face search on, then off, before the purge). The seed event has no photos, so two photos, two faces, one cluster and one saved match were inserted by SQL to stand in for an indexed gallery; face search was switched off by SQL (the settings form needs a browser session); the purge job was queued with the same `enqueue()` and audit row the admin action writes and run by the real handler through `run_once`. The section 2.2 SQL was run, unscoped and event-scoped, inside transactions that were rolled back, against fixture rows. | Before: 4 FAIL (faces, clusters, photos, purge stamp; plus a WARN for face search on). After: `RESULT: PASS`, `faceindex.purge` data `{"faces": 2, "clusters": 1, "photos": 2, "jobId": 57}`. Output is in the LEG-005 pull request. |
 
 Add a row each time the runbook is executed for real.

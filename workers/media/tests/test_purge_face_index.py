@@ -5,8 +5,9 @@ and scripts/compliance/verify-purge.mjs is how an operator proves it ran. These 
 handler on a throwaway event and then run the real script, so a change to either one that breaks the
 runbook fails here instead of in an audit.
 
-The script refuses the shared `hub` database by design, so the end-to-end tests skip when
-DATABASE_URL points at it; run them against a dedicated database (e.g. hub_t<N>).
+The script refuses the shared `hub` database by design, and these tests write fixture rows, so the
+whole module skips when DATABASE_URL points at `hub`; run it against a dedicated database (hub_t<N>
+locally, hub_ci in CI). When the CI environment variable is set, a skip is an error instead.
 """
 from __future__ import annotations
 
@@ -25,6 +26,17 @@ REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / "scripts" / "compliance" / "verify-purge.mjs"
 # The database the `conn` fixture uses (hub_worker.config loads .env), which is also the one the script is told to check.
 DB_NAME = urlparse(settings.database_url).path.lstrip("/")
+
+_UNUSABLE = (
+    f"DATABASE_URL points at the shared database '{DB_NAME}': these tests write fixtures and verify-purge refuses it; use a dedicated hub_t<N>"
+    if DB_NAME.lower() == "hub"
+    else "node is not on PATH, so verify-purge cannot run"
+    if shutil.which("node") is None
+    else ""
+)
+if _UNUSABLE and os.environ.get("CI"):
+    raise RuntimeError(f"test_purge_face_index must run in CI, not skip: {_UNUSABLE}")
+pytestmark = pytest.mark.skipif(bool(_UNUSABLE), reason=_UNUSABLE)
 
 A = [1.0] + [0.0] * 127
 B = [0.99, 0.1] + [0.0] * 126
@@ -91,10 +103,6 @@ def test_purge_is_repeatable_and_ignores_unknown_events(conn, tenant):
     assert purge_face_index.handle(conn, {"id": 2, "payload": {"eventId": "test-event-does-not-exist"}}) is None
 
 
-needs_cli = pytest.mark.skipif(
-    shutil.which("node") is None or not DB_NAME or DB_NAME.lower() == "hub",
-    reason=f"needs node and a dedicated database; DATABASE_URL points at '{DB_NAME}' (verify-purge refuses 'hub')",
-)
 
 
 def _verify(event_id: str) -> subprocess.CompletedProcess:
@@ -104,7 +112,6 @@ def _verify(event_id: str) -> subprocess.CompletedProcess:
     )
 
 
-@needs_cli
 def test_verify_purge_fails_before_and_passes_after_the_real_handler(conn, tenant):
     _seed_indexed_event(conn, tenant)
     before = _verify(tenant.event_id)

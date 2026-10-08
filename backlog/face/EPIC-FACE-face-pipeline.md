@@ -20,6 +20,7 @@ YuNet + SFace indexing, agglomerative clustering, selfie search, guardian search
 - WRK-020 INDEX_FACES must not rebuild a purged index; disabling face search purges it
 - WRK-021 Give every indexed event a face-index purge date, including unpublished ones
 - WEB-040 Record BiometricConsent before the selfie reaches the worker
+- WEB-041 Limit what a face search can be used for beyond the searcher's own face
 
 ## Definition of Done
 - [ ] Precision/recall of self-search on the benchmark set is recorded and the model decision is documented in an ADR.

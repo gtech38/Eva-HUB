@@ -109,6 +109,7 @@ docker compose -f infra/docker-compose.yml exec postgres psql -U hub -d hub -c '
 ```
 
 ## Gotchas
+- Scripts under `scripts/compliance/` take the database name as a required `--database` argument and refuse `hub` (the shared dev database); host and credentials come from `DATABASE_URL`. Never run migrations, seeds or DB-writing tests against `hub` from a worktree; use your own `hub_t<N>` (CI: `hub_ci`).
 - `prisma migrate dev` is interactive and refuses on drift; if the DB was touched by hand, `pnpm db:reset` (destroys local data).
 - Both the TS and Python sides write `Job`; keep `JobType` in `packages/db/src/index.ts` and `JOB_TYPES`/`default_handlers()` in `workers/media/hub_worker/jobs.py` in sync, plus the `Job.type` comment in the schema.
 - `@updatedAt` is set by the Prisma client only; the column has no DB default, so raw-SQL inserts (worker, migrations) must set `"updatedAt"` themselves (see `cluster_faces.py`).

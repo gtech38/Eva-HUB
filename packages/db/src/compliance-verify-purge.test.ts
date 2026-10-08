@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   FORBIDDEN_DATABASES,
+  connectWithPrisma,
   formatReport,
   main,
   parseArgs,
@@ -40,8 +41,19 @@ const dbUp = await prisma.$queryRaw`SELECT 1`.then(
 );
 const dbName = (process.env.DATABASE_URL ?? "").match(/\/([^/?]+)(\?|$)/)?.[1] ?? "";
 const dbHost = (process.env.DATABASE_URL ?? "unset").replace(/\/\/[^@/]*@/, "//<creds>@");
-const skipReason = `Postgres unreachable at DATABASE_URL (${dbHost}); start it with: pnpm infra:up`;
-if (!dbUp) console.log(`# packages/db: ${skipReason} -- skipping`);
+// The Postgres suites insert fixture rows. Never do that in the shared development database `hub`
+// (use a dedicated hub_t<N>; CI uses hub_ci). Locally an unusable database skips with the reason in
+// the suite name; under CI (the CI env var is set) it is an error, because a skipped end-to-end test
+// proves nothing.
+const onSharedDb = FORBIDDEN_DATABASES.includes(dbName.toLowerCase());
+const skipReason = !dbUp
+  ? `Postgres unreachable at DATABASE_URL (${dbHost}); start it with: pnpm infra:up`
+  : onSharedDb
+    ? `DATABASE_URL points at the shared database '${dbName}'; these suites write fixtures and the script refuses it. Use a dedicated hub_t<N> database`
+    : "";
+if (process.env.CI && skipReason) throw new Error(`verify-purge tests must run in CI, not skip: ${skipReason}`);
+if (skipReason) console.log(`# packages/db: ${skipReason} -- skipping`);
+const runDb = skipReason === "";
 
 const statusOf = (checks: Check[], id: string) => checks.find((c) => c.id === id)?.status;
 
@@ -49,15 +61,24 @@ type Fixture = { studioId: string; eventId: string; photoId: string };
 const created: Fixture[] = [];
 
 /** An event with one indexed photo, one face, one cluster, one saved match. Optionally purged. */
-async function fixture(label: string, opts: { purged?: boolean; reindexedAfterPurge?: boolean; pendingJob?: boolean } = {}) {
+type FixtureOpts = {
+  purged?: boolean;
+  reindexedAfterPurge?: boolean;
+  pendingJob?: "CLUSTER_FACES" | "INDEX_FACES" | "PROCESS_PHOTO";
+  /** Event.faceSearchEnabled; defaults to true like a new event. */
+  faceSearch?: boolean;
+};
+
+async function fixture(label: string, opts: FixtureOpts = {}) {
   const tag = `${run}-${label}`;
   const f: Fixture = { studioId: `${tag}-studio`, eventId: `${tag}-event`, photoId: `${tag}-photo` };
   created.push(f);
   await prisma.$executeRawUnsafe(`INSERT INTO "Studio"(id, slug, name) VALUES ($1, $1, 'leg005')`, f.studioId);
   await prisma.$executeRawUnsafe(
-    `INSERT INTO "Event"(id, "studioId", slug, title, theme, "updatedAt") VALUES ($1, $2, $1, '{"en":"leg005"}'::jsonb, 'LUXURY'::"ThemeKey", now())`,
+    `INSERT INTO "Event"(id, "studioId", slug, title, theme, "faceSearchEnabled", "updatedAt") VALUES ($1, $2, $1, '{"en":"leg005"}'::jsonb, 'LUXURY'::"ThemeKey", $3, now())`,
     f.eventId,
     f.studioId,
+    opts.faceSearch ?? true,
   );
   await prisma.$executeRawUnsafe(
     `INSERT INTO "Photo"(id, "studioId", "eventId", "originalKey", "originalBytes", checksum, filename, status, "facesIndexedAt")
@@ -114,19 +135,22 @@ async function fixture(label: string, opts: { purged?: boolean; reindexedAfterPu
     );
   }
   if (opts.pendingJob) {
+    // CLUSTER_FACES carries the event id; INDEX_FACES and PROCESS_PHOTO carry only a photo id.
+    const payload = opts.pendingJob === "CLUSTER_FACES" ? { eventId: f.eventId, run } : { photoId: f.photoId, run };
     await prisma.$executeRawUnsafe(
-      `INSERT INTO "Job"(type, payload, status, "runAt", "dedupeKey") VALUES ('CLUSTER_FACES', $1::jsonb, 'QUEUED'::"JobStatus", now() + interval '1 hour', $2)`,
-      JSON.stringify({ eventId: f.eventId, run }),
-      `cluster:${f.eventId}`,
+      `INSERT INTO "Job"(type, payload, status, "runAt", "dedupeKey") VALUES ($1, $2::jsonb, 'QUEUED'::"JobStatus", now() + interval '1 hour', $3)`,
+      opts.pendingJob,
+      JSON.stringify(payload),
+      `${run}:${tag}`,
     );
   }
   return f;
 }
 
 afterAll(async () => {
-  if (dbUp) {
+  if (runDb) {
     for (const f of created) {
-      await prisma.$executeRawUnsafe(`DELETE FROM "Job" WHERE "dedupeKey" = $1`, `cluster:${f.eventId}`);
+      await prisma.$executeRawUnsafe(`DELETE FROM "Job" WHERE "dedupeKey" LIKE $1`, `${run}:%`);
       await prisma.$executeRawUnsafe(`DELETE FROM "AuditLog" WHERE "eventId" = $1`, f.eventId);
       await prisma.$executeRawUnsafe(`DELETE FROM "PhotoMatch" WHERE "photoId" = $1`, f.photoId);
       await prisma.$executeRawUnsafe(`DELETE FROM "Face" WHERE "eventId" = $1`, f.eventId);
@@ -152,6 +176,10 @@ describe("verify-purge: only ever touches a database named on the command line",
     expect(FORBIDDEN_DATABASES).toContain("hub");
     for (const name of ["hub", "HUB", " hub", "hub "]) {
       expect(() => resolveDatabaseUrl("postgresql://hub:hub@localhost:5433/hub_t1", name)).toThrow(/hub/i);
+    }
+    // Other spellings of `hub` (quoted, URL-encoded, newline-terminated, fullwidth) are not plain identifiers.
+    for (const name of ['"hub"', "'hub'", "%68ub", "hub\n", "ｈｕｂ", "hub%00"]) {
+      expect(() => resolveDatabaseUrl("postgresql://hub:hub@localhost:5433/hub_t1", name)).toThrow();
     }
     for (const name of ["", "a/b", "hub_t1?sslmode=disable", "x y", "x;drop", "../hub"]) {
       expect(() => resolveDatabaseUrl("postgresql://hub:hub@localhost:5433/hub_t1", name)).toThrow();
@@ -203,8 +231,10 @@ describe("verify-purge: report", () => {
         { id: "faces", status: "PASS", label: "Face rows", detail: "0" },
         { id: "clusters", status: "FAIL", label: "FaceCluster rows", detail: "3 remain" },
         { id: "matches", status: "INFO", label: "PhotoMatch rows kept", detail: "2" },
+        { id: "face-search", status: "WARN", label: "Face search enabled", detail: "on" },
       ],
     });
+    expect(text).toMatch(/^WARN\s+Face search enabled/m);
     expect(text).toMatch(/^PASS\s+Face rows/m);
     expect(text).toMatch(/^FAIL\s+FaceCluster rows.*3 remain/m);
     expect(text).toMatch(/^INFO\s+PhotoMatch rows kept/m);
@@ -213,7 +243,7 @@ describe("verify-purge: report", () => {
   });
 });
 
-describe.skipIf(!dbUp)(dbUp ? "verify-purge against Postgres" : `verify-purge against Postgres [skipped: ${skipReason}]`, () => {
+describe.skipIf(!runDb)(runDb ? "verify-purge against Postgres" : `verify-purge against Postgres [skipped: ${skipReason}]`, () => {
   it("reports FAIL for an event whose face index has not been purged", async () => {
     const f = await fixture("unpurged");
     const result = await verifyPurge(query, f.eventId);
@@ -248,12 +278,53 @@ describe.skipIf(!dbUp)(dbUp ? "verify-purge against Postgres" : `verify-purge ag
     expect(statusOf(result.checks, "audit")).toBe("PASS");
   });
 
-  it("fails while a CLUSTER_FACES/INDEX_FACES job for the event is still pending", async () => {
-    const f = await fixture("pending", { purged: true, pendingJob: true });
+  it.each(["CLUSTER_FACES", "INDEX_FACES", "PROCESS_PHOTO"] as const)(
+    "fails while a queued %s job for the event would rebuild the index (matched by event id or by photo id)",
+    async (type) => {
+      const f = await fixture(`pending-${type}`, { purged: true, pendingJob: type });
+      const result = await verifyPurge(query, f.eventId);
+      expect(result.ok).toBe(false);
+      expect(statusOf(result.checks, "pending-jobs")).toBe("FAIL");
+    },
+  );
+
+  it("a queued PROCESS_PHOTO is harmless once face search is off (INDEX_FACES would skip)", async () => {
+    const f = await fixture("pp-off", { purged: true, pendingJob: "PROCESS_PHOTO", faceSearch: false });
     const result = await verifyPurge(query, f.eventId);
-    expect(result.ok).toBe(false);
-    expect(statusOf(result.checks, "pending-jobs")).toBe("FAIL");
+    expect(statusOf(result.checks, "pending-jobs")).toBe("PASS");
+    expect(result.ok).toBe(true);
   });
+
+  it("warns, without failing, while face search is still on: new uploads would be embedded again", async () => {
+    const on = await verifyPurge(query, (await fixture("fs-on", { purged: true })).eventId);
+    expect(statusOf(on.checks, "face-search")).toBe("WARN");
+    expect(on.ok).toBe(true);
+    const off = await verifyPurge(query, (await fixture("fs-off", { purged: true, faceSearch: false })).eventId);
+    expect(statusOf(off.checks, "face-search")).toBe("PASS");
+  });
+
+  it("the production connector is read-only: an INSERT inside its transaction is rejected", async () => {
+    const conn = await connectWithPrisma(resolveDatabaseUrl(process.env.DATABASE_URL!, dbName));
+    try {
+      await expect(
+        conn.transaction((q) => q(`INSERT INTO "Studio"(id, slug, name) VALUES ('${run}-ro', '${run}-ro', 'x')`)),
+      ).rejects.toThrow(/read-only/i);
+      const [row] = await query(`SELECT count(*)::int AS n FROM "Studio" WHERE id = $1`, [`${run}-ro`]);
+      expect(row.n).toBe(0);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  it("the production connector outlasts Prisma's 5 s default transaction timeout (the Job payload scan can be slow)", async () => {
+    const conn = await connectWithPrisma(resolveDatabaseUrl(process.env.DATABASE_URL!, dbName));
+    try {
+      const rows = await conn.transaction((q) => q(`SELECT pg_sleep(5.5)::text AS slept, 1 AS one`));
+      expect(rows[0].one).toBe(1);
+    } finally {
+      await conn.close();
+    }
+  }, 20_000);
 
   it("only ever issues SELECT statements", async () => {
     const f = await fixture("readonly", { purged: true });
@@ -268,10 +339,8 @@ describe.skipIf(!dbUp)(dbUp ? "verify-purge against Postgres" : `verify-purge ag
 });
 
 // The CLI proper: spawn the script against the database this suite is already using. Never against `hub`.
-describe.skipIf(!dbUp || FORBIDDEN_DATABASES.includes(dbName.toLowerCase()))(
-  dbUp && !FORBIDDEN_DATABASES.includes(dbName.toLowerCase())
-    ? "verify-purge CLI"
-    : `verify-purge CLI [skipped: DATABASE_URL points at '${dbName}', which the script refuses by design; use a hub_t<N> database]`,
+describe.skipIf(!runDb)(
+  runDb ? "verify-purge CLI" : `verify-purge CLI [skipped: ${skipReason}]`,
   () => {
     const cli = (eventId: string) =>
       spawnSync(process.execPath, [SCRIPT, eventId, "--database", dbName], { encoding: "utf8", env: process.env });

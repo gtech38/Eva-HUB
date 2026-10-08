@@ -63,7 +63,7 @@ Prefer testing the seam the ticket names (a `lib/` function, a handler, `can()`)
 ## Patterns in this codebase
 
 - **Policy tests** (`packages/shared/src/policy.test.ts`): build a `Principal` with a `base()` helper, assert `can()`; add one test per new matrix cell.
-- **Postgres-backed tests** (`workers/media/tests/test_jobs.py`): use the real local DB (`DATABASE_URL`), create rows with unique prefixes, clean up in a fixture. Tests must be rerunnable without `db:reset`.
+- **Postgres-backed tests** (`workers/media/tests/test_jobs.py`): use the real local DB (`DATABASE_URL`), create rows with unique prefixes, clean up in a fixture. Tests must be rerunnable without `db:reset`. Suites that write fixture rows or run `scripts/compliance/*` skip when `DATABASE_URL` points at the shared `hub` database (use a dedicated `hub_t<N>`; CI uses `hub_ci`), and when the `CI` environment variable is set a skip is an error, so CI cannot pass without running them.
 - **Fake adapters**: `email()`/`sms()`/storage are interfaces; in tests pass a recording fake rather than hitting Mailpit. For the worker, `tests/test_face_synthetic.py` shows model-backed tests that need no face images.
 - **No sleeps**: poll with a bounded loop or inject the clock.
 - **Mailpit as oracle** in integration tests: `GET http://localhost:8025/api/v1/messages` then `/api/v1/message/<ID>` to read the magic link.

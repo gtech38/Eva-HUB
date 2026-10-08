@@ -10,7 +10,7 @@ epic: EPIC-LEGAL
 Found while writing the LEG-005 compliance checklist (docs/compliance/biometrics.md, COPPA row P2). docs/01 §6 and the guardian consent text rely on "no child accounts": the child is a `Guest` row and the adult acts for them. Nothing enforces it. The admin guest form accepts an email or phone on an `isChild` guest, `linkGuestsForContact` links any matching unlinked guest including children, and the search route lets a viewer whose guest row is `isChild` run a `SEARCH_SELF` search (only profile enrolment checks `isChild`).
 
 ## Scope
-- `packages/shared/src/auth.ts` `linkGuestsForContact`: skip guests with `isChild = true`.
+- `packages/shared/src/auth.ts` `linkGuestsForContact`: skip guests with `isChild = true`. The invitation route (`apps/web/src/app/sites/[slug]/i/[token]/route.ts`) is a second place a guest gets linked; children are never invited, but give it the same guard.
 - `apps/web/src/app/api/face/search/route.ts`: a viewer whose own guest row has `isChild` gets `403 forbidden` for `subject = "me"` (they can still be searched for by a guardian).
 - Admin guest form and CSV import: reject (form) or warn (import) an email or phone on a child row, since children are never invited.
 - Report: SQL in the PR description listing existing child guests already linked to a user (`Guest.isChild AND userId IS NOT NULL`), so the studio can review them. Do not auto-unlink.
@@ -35,4 +35,4 @@ pnpm --filter @hub/admin test
 ```
 
 ## Notes for agents
-Linking happens only in `linkGuestsForContact` (auth-sessions-policy skill); do not add a second link site. Update P2 in `docs/compliance/biometrics.md` when done.
+The auth-sessions-policy skill says linking happens only through `resolveUserForVerifiedContact`/`linkGuestsForContact`; the invitation route also updates `Guest.userId` directly. Put the `isChild` rule in one shared helper both call rather than copying it. Update P2 in `docs/compliance/biometrics.md` when done.

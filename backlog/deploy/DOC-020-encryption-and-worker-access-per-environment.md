@@ -15,6 +15,7 @@ A production provider must be chosen (DOC-006) because the answers differ per pr
 ## Scope
 - A "Data protection" section in the deploy guide (DOC-006) with one table per environment: browser-to-Caddy TLS, Caddy-to-web/admin, web-to-worker, app-to-Postgres (`sslmode=require` or private network), app-to-bucket, Postgres at-rest encryption, bucket at-rest encryption, backup encryption (docs/ops/backups.md §6), with the exact setting or screenshot that proves each and the date it was checked.
 - Decide whether the worker needs a shared-secret header on `/embed-selfie` and `/health` in production, or whether network isolation is the accepted control; record the decision. If a header is chosen, file the implementation as its own ticket.
+- State that the production database is never named `hub` (the shared development database; scripts such as `scripts/compliance/verify-purge.mjs` refuse that name) and that CI uses `hub_ci`. Pin the same sentence in the production compose example (INF-018) and the deploy guide.
 - Update row C5 of docs/compliance/biometrics.md from the filled-in table.
 
 ## Out of scope

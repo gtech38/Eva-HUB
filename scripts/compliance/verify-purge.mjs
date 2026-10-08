@@ -67,7 +67,7 @@ export async function verifyPurge(query, eventId) {
   const checks = [];
   const add = (id, status, label, detail) => checks.push({ id, status, label, detail });
   const [event] = await query(
-    `SELECT id, "faceIndexPurgeAt", "faceIndexPurgedAt" FROM "Event" WHERE id = $1`,
+    `SELECT id, "faceSearchEnabled", "faceIndexPurgeAt", "faceIndexPurgedAt" FROM "Event" WHERE id = $1`,
     [eventId],
   );
   if (!event) {
@@ -85,18 +85,28 @@ export async function verifyPurge(query, eventId) {
   const indexed = await count(query, `SELECT count(*)::int AS n FROM "Photo" WHERE "eventId" = $1 AND "facesIndexedAt" IS NOT NULL`, eventId);
   add("photos-reset", indexed === 0 ? "PASS" : "FAIL", "Photos still marked as face-indexed", indexed === 0 ? "0" : `${indexed} photos have facesIndexedAt set`);
 
+  // PROCESS_PHOTO enqueues INDEX_FACES when it finishes, so it rebuilds the index too, unless face search is off.
+  const faceSearchOn = event.faceSearchEnabled !== false;
   const pending = await query(
     `SELECT id::text AS id, type, status::text AS status FROM "Job"
-      WHERE type IN ('INDEX_FACES', 'CLUSTER_FACES') AND status IN ('QUEUED', 'RUNNING')
+      WHERE (type IN ('INDEX_FACES', 'CLUSTER_FACES') OR (type = 'PROCESS_PHOTO' AND $2::boolean))
+        AND status IN ('QUEUED', 'RUNNING')
         AND (payload->>'eventId' = $1 OR payload->>'photoId' IN (SELECT id FROM "Photo" WHERE "eventId" = $1))
       ORDER BY id`,
-    [eventId],
+    [eventId, faceSearchOn],
   );
   add(
     "pending-jobs",
     pending.length === 0 ? "PASS" : "FAIL",
-    "Queued or running INDEX_FACES / CLUSTER_FACES jobs (would rebuild the index)",
+    "Queued or running INDEX_FACES / CLUSTER_FACES / PROCESS_PHOTO jobs (would rebuild the index)",
     pending.length === 0 ? "none" : pending.map((j) => `#${j.id} ${j.type} ${j.status}`).join(", "),
+  );
+
+  add(
+    "face-search",
+    faceSearchOn ? "WARN" : "PASS",
+    "Event.faceSearchEnabled",
+    faceSearchOn ? "on: photos uploaded or reprocessed from now on are embedded again; turn it off first (runbook 1.1)" : "off: INDEX_FACES skips this event",
   );
 
   const purgedAt = event.faceIndexPurgedAt;
@@ -136,17 +146,24 @@ export function formatReport({ ok, checks }) {
   return lines.join("\n");
 }
 
-/** Production connector: Prisma from packages/db, one read-only transaction per run. */
-async function connectWithPrisma(url) {
+/**
+ * Production connector: Prisma from packages/db, one read-only transaction per run.
+ * Prisma's default interactive-transaction timeout is 5 s; the Job payload scan on a large queue
+ * can exceed that, so allow two minutes.
+ */
+export async function connectWithPrisma(url) {
   const require = createRequire(new URL("../../packages/db/package.json", import.meta.url));
   const { PrismaClient } = require("@prisma/client");
   const prisma = new PrismaClient({ datasourceUrl: url, log: [] });
   return {
     transaction: (fn) =>
-      prisma.$transaction(async (tx) => {
-        await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY");
-        return fn((sql, params = []) => tx.$queryRawUnsafe(sql, ...params));
-      }),
+      prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+          return fn((sql, params = []) => tx.$queryRawUnsafe(sql, ...params));
+        },
+        { timeout: 120_000, maxWait: 10_000 },
+      ),
     close: () => prisma.$disconnect(),
   };
 }
