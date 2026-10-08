@@ -26,6 +26,15 @@ const only = args.filter((a) => !a.startsWith("--"));
 const OURS = /^(type|area|priority|size|status):|^agent-ready$/;
 const SYNC_STATUS = ["status:blocked", "status:ready"];
 const AGENT_OWNED = new Set(["status:in-progress", "status:review", "status:in-dev"]);
+// Labels a ticket file may carry. Mirrors the table in backlog/README.md; `--check` enforces it
+// offline so a typo is caught before push, not by the sync after merge.
+const TAXONOMY = new Set([
+  ...["feature", "bug", "chore", "tech-debt", "spike", "epic"].map((t) => `type:${t}`),
+  ...["web", "admin", "worker", "db", "shared", "infra", "docs", "legal"].map((a) => `area:${a}`),
+  ...["p0", "p1", "p2", "p3"].map((p) => `priority:${p}`),
+  ...["S", "M", "L"].map((s) => `size:${s}`),
+  "agent-ready",
+]);
 
 // ---------------------------------------------------------------- gh wrapper
 const RETRY_RE = /rate limit|secondary|abuse|\b429\b|\b403\b/i;
@@ -114,6 +123,11 @@ for (const t of tickets) {
   if (t.fm.epic && !byId[t.fm.epic]) errors.push(`${t.fm.id}: unknown epic ${t.fm.epic}`);
   for (const l of t.fm.labels ?? []) {
     if (l.startsWith("status:")) errors.push(`${t.fm.id}: ${l} is managed by the sync; remove it from labels`);
+    else if (!TAXONOMY.has(l)) errors.push(`${t.fm.id}: label "${l}" is not in the taxonomy (backlog/README.md)`);
+  }
+  for (const prefix of ["type:", "priority:", "size:"]) {
+    const n = (t.fm.labels ?? []).filter((l) => l.startsWith(prefix)).length;
+    if (n !== 1) errors.push(`${t.fm.id}: needs exactly one ${prefix}* label (has ${n})`);
   }
   if (t.fm.labels?.includes("agent-ready") && t.fm.labels.includes("size:L")) {
     errors.push(`${t.fm.id}: size:L tickets cannot be agent-ready (split first)`);

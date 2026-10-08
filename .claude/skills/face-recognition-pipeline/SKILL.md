@@ -20,9 +20,12 @@ description: Use when touching face detection, embedding, clustering, selfie sea
 | `hub_worker/handlers/cluster_faces.py` | average-linkage agglomerative clustering (cosine), reconciles `FaceCluster` ids/labels/`suppressed`, `_match_profiles()` -> `PhotoMatch(PROFILE_AUTO)`, audit `faceindex.cluster`, self-`Requeue` on late arrivals |
 | `hub_worker/handlers/purge_face_index.py` | deletes `Face` + `FaceCluster`, clears `Photo.facesIndexedAt`, sets `Event.faceIndexPurgedAt`, drops queued cluster job, audit `faceindex.purge`; keeps `PhotoMatch` |
 | `hub_worker/api.py` | `POST /embed-selfie` (multipart `file`, 20 MB cap, 10 req/s token bucket) -> `{ok, embedding[128], model, faces, quality}` or `{ok:false, reason: no_face|bad_image|too_large|rate_limited}`; `GET /health` |
-| `apps/web/src/app/api/face/search/route.ts` | consent + subject checks, forward selfie to worker, SQL match, visibility filter, write `PhotoMatch`/`BiometricConsent`/`AuditLog`, optional `FaceProfile` upsert |
-| `apps/web/src/app/sites/[slug]/gallery/me/page.tsx` + `components/gallery/FaceSearch.tsx` | consent UI, subject picker (me / children in household), results, previous matches |
-| `apps/web/src/lib/face.ts` | `CONSENT_TEXT_VERSION = "v1-2026-10"` (bump when copy changes), `FaceSearchReason` |
+| `apps/web/src/app/api/face/search/route.ts` | production guard + consent freshness check (409 `consent_stale` before the worker is called), subject checks, forward selfie to worker, SQL match, visibility filter, write `PhotoMatch`/`BiometricConsent`/`AuditLog`, optional `FaceProfile` upsert (off: `FACE_PROFILE_ENROLMENT`) |
+| `apps/web/src/app/sites/[slug]/gallery/me/page.tsx` + `components/gallery/FaceSearch.tsx` | consent UI (label/summary/full text from the consent files), subject picker (me / children in household), results, previous matches; posts `consentVersion`/`consentLocale` |
+| `apps/web/src/lib/face.ts` | `FaceSearchReason` |
+| `legal/consent/v<N>/{search_self,search_guardian,face_profile}.{en,te,hi}.md` + `packages/shared/src/consent.ts` | versioned consent texts (front matter: `version`, `effective`, `kind`, `locale`, `status`, `reviewed_by`, `translation`, `label`, `summary`), bundled via `?raw` (server-only by convention). `CONSENT_VERSIONS` (every published dir), `CURRENT_CONSENT_VERSION`, `consentText(kind, locale, version?)`, `consentRecordVersion(kind)` -> `SEARCH_SELF:v1-2026-10` stored on `BiometricConsent`, `parseConsentRecordVersion`, `unreviewedConsentDocs` |
+| `apps/web/src/lib/faceConsent.ts` | `checkConsentSubmission` (kind/version/locale must match the current text), `mayEnrolFaceProfile`, `FACE_PROFILE_ENROLMENT = false` until WEB-006 revoke, `faceSearchAllowed(NODE_ENV)` production guard (unreviewed text -> disabled) |
+| `apps/web/src/lib/consentTexts.ts` (server) / `consentView.ts` (client-safe types + `consentFor`), `components/gallery/ConsentText.tsx`; admin `/platform/legal` | full text behind "What you're agreeing to" under each consent checkbox; read-only admin listing of every version |
 | `apps/admin/.../events/[eventId]/settings/page.tsx` + `actions.ts` | `faceSearchEnabled`, retention override (30-730), "Purge face index now" (`PURGE_FACE_INDEX`), gallery `reindexFaces` (`CLUSTER_FACES`) |
 | `scripts/download_models.py`, `scripts/bench_faces.py` | model fetch (LFS pointer -> media.githubusercontent, sha256 pinned), accuracy/throughput bench |
 | `tests/test_face_synthetic.py` | geometry/quality/embedding unit tests; model-backed tests skip without ONNX |
@@ -41,7 +44,7 @@ Both from opencv_zoo. `*.onnx` is git-ignored; `make models` fetches. Switching 
 - **quality** = `score * min(1, width_px/80) * clip(laplacian_var/150, 0.2, 1)`; faces below `FACE_MIN_QUALITY` are stored but not clustered.
 - **Match SQL** (web route and `_match_profiles` are the same shape): `SELECT f."photoId", MAX(1 - (f.embedding <=> $vec)) AS score FROM "Face" f JOIN "Photo" p ... LEFT JOIN "FaceCluster" c ... WHERE f."eventId" = $event AND p.status='READY' AND NOT p.hidden AND COALESCE(c.suppressed,false)=false GROUP BY f."photoId" HAVING MAX(...) >= $thr ORDER BY score DESC LIMIT 500`. Exact scan, no ANN index (<= ~15k faces per event).
 - **Then album visibility** via `visiblePhotoWhere(eventId, viewer, { id: { in } })` -- face results never bypass gallery rules.
-- **Writes per search (one transaction):** `PhotoMatch` upsert (`SELFIE` keyed `userId_photoId`, or `GUARDIAN` keyed `subjectGuestId_photoId`), `BiometricConsent` (`SEARCH_SELF` | `SEARCH_GUARDIAN`, `consentTextVersion`, salted `ipHash`), `AuditLog face.search` with candidate/visible counts. With `remember=on` and an adult self-search: `BiometricConsent FACE_PROFILE` (eventId null) + raw `INSERT ... ON CONFLICT ("userId") DO UPDATE` into `FaceProfile` (`purgeAfter = now + 3 years`) + audit `consent.grant`.
+- **Writes per search (one transaction):** `PhotoMatch` upsert (`SELFIE` keyed `userId_photoId`, or `GUARDIAN` keyed `subjectGuestId_photoId`), `BiometricConsent` (`SEARCH_SELF` | `SEARCH_GUARDIAN`, `consentTextVersion = consentRecordVersion(kind)` e.g. `SEARCH_SELF:v1-2026-10`, salted `ipHash`), `AuditLog face.search` with kind, `consentVersion`, `locale`, candidate/visible counts. Before any of that (and before the worker call) the client-posted `consentVersion` + `consentLocale` must equal the current `KIND:version` and a shipped locale, else 409 `consent_stale` (client shows the message and `router.refresh()`es). Only when `FACE_PROFILE_ENROLMENT` is on (currently off), with `remember=on`, a matching `profileConsentVersion` and an adult guest self-search: `BiometricConsent FACE_PROFILE` (eventId null) + raw `INSERT ... ON CONFLICT ("userId") DO UPDATE` into `FaceProfile` (`purgeAfter = now + 3 years`) + audit `consent.grant`.
 - **Guardian search:** subject must be an `isChild` guest in the viewer's household, not `faceSearchOptOut`; no profile is ever created for a child. Results attach to the child's guest row and show under "Family photos".
 - **Per-event switch:** `Event.faceSearchEnabled` gates the route (400 `disabled`), the "Find me" link, and `INDEX_FACES` (skips). `Guest.faceSearchOptOut` returns `opted_out`. `FaceCluster.suppressed` ("remove me") excludes a cluster from matching and survives re-clustering by majority vote.
 - **Retention:** `Event.faceIndexPurgeAt = galleryPublishedAt + (event override ?? studio default) days`, recomputed on settings changes (admin actions audit `event.retention.change` / `studio.retention.change`). Admins can purge now. Nothing yet schedules the purge automatically at `faceIndexPurgeAt` (docs/04: Phase 2) -- a `PURGE_FACE_INDEX` job with `runAt` is the intended mechanism.
@@ -51,7 +54,7 @@ Both from opencv_zoo. `*.onnx` is git-ignored; `make models` fetches. Switching 
 |---|---|
 | `Face.embedding` (+ bbox/quality rows), `FaceCluster` | `PhotoMatch` (photo ids + scores) |
 | `FaceProfile.embedding` | `BiometricConsent` (who/when/what version) |
-| Selfie bytes: in memory only in web (forwarded `File`) and worker (`del data`), never persisted, never logged | `AuditLog` counts |
+| Selfie bytes: processed temporarily in web (forwarded `File`) and worker (`del data`), never saved by our code, never logged. Not "memory only": Starlette spools multipart uploads over 1 MB to a temp file, so consent copy must not claim memory-only | `AuditLog` counts |
 
 ## Common tasks
 
@@ -66,7 +69,7 @@ Both from opencv_zoo. `*.onnx` is git-ignored; `make models` fetches. Switching 
 2. Worker returns `{ok:false, reason}`; web route maps it to a status (`fail(reason, 422)`); add the key to `FaceSearchReason` and to `faceStrings().errors` in `gallery/me/page.tsx` in en/te/hi.
 
 ### Change consent copy
-Edit `S.consentLabel/consentDetail/rememberDetail` in `gallery/me/page.tsx` and bump `CONSENT_TEXT_VERSION`. Legal review is a design input (docs/01 §6).
+Never edit a published version. Copy the current `legal/consent/v<N>/` to `v<N+1>/`, edit there (body, `label` and `summary` are all versioned), set a new `version:` in all nine files, add the nine `?raw` imports + a `BUNDLED` entry in `packages/shared/src/consent.ts` and move `CURRENT_DIR`. Keep old directories bundled forever (rules in `legal/consent/README.md`). Copy must describe only what exists today (no automation or self-service that is not shipped). Production stays disabled until LEG-006 fills `reviewed_by`. Legal review is a design input (docs/01 §6, LEG-006).
 
 ### Re-index an event after a model change
 Set new `MODEL_VERSION`, run `make models`, enqueue `INDEX_FACES` for each READY photo (`dedupeKey faces:{photoId}`), then `CLUSTER_FACES`; mark profiles stale: `UPDATE "FaceProfile" SET stale = true;`.
@@ -75,7 +78,7 @@ Set new `MODEL_VERSION`, run `make models`, enqueue `INDEX_FACES` for each READY
 - `web` posts to `WORKER_INTERNAL_URL` (`http://localhost:8010`) with a 20 s timeout; worker down -> 503 `unavailable`, UI shows the "temporarily unavailable" string.
 - Phone selfies are EXIF-rotated; the worker decodes with Pillow (`open_oriented`) before OpenCV, otherwise YuNet finds nothing.
 - `/embed-selfie` picks the largest face; multiple faces are allowed (`faces` is returned) -- the `multiple_faces` reason exists in web strings but the worker never emits it.
-- `PhotoMatch` has two unique keys; the CHECK that exactly one subject is set is documented but not in the migration (see `prisma-postgres`).
+- `PhotoMatch` has two unique keys and the CHECK `PhotoMatch_one_subject` (exactly one of `userId`/`subjectGuestId`; DB-001). Every insert must set exactly one subject. Deleting a `User` cascades to their matches (`onDelete: Cascade`; `SET NULL` would violate the CHECK). Guardian matches (`subjectGuestId`) have no FK and are removed explicitly. See `prisma-postgres`.
 - `CLUSTER_FACES` dedupe is a no-op while RUNNING; the handler re-queues itself when photos were indexed during the run. Do not "fix" by removing the dedupe key.
 - Clusters are per event; there is deliberately no cross-event "who is this" lookup, and profiles only match events where the user is a non-deleted guest with unrevoked consent.
 - Hidden albums (`HIDDEN`) are excluded from profile auto-match in SQL but the selfie route relies on the later `visiblePhotoWhere` filter; both end at the same visibility.

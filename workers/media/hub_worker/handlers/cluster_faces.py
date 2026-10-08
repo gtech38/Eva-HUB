@@ -7,7 +7,9 @@
    most of its faces came from (keeps host labels and `suppressed`, i.e. the
    "remove me from face search" state, stable across re-runs); otherwise a new
    row is created, inheriting `suppressed` when the majority of its members
-   came from suppressed clusters. Orphan clusters are deleted.
+   came from suppressed clusters. Orphan clusters are deleted. New rows get
+   createdAt/updatedAt = now(); a re-used cluster whose member set changed gets
+   updatedAt = now() (Prisma's @updatedAt does not apply to raw SQL).
 4. For every FaceProfile whose user is a (non-deleted) Guest of this event and
    whose consent is not revoked, upsert PhotoMatch(PROFILE_AUTO) rows.
 5. AuditLog `faceindex.cluster` with counts.
@@ -95,6 +97,20 @@ def _reconcile_clusters(
     return label_to_id, new_rows
 
 
+def _changed_clusters(
+    faces: list[dict], assigned: Mapping[str, str], old_clusters: Mapping[str, dict], new_ids: set[str]
+) -> list[str]:
+    """Re-used cluster ids whose member set differs from before this run (sorted)."""
+    before: dict[str, set[str]] = defaultdict(set)
+    for f in faces:
+        if f["clusterId"] in old_clusters:
+            before[f["clusterId"]].add(f["id"])
+    after: dict[str, set[str]] = defaultdict(set)
+    for face_id, cid in assigned.items():
+        after[cid].add(face_id)
+    return sorted(cid for cid, members in after.items() if cid not in new_ids and members != before[cid])
+
+
 def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> Requeue | None:
     event_id = job["payload"]["eventId"]
     locked_at = job.get("lockedAt")
@@ -134,16 +150,21 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> Requeue | None:
             assigned[f["id"]] = label_to_id[lab]
     # every face gets written: clustered -> its cluster id, low-quality/unclustered -> NULL
     face_assignments: list[tuple[str | None, str]] = [(assigned.get(f["id"]), f["id"]) for f in faces]
+    changed = _changed_clusters(faces, assigned, old_clusters, {cid for cid, _, _ in new_rows})
 
     with conn.transaction():
         with conn.cursor() as cur:
             if new_rows:
+                # Prisma's @updatedAt is client-side only: raw inserts must stamp both columns.
                 cur.executemany(
-                    'INSERT INTO "FaceCluster"(id, "eventId", suppressed) VALUES (%s, %s, %s)',
+                    '''INSERT INTO "FaceCluster"(id, "eventId", suppressed, "createdAt", "updatedAt")
+                       VALUES (%s, %s, %s, now(), now())''',
                     [(cid, event_id, sup) for cid, _, sup in new_rows],
                 )
             if face_assignments:
                 cur.executemany('UPDATE "Face" SET "clusterId" = %s WHERE id = %s', face_assignments)
+            if changed:
+                cur.execute('UPDATE "FaceCluster" SET "updatedAt" = now() WHERE id = ANY(%s)', (changed,))
             cur.execute(
                 '''DELETE FROM "FaceCluster" c
                     WHERE c."eventId" = %s

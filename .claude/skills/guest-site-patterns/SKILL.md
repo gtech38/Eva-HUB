@@ -14,7 +14,9 @@ description: Use when building or changing the guest-facing event sites in apps/
 
 | Path | What |
 |---|---|
-| `src/middleware.ts` | Host -> `/sites/{slug}`; `?lang=` cookie; forwards `x-hub-slug`, `x-hub-path` |
+| `src/middleware.ts` | Host -> `/sites/{slug}`; `?lang=` cookie; forwards `x-hub-slug`, `x-hub-path` and the trusted `x-hub-host` (always overwritten from `Host`) |
+| `src/lib/siteMetadata.ts` | `siteMetadata({ title, previewTitle, origin })`: the only metadata an event site has (sign-in title, fixed description, noindex robots, `og:image` = `/og.png`, twitter `summary`); inner pages define none |
+| `src/app/sites/[slug]/og.png/route.tsx` + `lib/{ogCard,ogFonts,ogRender,ogResponse}` | link-preview image: monogram + default-locale title on theme colours (see "The one public response") |
 | `src/lib/site.ts` | `resolveEvent(hostname)` (Domain table, then slug), `getPrincipal()`, `getSite()` -> `SiteContext { event(+pages), studio, brand, monogram, locale, principal, viewer }`, `requireViewer()`, `page(site, type)`, `siteOrigin()` |
 | `src/app/sites/[slug]/layout.tsx` | theme wrapper, nav (`buildNav`), **sign-in gate** when `viewer` is null, "not live yet" screen for non-staff on DRAFT events |
 | `src/app/sites/[slug]/page.tsx` | Home: `theme.Hero`, upcoming sub-events for the household, RSVP/Gallery cards |
@@ -37,7 +39,8 @@ description: Use when building or changing the guest-facing event sites in apps/
 - **Strings:** resolved server-side (`galleryStrings(locale)`, `ui()`, `t()`), passed as props. Dates via `lib/format.ts` with `event.timezone`.
 - **Content pages** read `parsePage(TYPE, page(site, TYPE)?.content)`; nav shows HOME/SCHEDULE/RSVP/GALLERY always, other types only when an enabled `EventPage` exists.
 - **Server actions over routes** except downloads/face search. Actions return small objects (`{ ok, favorited }`) or `redirect()`.
-- **Every response is `private, no-store` + `noindex`** (next.config headers, root metadata, robots route). Never add caching.
+- **Every response is `private, no-store` + `noindex`** (next.config headers, root metadata, robots route). Never add caching -- with exactly one exception:
+- **The one public response: `/og.png`.** It is public (`public, max-age=86400`, ETag/304), visitor-independent and network-free, and it must stay all three: resolve the event only from the trusted `x-hub-host` (never `X-Forwarded-Host`, `getSite()`, the session or cookies), build the card only from `ogCardForEvent(event)` (title in `event.defaultLocale`, `themeOverrides.monogram`, theme colours), render with the committed fonts in `apps/web/assets/og-fonts` through `fitToFonts` + satori with `loadAdditionalAsset: async () => []` (no Google Fonts, no emoji CDN), buffer the PNG before responding (errors are `500 private, no-store`), memoise by `(event.id, event.updatedAt)`. It shows only what the signed-out sign-in screen shows, for every event status. Nothing else on an event host may be public.
 - **Audit guest-side writes**: `rsvp.respond`, `face.search`, `photo.download`, `auth.*`.
 
 ## Common tasks
@@ -52,7 +55,7 @@ description: Use when building or changing the guest-facing event sites in apps/
 7. Verify: `curl -s -b "hub_session=$C" -H 'Host: priya-arjun.localhost' http://localhost:3000/registry | grep -c 'Registry'`, then the three locales.
 
 ### Add a gallery capability (e.g. zip download link)
-Gate with `viewer.can("gallery.view")` and an entitlement check (`GALLERY_ZIP` or `GALLERY_FULLRES`); create `ZipExport` and `enqueue("BUILD_ZIP", { zipExportId }, { dedupeKey: \`zip:${eventId}:${scopeHash}\` })`; the worker already builds parts (`build_zip.py`). Serve part URLs via `storage.presignDownload`. Test the `scopeHash` helper first.
+Gate with `viewer.can("gallery.view")` and an entitlement check (`GALLERY_ZIP` or `GALLERY_FULLRES`); create `ZipExport` with `studioId` and `eventId` (`studioId` is required; the worker derives the storage key and scopes the photo query from the row alone) and `enqueue("BUILD_ZIP", { zipExportId }, { dedupeKey: \`zip:${eventId}:${scopeHash}\` })`; the worker already builds parts (`build_zip.py`). Serve part URLs via `storage.presignDownload`. Test the `scopeHash` helper first.
 
 ### Change RSVP behaviour
 Edit `rsvp/actions.ts` `submitRsvp` and the form names (`rsvp.{guestId}.{subEventId}`, `meal.{guestId}.{subEventId}`, `name.{guestId}.first|last`). Keep: only invited sub-events are writable, meal only when `servesMeal` and the option belongs to that sub-event, audit with the full summary. Test the parsing step as a pure function first (extract `parseRsvpForm(formData, household)`).

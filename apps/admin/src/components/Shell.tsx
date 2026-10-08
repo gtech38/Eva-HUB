@@ -52,7 +52,7 @@ export function Shell({ principal, studios, activeStudioId, sections, children }
             <div className="mb-3">
               <div className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-neutral-400">Platform</div>
               <ul className="space-y-0.5">
-                {[["/platform", "Studios"], ["/platform/jobs", "Jobs"], ["/platform/audit", "Audit log"], ["/platform/users", "Users"]].map(([href, label]) => (
+                {[["/platform", "Studios"], ["/platform/jobs", "Jobs"], ["/platform/audit", "Audit log"], ["/platform/users", "Users"], ["/platform/legal", "Legal"]].map(([href, label]) => (
                   <li key={href}><Link href={href} className="block rounded px-2 py-1 text-[13px] text-neutral-700 no-underline hover:bg-neutral-100">{label}</Link></li>
                 ))}
               </ul>

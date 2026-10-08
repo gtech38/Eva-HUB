@@ -7,6 +7,7 @@ import { PageHeader, EmptyState } from "@/components/PageHeader";
 import { PhotoGrid } from "@/components/gallery/PhotoGrid";
 import { galleryStrings } from "@/lib/gallery-strings";
 import { listVisibleAlbums, visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
+import { faceSearchAllowed } from "@/lib/faceConsent";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export default async function GalleryPage() {
   return (
     <div>
       <PageHeader title={S.gallery} intro={intro}>
-        {event.faceSearchEnabled && viewer.can("face.search") && (
+        {event.faceSearchEnabled && faceSearchAllowed(process.env.NODE_ENV) && viewer.can("face.search") && (
           <p className="mt-5">
             <Link href="/gallery/me" className="btn">
               {S.findMe}
