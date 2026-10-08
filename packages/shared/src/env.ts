@@ -1,10 +1,30 @@
 import { z } from "zod";
 
+/** `KEY=` in a dotenv file is "unset", not an empty value. */
+const unsetIfEmpty = (v: unknown) => (v === "" ? undefined : v);
+
+const TRUE_FLAGS = ["1", "true", "yes", "on"];
+const FALSE_FLAGS = ["0", "false", "no", "off"];
+
+/**
+ * Boolean flag, same vocabulary as the worker's `_bool` (config.py): 1/true/yes/on and 0/false/no/off,
+ * case-insensitive; unset or empty falls through to the default; anything else is left for z.boolean() to reject.
+ * (`z.coerce.boolean()` would turn "false" into true.)
+ */
+function parseFlag(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const s = v.trim().toLowerCase();
+  if (s === "") return undefined;
+  if (TRUE_FLAGS.includes(s)) return true;
+  if (FALSE_FLAGS.includes(s)) return false;
+  return v;
+}
+
 // One key per line: scripts/env-docs.mjs reads this object (key, `.default(...)`, `.optional()`) to
 // generate docs/deploy/env.md and .env.example. Add the key's metadata in scripts/env-meta.mjs.
-const base = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  APP_ENV: z.enum(["development", "test", "production"]).optional(),
+const schema = z.object({
+  NODE_ENV: z.preprocess(unsetIfEmpty, z.enum(["development", "test", "production"]).default("development")),
+  APP_ENV: z.preprocess(unsetIfEmpty, z.enum(["development", "test", "production"]).optional()),
   ROOT_DOMAIN: z.string().default("localhost"),
   WEB_PORT: z.coerce.number().default(3000),
   ADMIN_PORT: z.coerce.number().default(3001),
@@ -19,7 +39,7 @@ const base = z.object({
   S3_BUCKET: z.string(),
   S3_ACCESS_KEY: z.string(),
   S3_SECRET_KEY: z.string(),
-  S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
+  S3_FORCE_PATH_STYLE: z.preprocess(parseFlag, z.boolean().default(true)),
 
   EMAIL_PROVIDER: z.enum(["smtp", "console"]).default("console"),
   SMTP_HOST: z.string().default("localhost"),
@@ -36,59 +56,104 @@ const base = z.object({
   FACE_MATCH_THRESHOLD: z.coerce.number().default(0.363),
 });
 
+export type Env = z.infer<typeof schema>;
+
 /** APP_ENV wins over NODE_ENV, so `next start` can be smoke-tested locally with APP_ENV=development. */
-export function isProduction(e: { NODE_ENV?: string; APP_ENV?: string }): boolean {
+export function isProduction(e: Pick<Env, "NODE_ENV" | "APP_ENV">): boolean {
   return (e.APP_ENV ?? e.NODE_ENV) === "production";
 }
 
 const MIN_SECRET_BYTES = 32;
 const PLACEHOLDER = /change-?me|dev-only|ci-only|placeholder/i;
 
-/** Random bytes a secret carries: hex and base64(url) are decoded; anything else counts its UTF-8 bytes. */
-export function secretBytes(secret: string): number {
+// The local S3 credentials in .env.example and in the worker's DEFAULTS (config.py): never valid in production.
+const DEV_S3_ACCESS_KEY = "minio";
+const DEV_S3_SECRET_KEY = "minio12345";
+
+/**
+ * Bytes a hex or base64(url) secret decodes to, or null when it is neither (a passphrase, say).
+ * This measures length only: it cannot tell a random value from `aaaa...`.
+ */
+export function secretBytes(secret: string): number | null {
   if (/^[0-9a-f]+$/i.test(secret) && secret.length % 2 === 0) return secret.length / 2;
   if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(secret)) return Math.floor((secret.replace(/=+$/, "").length * 6) / 8);
-  return new TextEncoder().encode(secret).length;
+  return null;
 }
 
-type ProductionIssue = { key: keyof z.infer<typeof base>; message: string };
+function isLoopback(value: string): boolean {
+  let host = value;
+  try {
+    host = new URL(value.includes("://") ? value : `http://${value}`).hostname;
+  } catch {
+    // not a URL: compare the raw text
+  }
+  return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]" || host === "0.0.0.0";
+}
 
-/** Settings that have safe local defaults but must be set deliberately in production. Messages never include values. */
-export function productionIssues(e: z.infer<typeof base>): ProductionIssue[] {
+type ProductionIssue = { key: keyof Env; message: string };
+
+/**
+ * Settings that have safe local defaults but are wrong in production. `raw` is the unparsed environment, used
+ * to tell "unset" from "explicitly set to the default". Messages name the variable and the rule, never a value.
+ */
+export function productionIssues(e: Env, raw: Record<string, string | undefined> = process.env): ProductionIssue[] {
   const issues: ProductionIssue[] = [];
-  if (PLACEHOLDER.test(e.AUTH_SECRET) || secretBytes(e.AUTH_SECRET) < MIN_SECRET_BYTES) {
-    issues.push({
-      key: "AUTH_SECRET",
-      message: `must be at least ${MIN_SECRET_BYTES} random bytes in production, not a dev placeholder (generate with \`openssl rand -base64 32\`)`,
-    });
+  const add = (key: keyof Env, message: string) => issues.push({ key, message });
+
+  const bytes = secretBytes(e.AUTH_SECRET);
+  if (PLACEHOLDER.test(e.AUTH_SECRET)) {
+    add("AUTH_SECRET", "looks like a dev placeholder; generate one with `openssl rand -base64 32` (this check is on format and length, not entropy)");
+  } else if (bytes === null) {
+    add("AUTH_SECRET", "must be hex or base64, e.g. from `openssl rand -base64 32`; passphrases are rejected (this check is on format and length, not entropy)");
+  } else if (bytes < MIN_SECRET_BYTES) {
+    add("AUTH_SECRET", `must decode to at least ${MIN_SECRET_BYTES} bytes (hex or base64); this is a length check, not an entropy test`);
   }
-  if (!e.S3_PUBLIC_ENDPOINT) {
-    issues.push({ key: "S3_PUBLIC_ENDPOINT", message: "is required in production (browser-facing bucket URL)" });
-  }
-  if (e.EMAIL_PROVIDER === "console") {
-    issues.push({ key: "EMAIL_PROVIDER", message: "must not be 'console' in production (guests would never get their links)" });
-  }
+
+  if (isLoopback(e.ROOT_DOMAIN)) add("ROOT_DOMAIN", "must be the public domain in production, not localhost");
+  if (isLoopback(e.WEB_ORIGIN)) add("WEB_ORIGIN", "must be the public guest-site origin in production, not localhost");
+  if (isLoopback(e.ADMIN_ORIGIN)) add("ADMIN_ORIGIN", "must be the public admin origin in production, not localhost");
+  if (!raw.WORKER_INTERNAL_URL?.trim()) add("WORKER_INTERNAL_URL", "must be set explicitly in production (the worker's private address)");
+
+  if (!e.S3_PUBLIC_ENDPOINT) add("S3_PUBLIC_ENDPOINT", "is required in production (browser-facing bucket URL)");
+  if (e.S3_ACCESS_KEY === DEV_S3_ACCESS_KEY) add("S3_ACCESS_KEY", "is the local development key; use the bucket provider's credentials");
+  if (e.S3_SECRET_KEY === DEV_S3_SECRET_KEY) add("S3_SECRET_KEY", "is the local development key; use the bucket provider's credentials");
+
+  if (e.EMAIL_PROVIDER === "console") add("EMAIL_PROVIDER", "must not be 'console' in production (guests would never get their links)");
   return issues;
 }
 
-const schema = base.superRefine((e, ctx) => {
-  if (!isProduction(e)) return;
-  for (const { key, message } of productionIssues(e)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message });
-  }
-});
-
-export type Env = z.infer<typeof schema>;
+/** `next build` evaluates route modules with NODE_ENV=production and the developer's .env; runtime use is still validated. */
+function isNextBuild(): boolean {
+  return process.env.NEXT_PHASE === "phase-production-build";
+}
 
 let cached: Env | undefined;
+let warnedAppEnv = false;
 
 /** Parsed, validated process.env. Throws at first use with a readable list of what's missing. */
 export function env(): Env {
   if (cached) return cached;
   const parsed = schema.safeParse(process.env);
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n");
-    throw new Error(`Invalid environment:\n${issues}\n(copy .env.example to .env)`);
+  const problems: { key: string; message: string }[] = parsed.success
+    ? []
+    : parsed.error.issues.map((i) => ({ key: i.path.join("."), message: i.message }));
+
+  if (parsed.success && !isNextBuild()) {
+    const e = parsed.data;
+    if (e.NODE_ENV === "production" && e.APP_ENV !== "production" && !warnedAppEnv) {
+      warnedAppEnv = true;
+      console.warn(
+        e.APP_ENV
+          ? "env: NODE_ENV=production but APP_ENV is not 'production', so the production environment checks are skipped"
+          : "env: NODE_ENV=production without APP_ENV=production; set APP_ENV=production on every service (see docs/deploy/env.md)",
+      );
+    }
+    if (isProduction(e)) problems.push(...productionIssues(e));
+  }
+
+  if (!parsed.success || problems.length > 0) {
+    const issues = problems.map((p) => `  ${p.key}: ${p.message}`).join("\n");
+    throw new Error(`Invalid environment:\n${issues}\n(local setup: copy .env.example to .env; production: docs/deploy/env.md)`);
   }
   cached = parsed.data;
   return cached;
