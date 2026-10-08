@@ -12,6 +12,7 @@ milestone: Phase 2 — Commerce, messaging, polish
 - SHR-005 Internal send endpoint, template renderer and `SEND_MESSAGE` worker handler
 - SHR-013 Message templates per locale with UCS-2 awareness, preview and test-send
 - SHR-011 SMS provider adapter (Twilio/Telnyx) behind `SmsSender`
+- SHR-017 Production env check for `SMS_PROVIDER` once real SMS providers exist
 - INF-011 A2P 10DLC brand and campaign registration (external)
 - WEB-026 STOP/HELP inbound SMS webhook → `smsOptOut`
 - SHR-012 Email provider adapter with delivery/bounce webhooks and suppression list
