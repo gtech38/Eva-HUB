@@ -254,7 +254,7 @@ Details are in [02-users-and-roles.md](02-users-and-roles.md).
 - **Logs:** structured JSON logs with `requestId`, `studioId` and `eventId`, and OpenTelemetry traces. Any backend works: Grafana, Honeycomb or Axiom.
 - **Errors:** Sentry, or self-hosted GlitchTip.
 - **Audit trail:** an `AuditLog` row for permission changes, visibility changes, exports, consent events and data deletions.
-- **Backups:** daily Postgres backups with point-in-time recovery from the managed provider. Bucket versioning is on for originals.
+- **Backups:** daily Postgres backups with point-in-time recovery from the managed provider. Bucket versioning is on for originals. Targets (RPO 15 min, RTO 2 h), lifecycle rules, the weekly restore drill and the biometric-retention tail of backups: [docs/ops/backups.md](ops/backups.md); restore steps: [docs/ops/runbook-restore.md](ops/runbook-restore.md).
 - **Health:** a jobs dashboard in the studio admin showing queue depth, failures and retries.
 
 ## 11. Repository layout (proposed)
