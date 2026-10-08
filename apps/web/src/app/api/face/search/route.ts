@@ -6,6 +6,9 @@ import { requireViewer } from "@/lib/site";
 import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
 import { consentRecordVersion } from "@hub/shared/consent";
 import { checkConsentSubmission, faceSearchAllowed, mayEnrolFaceProfile } from "@/lib/faceConsent";
+import { rateLimits } from "@hub/shared/ratePolicies";
+import type { Slot } from "@hub/shared/ratelimit";
+import type { FaceSearchReason } from "@/lib/face";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +17,12 @@ const EMBEDDING_DIM = 128; // matches vector(128) in the schema
 type WorkerOk = { ok: true; embedding: number[]; model: string };
 type WorkerErr = { ok: false; reason: string };
 
-const fail = (reason: string, status: number) => NextResponse.json({ ok: false, reason }, { status });
+const fail = (reason: FaceSearchReason, status: number) => NextResponse.json({ ok: false, reason }, { status });
+const rateLimited = (retryAfterSec: number) => {
+  const res = fail("rate_limited", 429);
+  res.headers.set("Retry-After", String(retryAfterSec));
+  return res;
+};
 
 /**
  * Selfie → embedding (worker, synchronous) → pgvector match → PhotoMatch rows.
@@ -44,7 +52,6 @@ export async function POST(req: NextRequest) {
     profileConsentVersion: field("profileConsentVersion"),
   });
   if (!consent.ok) return fail(consent.reason, 409);
-  const { kind, locale, recordVersion } = consent;
 
   // Who is being searched for? Me, or a child in my household (guardian search).
   let subjectGuestId: string | null = null;
@@ -59,6 +66,40 @@ export async function POST(req: NextRequest) {
   } else if (viewer.guest?.faceSearchOptOut) {
     return fail("opted_out", 403);
   }
+
+  // Rate limits (SHR-003): at most 3 searches in flight and 10 per hour per user. Only requests
+  // that would reach the worker count; a refusal never reaches it.
+  const userId = viewer.principal.userId;
+  const limitCtx = { studioId: event.studioId, eventId: event.id, actorUserId: userId };
+  let slot: Slot;
+  try {
+    slot = await rateLimits.acquire("faceSearchConcurrent", userId, limitCtx);
+  } catch (err) {
+    console.error("[face-search] rate limiter unavailable", (err as Error).message);
+    return fail("unavailable", 503);
+  }
+  if (!slot.ok) return rateLimited(slot.retryAfterSec);
+  try {
+    const hourly = await rateLimits.check("faceSearchUser", userId, limitCtx);
+    if (!hourly.ok) return rateLimited(hourly.retryAfterSec);
+    return await runSearch(req, { site, file, subject, subjectGuestId, consent });
+  } finally {
+    await slot.release().catch((err: unknown) => console.error("[face-search] slot release failed", (err as Error).message));
+  }
+}
+
+type SearchInput = {
+  site: NonNullable<Awaited<ReturnType<typeof requireViewer>>>;
+  file: File;
+  subject: string;
+  subjectGuestId: string | null;
+  consent: Extract<ReturnType<typeof checkConsentSubmission>, { ok: true }>;
+};
+
+/** Steps 1-4 of a search that has passed every check and holds a concurrency slot. */
+async function runSearch(req: NextRequest, { site, file, subject, subjectGuestId, consent }: SearchInput) {
+  const { event, viewer } = site;
+  const { kind, locale, recordVersion } = consent;
 
   // ── 1. Embed the selfie via the worker ──
   let embedding: number[];

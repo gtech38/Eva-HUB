@@ -55,6 +55,21 @@ vi.mock("@/lib/site", () => ({
   }),
 }));
 
+// Rate limits: the real policy numbers (10/h, 3 concurrent) on a fresh in-memory store per test.
+const limits = vi.hoisted(() => ({ current: null as null | import("@hub/shared/ratePolicies").RateLimiter }));
+vi.mock("@hub/shared/ratePolicies", async (importActual) => {
+  const actual = await importActual<typeof import("@hub/shared/ratePolicies")>();
+  return {
+    ...actual,
+    rateLimits: {
+      check: (...a: Parameters<typeof actual.rateLimits.check>) => limits.current!.check(...a),
+      acquire: (...a: Parameters<typeof actual.rateLimits.acquire>) => limits.current!.acquire(...a),
+    },
+  };
+});
+const { rateLimiter } = await import("@hub/shared/ratePolicies");
+const { memoryRateLimitStore } = await import("@hub/shared/ratelimit");
+
 const { POST } = await import("./route.ts");
 
 const SELF = { subject: "me", consent: "on", consentVersion: "SEARCH_SELF:v1-2026-10", consentLocale: "en" };
@@ -75,7 +90,8 @@ beforeEach(() => {
   db.writes = [];
   db.rawExecs = 0;
   db.child = null;
-  site.guest = { id: "guest-adult", householdId: "hh-1", isChild: false, faceSearchOptOut: false };
+  limits.current = rateLimiter({ store: memoryRateLimitStore(), audit: async () => {}, env: {}, random: () => 1 });
+  site.guest ={ id: "guest-adult", householdId: "hh-1", isChild: false, faceSearchOptOut: false };
   const embedding = Array.from({ length: 128 }, (_, i) => (i === 0 ? 1 : 0));
   worker = vi.fn(async () => Response.json({ ok: true, embedding, model: "test-model" }));
   vi.stubGlobal("fetch", worker);
@@ -168,5 +184,40 @@ describe("production guard", () => {
     expect(await res.json()).toStrictEqual({ ok: false, reason: "disabled" });
     expect(worker).not.toHaveBeenCalled();
     expect(db.writes).toStrictEqual([]);
+  });
+});
+
+describe("rate limits (SHR-003)", () => {
+  it("face search returns 429 after 10 searches per user per hour", async () => {
+    for (let i = 0; i < 10; i++) expect((await POST(selfieRequest(SELF))).status, `search ${i + 1}`).toBe(200);
+    const eleventh = await POST(selfieRequest(SELF));
+    expect(eleventh.status).toBe(429);
+    expect(await eleventh.json()).toStrictEqual({ ok: false, reason: "rate_limited" });
+    expect(Number(eleventh.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(worker, "the 11th selfie never reaches the worker").toHaveBeenCalledTimes(10);
+  });
+
+  it("requests rejected before the search (stale consent) do not use up the hourly quota", async () => {
+    for (let i = 0; i < 12; i++) await POST(selfieRequest({ ...SELF, consentVersion: "SEARCH_SELF:v0-1999-01" }));
+    expect((await POST(selfieRequest(SELF))).status).toBe(200);
+  });
+
+  it("a 4th concurrent search by the same user gets 429 rate_limited", async () => {
+    const held = await Promise.all([1, 2, 3].map(() => limits.current!.acquire("faceSearchConcurrent", "user-1")));
+    expect(held.every((s) => s.ok)).toBe(true);
+    const res = await POST(selfieRequest(SELF));
+    expect(res.status).toBe(429);
+    expect(await res.json()).toStrictEqual({ ok: false, reason: "rate_limited" });
+    expect(worker).not.toHaveBeenCalled();
+  });
+
+  it("releases the concurrency slot after a search, including a failed one", async () => {
+    worker.mockImplementationOnce(async () => {
+      throw new Error("worker down");
+    });
+    expect((await POST(selfieRequest(SELF))).status).toBe(503);
+    expect((await POST(selfieRequest(SELF))).status).toBe(200);
+    const slots = await Promise.all([1, 2, 3].map(() => limits.current!.acquire("faceSearchConcurrent", "user-1")));
+    expect(slots.every((s) => s.ok), "both searches gave their slot back").toBe(true);
   });
 });
