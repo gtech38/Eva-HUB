@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { PhotoDTO } from "@/lib/gallery";
+import { counterLabel } from "@/lib/galleryGrid";
 import type { GalleryStrings } from "./types";
 import { Heart } from "./PhotoCell";
 
@@ -79,7 +80,7 @@ export function Lightbox({ photos, index, total, hasMore, strings, canFavorite, 
         )}
       </div>
       <p className="pb-3 text-center text-xs opacity-60">
-        {index + 1} / {total ?? photos.length}
+        {counterLabel({ index, loaded: photos.length, total, hasMore })}
       </p>
     </div>
   );

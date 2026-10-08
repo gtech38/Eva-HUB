@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import type { PhotoDTO } from "@/lib/gallery";
-import { appendUnique, pageUrl, shouldPrefetch, shouldVirtualise } from "@/lib/galleryGrid";
+import { appendUnique, clampIndex, pageUrl, shouldPrefetch, shouldVirtualise } from "@/lib/galleryGrid";
 import { toggleFavorite } from "@/app/sites/[slug]/gallery/actions";
 import { Lightbox } from "./Lightbox";
 import { PhotoCell } from "./PhotoCell";
@@ -115,7 +115,17 @@ export function PhotoGrid({ photos: initial, strings, canFavorite, more, total }
     },
     [open, photos.length, cursor, loadMore],
   );
-  const close = useCallback(() => setOpen(null), []);
+  const close = useCallback(() => {
+    advanceWhenLoaded.current = false; // a pending "next" must not reopen-advance a later lightbox
+    setOpen(null);
+  }, []);
+
+  // A reset to the first page can leave the open index past the end of the list.
+  useEffect(() => {
+    if (open === null) return;
+    const clamped = clampIndex(open, photos.length);
+    if (clamped !== open) setOpen(clamped);
+  }, [open, photos.length]);
 
   const cell = (p: PhotoDTO, i: number, lazy: boolean) => (
     <PhotoCell key={p.id} photo={p} index={i} strings={strings} canFavorite={canFavorite} lazy={lazy} onOpen={setOpen} onToggle={toggle} />

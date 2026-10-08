@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import type { PhotoDTO } from "@/lib/gallery";
 import { columnsForWidth, gapForWidth, rowHeight, toRows } from "@/lib/galleryGrid";
@@ -17,14 +17,16 @@ export function VirtualGrid({ photos, renderCell }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const [m, setM] = useState<Measure>({ width: 0, viewport: 1024, top: 0 });
 
+  const measure = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const next = { width: el.clientWidth, viewport: window.innerWidth, top: el.getBoundingClientRect().top + window.scrollY };
+    setM((cur) => (cur.width === next.width && cur.viewport === next.viewport && cur.top === next.top ? cur : next));
+  }, []);
+
   useLayoutEffect(() => {
     const el = listRef.current;
     if (!el) return;
-    const measure = () => {
-      const next = { width: el.clientWidth, viewport: window.innerWidth, top: el.getBoundingClientRect().top + window.scrollY };
-      setM((cur) => (cur.width === next.width && cur.viewport === next.viewport && cur.top === next.top ? cur : next));
-    };
-    measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     window.addEventListener("resize", measure);
@@ -32,7 +34,13 @@ export function VirtualGrid({ photos, renderCell }: Props) {
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [measure]);
+
+  // The list's distance from the page top (scrollMargin) shifts when content above it changes, and
+  // the total height changes as pages arrive: re-measure then, not only on resize.
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, photos.length]);
 
   const columns = columnsForWidth(m.viewport);
   const gap = gapForWidth(m.viewport);

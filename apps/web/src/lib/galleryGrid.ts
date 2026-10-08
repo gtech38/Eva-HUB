@@ -37,6 +37,18 @@ export function shouldPrefetch(s: { index: number; loaded: number; hasMore: bool
   return s.loaded - 1 - s.index <= PREFETCH_WITHIN;
 }
 
+/** Lightbox "n / total": the real total when known, else the loaded count with "+" while more pages exist. */
+export function counterLabel(s: { index: number; loaded: number; total?: number; hasMore: boolean }): string {
+  if (s.total !== undefined) return `${s.index + 1} / ${s.total}`;
+  return `${s.index + 1} / ${s.loaded}${s.hasMore ? "+" : ""}`;
+}
+
+/** The open photo index kept inside what is loaded (a grid reset can shrink the list); null = nothing to show. */
+export function clampIndex(index: number, loaded: number): number | null {
+  if (loaded <= 0) return null;
+  return Math.min(Math.max(index, 0), loaded - 1);
+}
+
 /** URL of the page after `cursor` for a feed endpoint that may already carry query parameters. */
 export const pageUrl = (endpoint: string, cursor: string): string =>
   `${endpoint}${endpoint.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}`;

@@ -3,7 +3,9 @@ import {
   PREFETCH_WITHIN,
   VIRTUALISE_ABOVE,
   appendUnique,
+  clampIndex,
   columnsForWidth,
+  counterLabel,
   gapForWidth,
   pageUrl,
   rowHeight,
@@ -72,6 +74,32 @@ describe("shouldPrefetch", () => {
     expect(shouldPrefetch({ ...base, index: 0 })).toBe(false);
     expect(shouldPrefetch({ ...base, index: 59, hasMore: false })).toBe(false);
     expect(shouldPrefetch({ ...base, index: 59, loading: true })).toBe(false);
+  });
+});
+
+describe("counterLabel", () => {
+  it("uses the real total when the feed knows it", () => {
+    expect(counterLabel({ index: 57, loaded: 60, total: 2000, hasMore: true })).toBe("58 / 2000");
+  });
+
+  it("marks the loaded count as a lower bound when more pages exist and the total is unknown", () => {
+    expect(counterLabel({ index: 3, loaded: 24, hasMore: true })).toBe("4 / 24+");
+  });
+
+  it("shows the loaded count once nothing more can load", () => {
+    expect(counterLabel({ index: 3, loaded: 24, hasMore: false })).toBe("4 / 24");
+  });
+});
+
+describe("clampIndex", () => {
+  it("keeps the open photo inside what is loaded", () => {
+    expect(clampIndex(5, 10)).toBe(5);
+    expect(clampIndex(12, 10)).toBe(9);
+    expect(clampIndex(-1, 10)).toBe(0);
+  });
+
+  it("returns null when nothing is loaded, so the lightbox closes", () => {
+    expect(clampIndex(0, 0)).toBeNull();
   });
 });
 
