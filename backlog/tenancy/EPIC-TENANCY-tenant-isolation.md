@@ -6,7 +6,7 @@ milestone: Phase 1 — MVP
 ---
 
 ## Context
-docs/01-architecture.md §3 promises "all queries go through a Prisma client extension that injects the current tenant scope". What exists is `scoped()` in `packages/db/src/index.ts`, a helper that returns where-fragments and is not used anywhere; every route and action writes `prisma.x.findMany({ where: { eventId } })` by hand. Several tables lack `studioId` (`ZipExport`, `FaceCluster`, `ProofingList`, `Entitlement`). docs/04-plan.md lists tenant leaks as a trust-ending risk and RLS as the Phase 3 defence in depth.
+docs/01-architecture.md §3 promises "all queries go through a Prisma client extension that injects the current tenant scope". What exists is `scoped()` in `packages/db/src/index.ts`, a helper that returns where-fragments and is not used anywhere; every route and action writes `prisma.x.findMany({ where: { eventId } })` by hand. Several tables lack `studioId` (`FaceCluster`, `ProofingList`, `Entitlement`; `ZipExport` gained it in DB-001). docs/04-plan.md lists tenant leaks as a trust-ending risk and RLS as the Phase 3 defence in depth.
 
 ## Children
 - DB-001 Schema hardening: `ZipExport.studioId`, `PhotoMatch` CHECK, `FaceCluster` timestamps

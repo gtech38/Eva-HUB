@@ -1,7 +1,8 @@
 """BUILD_ZIP {zipExportId}
 
-Stream the originals of an event's downloadable photos (READY, not hidden,
-album visibility GUESTS or no album) into zip64 archives, split into parts of
+Stream the originals of an event's downloadable photos (scoped by the row's
+studioId and eventId; READY, not hidden, album visibility GUESTS or no album)
+into zip64 archives, split into parts of
 at most ZIP_PART_BYTES (2 GB default), each built in a temp file and uploaded
 to  s/{studioId}/e/{eventId}/zip/{zipId}-{n}.zip . ZipExport.partKeys/status/
 bytes are updated as parts complete so a crash mid-way leaves a usable trail.
@@ -68,10 +69,9 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
     zip_id = job["payload"]["zipExportId"]
     t0 = time.perf_counter()
     with conn.cursor() as cur:
+        # the row alone determines the storage key s/{studioId}/e/{eventId}/zip/...
         cur.execute(
-            '''SELECT z.id, z."eventId", z.status, e."studioId"
-                 FROM "ZipExport" z JOIN "Event" e ON e.id = z."eventId"
-                WHERE z.id = %s''',
+            'SELECT id, "studioId", "eventId", status FROM "ZipExport" WHERE id = %s',
             (zip_id,),
         )
         zx = cur.fetchone()
@@ -81,11 +81,11 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
         cur.execute(
             '''SELECT p.id, p.filename, p."originalKey", p."originalBytes", p."sortKey", p."createdAt"
                  FROM "Photo" p LEFT JOIN "Album" a ON a.id = p."albumId"
-                WHERE p."eventId" = %s
+                WHERE p."eventId" = %s AND p."studioId" = %s
                   AND p.status = 'READY'::"PhotoStatus" AND NOT p.hidden
                   AND (p."albumId" IS NULL OR a.visibility = 'GUESTS'::"AlbumVisibility")
                 ORDER BY p."sortKey" NULLS LAST, p."createdAt", p.id''',
-            (zx["eventId"],),
+            (zx["eventId"], zx["studioId"]),
         )
         photos = cur.fetchall()
 

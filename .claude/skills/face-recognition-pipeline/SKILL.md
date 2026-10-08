@@ -75,7 +75,7 @@ Set new `MODEL_VERSION`, run `make models`, enqueue `INDEX_FACES` for each READY
 - `web` posts to `WORKER_INTERNAL_URL` (`http://localhost:8010`) with a 20 s timeout; worker down -> 503 `unavailable`, UI shows the "temporarily unavailable" string.
 - Phone selfies are EXIF-rotated; the worker decodes with Pillow (`open_oriented`) before OpenCV, otherwise YuNet finds nothing.
 - `/embed-selfie` picks the largest face; multiple faces are allowed (`faces` is returned) -- the `multiple_faces` reason exists in web strings but the worker never emits it.
-- `PhotoMatch` has two unique keys; the CHECK that exactly one subject is set is documented but not in the migration (see `prisma-postgres`).
+- `PhotoMatch` has two unique keys and the CHECK `PhotoMatch_one_subject` (exactly one of `userId`/`subjectGuestId`; DB-001). Every insert must set exactly one subject. Deleting a `User` cascades to their matches (`onDelete: Cascade`; `SET NULL` would violate the CHECK). Guardian matches (`subjectGuestId`) have no FK and are removed explicitly. See `prisma-postgres`.
 - `CLUSTER_FACES` dedupe is a no-op while RUNNING; the handler re-queues itself when photos were indexed during the run. Do not "fix" by removing the dedupe key.
 - Clusters are per event; there is deliberately no cross-event "who is this" lookup, and profiles only match events where the user is a non-deleted guest with unrevoked consent.
 - Hidden albums (`HIDDEN`) are excluded from profile auto-match in SQL but the selfie route relies on the later `visiblePhotoWhere` filter; both end at the same visibility.
