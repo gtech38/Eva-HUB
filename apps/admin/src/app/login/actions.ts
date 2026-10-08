@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { prisma } from "@hub/db";
 import { email, env, hashToken, newToken, normalizeContact } from "@hub/shared";
+import { rateLimits } from "@hub/shared/ratePolicies";
 import { act, EmailSchema, type ActionState } from "@/lib/action";
 
 const Schema = z.object({ email: EmailSchema("Enter a valid email address") });
@@ -14,6 +15,9 @@ export async function requestMagicLink(_prev: ActionState, fd: FormData): Promis
     const { email: raw } = Schema.parse({ email: (fd.get("email") ?? "").toString().trim() });
     const contact = normalizeContact(raw);
     if (!contact || contact.kind !== "EMAIL") return { ok: true, message: SAME_MESSAGE };
+    // Before the account lookup so members and strangers are counted alike; over the limit nothing
+    // is sent or written and the reply does not change (SHR-003).
+    if (!(await rateLimits.check("adminMagicLinkAddress", contact.value)).ok) return { ok: true, message: SAME_MESSAGE };
 
     const cp = await prisma.contactPoint.findUnique({
       where: { kind_value: { kind: "EMAIL", value: contact.value } },
