@@ -22,7 +22,7 @@ description: Use when picking up, creating or finishing a ticket: backlog/README
 | `.claude/hooks/`, `.claude/settings.json` | TDD/verify hooks that run during work (see `tdd-workflow`) |
 | root `package.json` | `pnpm verify` = typecheck + tests + python tests |
 
-Repo: `https://github.com/gtech38/Eva-HUB.git`, default branch `main`. `gh` 2.x is installed and authenticated on this machine.
+Repo: `https://github.com/gtech38/Eva-HUB.git`, default branch `main`; integration branch `dev`. Ticket PRs: `<id>/<slug>` → `dev` (squash). Promotions: `dev` → `main` via a `chore(release): …` PR (merge commit) once a feature set is verified end to end. `gh` 2.x is installed and authenticated on this machine.
 
 ## Conventions in this repo
 
@@ -64,7 +64,7 @@ Prefer the lowest-numbered unblocked ticket in the current milestone; check "Blo
 
 ### Work it (TDD, from `backlog/README.md`)
 ```bash
-git checkout main && git pull
+git checkout dev && git pull
 git checkout -b web-012/guardian-face-search          # <id-lowercase>/<slug>
 # 1. write the failing test named in Acceptance criteria / Verification; run it; watch it fail
 # 2. implement until green, keeping .claude/hooks happy

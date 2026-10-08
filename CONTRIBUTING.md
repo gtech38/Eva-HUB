@@ -5,7 +5,7 @@ This repo is worked mostly by Claude Code agents picking up tickets, with humans
 ## Workflow
 
 1. **Tickets** are files in `backlog/` synced to GitHub issues (`pnpm backlog:sync`). See [backlog/README.md](backlog/README.md). Pick work with `gh issue list --label agent-ready --label status:ready`.
-2. **Branch** `<id-lowercase>/<slug>` from `main`. Never commit to `main` directly.
+2. **Branch** `<id-lowercase>/<slug>` from `dev`. Feature PRs target `dev` and are squash-merged. `main` only receives promotion PRs from `dev` (titled `chore(release): …`, merged with a merge commit) once a major feature set is verified. Never push to `dev` or `main` directly; hooks and branch protection refuse it.
 3. **TDD is enforced** by hooks in `.claude/`: a source file under `apps/`, `packages/` or `workers/` can only be edited when its test file exists; every edit re-runs typecheck and the sibling test; finishing a turn re-verifies touched packages. Details in `.claude/skills/tdd-workflow/SKILL.md`.
 4. **Design rules** are in `.claude/skills/solid-design/SKILL.md` and `CLAUDE.md`. The non-negotiables: `can()` for authorisation, tenant scope on every query, adapters for external services, no biometric data outside `Face`/`FaceCluster`/`FaceProfile`.
 5. **Verify** with `pnpm verify` before opening a PR.

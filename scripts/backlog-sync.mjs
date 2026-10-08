@@ -25,7 +25,7 @@ const only = args.filter((a) => !a.startsWith("--"));
 // Labels the sync owns (added/removed to reflect the files) vs labels agents own (never removed).
 const OURS = /^(type|area|priority|size|status):|^agent-ready$/;
 const SYNC_STATUS = ["status:blocked", "status:ready"];
-const AGENT_OWNED = new Set(["status:in-progress", "status:review"]);
+const AGENT_OWNED = new Set(["status:in-progress", "status:review", "status:in-dev"]);
 
 // ---------------------------------------------------------------- gh wrapper
 const RETRY_RE = /rate limit|secondary|abuse|\b429\b|\b403\b/i;
