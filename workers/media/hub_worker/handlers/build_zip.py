@@ -68,10 +68,9 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
     zip_id = job["payload"]["zipExportId"]
     t0 = time.perf_counter()
     with conn.cursor() as cur:
+        # the row alone determines the storage key s/{studioId}/e/{eventId}/zip/...
         cur.execute(
-            '''SELECT z.id, z."eventId", z.status, e."studioId"
-                 FROM "ZipExport" z JOIN "Event" e ON e.id = z."eventId"
-                WHERE z.id = %s''',
+            'SELECT id, "studioId", "eventId", status FROM "ZipExport" WHERE id = %s',
             (zip_id,),
         )
         zx = cur.fetchone()
