@@ -52,7 +52,7 @@ description: Use when building or changing the guest-facing event sites in apps/
 7. Verify: `curl -s -b "hub_session=$C" -H 'Host: priya-arjun.localhost' http://localhost:3000/registry | grep -c 'Registry'`, then the three locales.
 
 ### Add a gallery capability (e.g. zip download link)
-Gate with `viewer.can("gallery.view")` and an entitlement check (`GALLERY_ZIP` or `GALLERY_FULLRES`); create `ZipExport` and `enqueue("BUILD_ZIP", { zipExportId }, { dedupeKey: \`zip:${eventId}:${scopeHash}\` })`; the worker already builds parts (`build_zip.py`). Serve part URLs via `storage.presignDownload`. Test the `scopeHash` helper first.
+Gate with `viewer.can("gallery.view")` and an entitlement check (`GALLERY_ZIP` or `GALLERY_FULLRES`); create `ZipExport` with `studioId` and `eventId` (`studioId` is required; the worker derives the storage key and scopes the photo query from the row alone) and `enqueue("BUILD_ZIP", { zipExportId }, { dedupeKey: \`zip:${eventId}:${scopeHash}\` })`; the worker already builds parts (`build_zip.py`). Serve part URLs via `storage.presignDownload`. Test the `scopeHash` helper first.
 
 ### Change RSVP behaviour
 Edit `rsvp/actions.ts` `submitRsvp` and the form names (`rsvp.{guestId}.{subEventId}`, `meal.{guestId}.{subEventId}`, `name.{guestId}.first|last`). Keep: only invited sub-events are writable, meal only when `servesMeal` and the option belongs to that sub-event, audit with the full summary. Test the parsing step as a pure function first (extract `parseRsvpForm(formData, household)`).

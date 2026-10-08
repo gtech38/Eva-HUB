@@ -582,7 +582,7 @@ model PhotoMatch {
   source         MatchSource
   score          Float
   matchedAt      DateTime    @default(now())
-  user           User?       @relation(fields: [userId], references: [id])
+  user           User?       @relation(fields: [userId], references: [id], onDelete: Cascade) // SET NULL would violate PhotoMatch_one_subject
   photo          Photo       @relation(fields: [photoId], references: [id], onDelete: Cascade)
 
   @@unique([userId, photoId])

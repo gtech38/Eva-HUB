@@ -65,15 +65,25 @@ Dedupe keys in use: `process:{photoId}`, `faces:{photoId}`, `cluster:{eventId}`,
 
 ### Write a raw-SQL migration (CHECK constraint, RLS, view)
 ```bash
-cd packages/db && pnpm exec prisma migrate dev --create-only --name photomatch_subject_check
+cd packages/db && pnpm exec prisma migrate dev --create-only --name <name>
 ```
-Edit the generated `migration.sql`, e.g.:
+Edit the generated `migration.sql`, e.g. (hypothetical constraint; `PhotoMatch_one_subject` already exists, do not re-create it):
 ```sql
-ALTER TABLE "PhotoMatch" ADD CONSTRAINT "PhotoMatch_one_subject"
-  CHECK (num_nonnulls("userId", "subjectGuestId") = 1);
+ALTER TABLE "Order" ADD CONSTRAINT "Order_total_nonneg" CHECK ("totalCents" >= 0);
 -- RLS (Phase 3): ALTER TABLE "Guest" ENABLE ROW LEVEL SECURITY; CREATE POLICY ... USING ("eventId" = current_setting('hub.event_id', true));
 ```
 Then `pnpm exec prisma migrate dev` to apply. Test: a Python test in `workers/media/tests/` that inserts a violating row inside a rolled-back transaction and expects `psycopg.errors.CheckViolation`. `PhotoMatch_one_subject` (migration `add_tenant_columns_and_checks`, DB-001) is the worked example; `workers/media/tests/test_schema_constraints.py` is its test.
+
+Before adding a constraint or `SET NOT NULL` over existing data:
+- Check the FK actions. A CHECK on a nullable FK column conflicts with `onDelete: SetNull`, which is why `PhotoMatch.user` cascades.
+- Start the migration with a pre-flight `DO $$ ... RAISE EXCEPTION 'DB-xxx: ...' $$` that counts the rows it cannot fix by itself, so a failure names the bad data before any DDL runs. Delete rows that are meaningless anyway (e.g. subject-less `PhotoMatch`) in the migration itself.
+
+Prisma does not wrap a migration in a transaction. A failed one leaves a failed row in `_prisma_migrations`, possibly with partial DDL, and blocks later deploys (P3018). To recover: fix the data, undo any partial DDL (the pre-flight runs first, so there should be none), then
+```bash
+pnpm exec prisma migrate resolve --rolled-back 20261008172404_add_tenant_columns_and_checks   # the failed migration's name
+pnpm exec prisma migrate deploy
+```
+CI runs `prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code` after `migrate deploy`, so schema and migrations cannot drift.
 
 ### Query with pgvector from TS
 ```ts
