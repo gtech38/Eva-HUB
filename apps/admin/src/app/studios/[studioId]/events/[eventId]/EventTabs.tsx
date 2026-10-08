@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 const TABS = [
   ["", "Overview"], ["/settings", "Settings"], ["/members", "Members"], ["/pages", "Pages"], ["/schedule", "Schedule"],
-  ["/guests", "Guests"], ["/invites", "Invitations"], ["/gallery", "Gallery"], ["/registry", "Registry"],
+  ["/guests", "Guests"], ["/invites", "Invitations"], ["/gallery", "Gallery"], ["/registry", "Registry"], ["/jobs", "Jobs"],
 ] as const;
 
 export function EventTabs({ base }: { base: string }) {
