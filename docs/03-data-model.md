@@ -81,6 +81,9 @@ erDiagram
 
 - **Faces:** search is an exact cosine scan filtered by `eventId`, which covers up to about 15,000 faces per event using the `@@index([eventId])` btree. No HNSW index is needed until cross-event search exists, and it may never be needed.
 - **Photos:** the composite index on `(eventId, albumId, sortKey)` serves gallery pagination. Paginate with keyset cursors, not offsets.
+  - **`Photo.sortKey` contract** (WEB-017). The worker writes the capture time (else `createdAt`) as a naive, fixed-width ISO-8601 string with milliseconds, e.g. `2026-03-04T05:06:07.089` (`sort_key()` in `hub_worker/handlers/process_photo.py`). Fixed width is what makes plain string comparison chronological. The backfill migration `backfill_photo_sortkey` writes the same format in SQL (`to_char(COALESCE("capturedAt","createdAt"), 'YYYY-MM-DD"T"HH24:MI:SS.MS')`). Studio reordering (ADM-017) may write other strings; they only need to sort correctly as text.
+  - **Order:** `sortKey ASC NULLS LAST, id ASC`. Photos without a key sort last and are never dropped; `id` breaks ties, so a page boundary can fall inside a run of equal keys. The web gallery (`apps/web/src/lib/gallery.ts`), the ZIP builder (`build_zip.py`) and the `/api/gallery/*` cursors all use this order. A cursor is base64url of `${sortKey}|${id}`; "no key" is a NUL byte in the key slot so it never collides with an empty-string key. My photos orders by `score DESC, photoId ASC`.
+  - Tests that pin the contract: `workers/media/tests/test_process_photo_sort_key.py` (format, and equality with the SQL `to_char`), `packages/db/src/photoSortKeyBackfill.test.ts`, `apps/web/src/lib/gallery.test.ts`, `workers/media/tests/test_build_zip.py`.
 - **RSVP reports:** `Rsvp(subEventId, status)`. Done (ADM-009, migration `rsvp_index`); the report page and CSV exports use it.
 - **Messages:** an index on `(providerId)` for webhook lookups.
 

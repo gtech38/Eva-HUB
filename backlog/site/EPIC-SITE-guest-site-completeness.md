@@ -10,6 +10,7 @@ milestone: Phase 1 — MVP
 
 ## Children
 - WEB-009 Registry and Wedding Party pages
+- ADM-030 Wedding Party member photo upload in the page editor
 - ADM-013 Hero image upload and accent-colour overrides
 - WEB-012 Self-hosted fonts
 - WEB-013 Visual regression and performance budget for 3 themes × 3 locales
