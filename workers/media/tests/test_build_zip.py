@@ -63,6 +63,23 @@ def test_part_key_derives_from_zip_export_row_alone(conn, tenant, uploads):
     assert _status(conn, zip_id) == {"status": "READY", "partKeys": [expected]}
 
 
+def test_archive_order_matches_the_gallery_order(conn, tenant, uploads):
+    """sortKey ascending, unkeyed photos last, ties by id (not createdAt): the same total order
+    as the web gallery's keyset pages (apps/web/src/lib/gallery.ts, docs/03-data-model.md)."""
+    key = "2026-10-08T10:00:00.000"
+    # b was created before a, so a createdAt tiebreak would put b first; the id tiebreak puts a first.
+    tenant.add_photo(photo_id=f"{tenant.event_id}-b", filename="b.jpg", sort_key=key, created_at="2026-10-01 00:00:00")
+    tenant.add_photo(photo_id=f"{tenant.event_id}-a", filename="a.jpg", sort_key=key, created_at="2026-10-02 00:00:00")
+    tenant.add_photo(photo_id=f"{tenant.event_id}-c", filename="c.jpg", sort_key=None, created_at="2026-09-01 00:00:00")
+    tenant.add_photo(photo_id=f"{tenant.event_id}-z", filename="z.jpg", sort_key="2026-10-08T09:59:59.999")
+    zip_id = _zip_export(conn, tenant.studio_id, tenant.event_id)
+
+    build_zip.handle(conn, {"payload": {"zipExportId": zip_id}})
+
+    (names,) = uploads.values()
+    assert names == ["z.jpg", "a.jpg", "b.jpg", "c.jpg"]
+
+
 def test_photos_of_another_studio_are_not_zipped(conn, tenant, uploads):
     """The photo query is tenant-scoped by the row's studioId as well as its eventId."""
     tenant.add_photo(studio_id=f"{tenant.studio_id}-other")

@@ -84,7 +84,7 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
                 WHERE p."eventId" = %s AND p."studioId" = %s
                   AND p.status = 'READY'::"PhotoStatus" AND NOT p.hidden
                   AND (p."albumId" IS NULL OR a.visibility = 'GUESTS'::"AlbumVisibility")
-                ORDER BY p."sortKey" NULLS LAST, p."createdAt", p.id''',
+                ORDER BY p."sortKey" NULLS LAST, p.id''',  # the web gallery's order (docs/03 "Photo.sortKey")
             (zx["eventId"], zx["studioId"]),
         )
         photos = cur.fetchall()

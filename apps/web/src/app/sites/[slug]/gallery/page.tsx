@@ -6,7 +6,8 @@ import { requireViewer, page } from "@/lib/site";
 import { PageHeader, EmptyState } from "@/components/PageHeader";
 import { PhotoGrid } from "@/components/gallery/PhotoGrid";
 import { galleryStrings } from "@/lib/gallery-strings";
-import { listVisibleAlbums, visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
+import { listVisibleAlbums, listFavoritesPage, visiblePhotoWhere } from "@/lib/gallery";
+import { encodeCursor } from "@/lib/galleryCursor";
 import { faceSearchAllowed } from "@/lib/faceConsent";
 
 export const dynamic = "force-dynamic";
@@ -30,12 +31,9 @@ export default async function GalleryPage() {
   const albums = await listVisibleAlbums(event.id, viewer, locale);
   const total = await prisma.photo.count({ where: visiblePhotoWhere(event.id, viewer) });
 
-  // Favorites strip: the viewer's hearts across the whole event.
-  const favPhotos = viewer.can("favorites")
-    ? await prisma.photo.findMany({ where: visiblePhotoWhere(event.id, viewer, { favorites: { some: { userId: viewer.principal.userId } } }), orderBy: [{ sortKey: "asc" }, { createdAt: "asc" }], take: 24 })
-    : [];
-  const entitled = await isEntitledFullRes(event.id, viewer.principal.userId);
-  const favs = await toPhotoDTOs(favPhotos, viewer, { entitled });
+  // Favorites strip: the viewer's hearts across the whole event, 24 to start; PhotoGrid pages the rest.
+  const favs = viewer.can("favorites") ? await listFavoritesPage(event.id, viewer, { limit: 24 }) : { photos: [], nextCursor: null };
+  const favMore = { endpoint: "/api/gallery/favorites", nextCursor: favs.nextCursor && encodeCursor(favs.nextCursor) };
 
   return (
     <div>
@@ -78,10 +76,10 @@ export default async function GalleryPage() {
                 ))}
             </ul>
           </section>
-          {favs.length > 0 && (
+          {favs.photos.length > 0 && (
             <section className="mt-12">
               <h2 className="eyebrow mb-4">{S.favorites}</h2>
-              <PhotoGrid photos={favs} strings={S} canFavorite={viewer.can("favorites")} />
+              <PhotoGrid photos={favs.photos} strings={S} canFavorite={viewer.can("favorites")} more={favMore} />
             </section>
           )}
         </>

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { prisma, Prisma } from "@hub/db";
 import { env } from "@hub/shared/env";
 import { requireViewer } from "@/lib/site";
+import { resolveFaceSubject } from "@/lib/faceSubject";
 import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
 import { consentRecordVersion } from "@hub/shared/consent";
 import { checkConsentSubmission, faceSearchAllowed, mayEnrolFaceProfile } from "@/lib/faceConsent";
@@ -47,18 +48,9 @@ export async function POST(req: NextRequest) {
   const { kind, locale, recordVersion } = consent;
 
   // Who is being searched for? Me, or a child in my household (guardian search).
-  let subjectGuestId: string | null = null;
-  if (subject !== "me") {
-    if (!viewer.guest) return fail("forbidden", 403);
-    const child = await prisma.guest.findFirst({
-      where: { id: subject, eventId: event.id, householdId: viewer.guest.householdId, isChild: true, deletedAt: null },
-    });
-    if (!child) return fail("forbidden", 403);
-    if (child.faceSearchOptOut) return fail("opted_out", 403);
-    subjectGuestId = child.id;
-  } else if (viewer.guest?.faceSearchOptOut) {
-    return fail("opted_out", 403);
-  }
+  const who = await resolveFaceSubject(viewer, event.id, subject);
+  if (!who.ok) return fail(who.reason, 403);
+  const subjectGuestId = who.subject.kind === "child" ? who.subject.guestId : null;
 
   // ── 1. Embed the selfie via the worker ──
   let embedding: number[];
