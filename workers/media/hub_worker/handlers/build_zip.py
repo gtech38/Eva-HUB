@@ -1,8 +1,8 @@
 """BUILD_ZIP {zipExportId}
 
 Stream the originals of an event's downloadable photos (scoped by the row's
-studioId and eventId; READY, not hidden,
-album visibility GUESTS or no album) into zip64 archives, split into parts of
+studioId and eventId; READY, not hidden, album visibility GUESTS or no album)
+into zip64 archives, split into parts of
 at most ZIP_PART_BYTES (2 GB default), each built in a temp file and uploaded
 to  s/{studioId}/e/{eventId}/zip/{zipId}-{n}.zip . ZipExport.partKeys/status/
 bytes are updated as parts complete so a crash mid-way leaves a usable trail.
