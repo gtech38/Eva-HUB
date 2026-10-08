@@ -5,6 +5,9 @@ import { exclude, include } from "../../vitest.shared.mts";
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig({
+  // tsconfig.json has "jsx": "preserve" for Next's compiler; tests importing .tsx need it compiled.
+  // (Vite 8 transforms with oxc, not esbuild.)
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     alias: {
       // Same as tsconfig.json "paths": { "@/*": ["./src/*"] }.

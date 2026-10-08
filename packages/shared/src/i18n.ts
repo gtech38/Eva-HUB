@@ -24,6 +24,7 @@ export const UI = {
   signIn: { en: "Sign in", te: "సైన్ ఇన్", hi: "साइन इन करें" },
   signInHelp: { en: "Enter the email or phone your invitation was sent to.", te: "మీ ఆహ్వానం పంపిన ఇమెయిల్ లేదా ఫోన్ నంబర్ నమోదు చేయండి.", hi: "वह ईमेल या फ़ोन दर्ज करें जिस पर आपका निमंत्रण भेजा गया था।" },
   signInSent: { en: "If you're on the guest list, we've sent you a link.", te: "మీరు అతిథుల జాబితాలో ఉంటే, మేము మీకు లింక్ పంపాము.", hi: "यदि आप अतिथि सूची में हैं, तो हमने आपको एक लिंक भेजा है।" },
+  inviteExpired: { en: "This link has expired", te: "ఈ లింక్ గడువు ముగిసింది", hi: "इस लिंक की समय-सीमा समाप्त हो गई है" },
   home: { en: "Home", te: "హోమ్", hi: "होम" },
   about: { en: "Our Story", te: "మా కథ", hi: "हमारी कहानी" },
   schedule: { en: "Schedule", te: "షెడ్యూల్", hi: "कार्यक्रम" },

@@ -3,10 +3,6 @@ import { lt } from "@/lib/format";
 export type Ev = { id: string; studioId: string; slug: string; title: unknown; startsOn: Date | null; defaultLocale: string };
 export type G = { id: string; householdId: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null; isPlusOne: boolean };
 
-export function inviteExpiry(event: { startsOn: Date | null }) {
-  return event.startsOn ? new Date(event.startsOn.getTime() + 90 * 864e5) : new Date(Date.now() + 180 * 864e5);
-}
-
 export function buildMessages(event: Ev, guest: G, link: string, intro: string) {
   const title = lt(event.title) || event.slug;
   const name = guest.firstName || "there";
