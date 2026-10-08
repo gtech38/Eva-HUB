@@ -39,7 +39,6 @@ export default async function HomePage() {
         timezone={event.timezone}
         locale={locale}
         heroUrl={heroUrl}
-        kind={event.kind}
         copy={eventCopy(event.kind, locale)}
       />
 

@@ -10,7 +10,7 @@ Everything runs on this machine; nothing is deployed. See [CLAUDE.md](CLAUDE.md)
 cp .env.example .env
 pnpm install
 pnpm infra:up                         # Postgres+pgvector :5433, S3 (RustFS) :9000, Mailpit :8025
-pnpm db:migrate && pnpm db:seed
+pnpm db:migrate && pnpm db:seed          # on an existing dev DB use `pnpm db:reset` first: the seed only adds, never rewrites
 pnpm dev                              # event sites on :3000, admin on :3001
 cd workers/media && make models && make dev
 ```

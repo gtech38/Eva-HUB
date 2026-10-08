@@ -7,6 +7,7 @@ import type { Theme, ShellProps, HeroProps } from "../types";
 import { Nav, LangSwitcher, NotYou, Credit } from "@/components/chrome";
 import { Countdown } from "@/components/Countdown";
 import { fmtDayLabel } from "@/lib/format";
+import { splitCoupleNames } from "@hub/shared/names";
 
 const vars = {
   "--bg": "#f7ead7",          // cream
@@ -36,13 +37,15 @@ function Divider() {
 
 /** Splits "Priya & Arjun" so each name can carry a script initial. */
 function Names({ title, className = "" }: { title: string; className?: string }) {
-  const parts = title.split(/\s*(&|and|\+)\s*/i).filter(Boolean);
-  if (parts.length < 3) return <span className={className}>{title}</span>;
+  const parts = splitCoupleNames(title);
+  if (!parts) return <span className={className}>{title}</span>;
+  // Luxurious Script has Latin glyphs only; Telugu/Devanagari initials stay in the display face.
+  const cls = (s: string) => (/^[A-Za-z]/.test(s) ? "initial-script" : undefined);
   return (
     <span className={className}>
-      <span className="initial-script">{parts[0]}</span>
+      <span className={cls(parts[0])}>{parts[0]}</span>
       <span className="mx-3 align-middle text-[0.6em] font-light">&amp;</span>
-      <span className="initial-script">{parts[2]}</span>
+      <span className={cls(parts[1])}>{parts[1]}</span>
     </span>
   );
 }

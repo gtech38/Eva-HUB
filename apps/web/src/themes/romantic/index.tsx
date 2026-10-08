@@ -56,7 +56,7 @@ function Petals() {
   );
 }
 
-function Shell({ title, nav, locale, locales, brand, viewerName, children }: ShellProps) {
+function Shell({ title, nav, locale, locales, brand, viewerName, copy, children }: ShellProps) {
   return (
     <div className="flex min-h-dvh flex-col font-body">
       <header>
@@ -77,6 +77,7 @@ function Shell({ title, nav, locale, locales, brand, viewerName, children }: She
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-2 px-4 py-10 text-center">
           <span className="font-display text-lg tracking-[-0.02em]">{title}</span>
+          <span className="text-xs uppercase tracking-[0.3em] text-muted">{copy.signoff}</span>
           <Credit brand={brand} locale={locale} />
         </div>
       </footer>
@@ -84,7 +85,7 @@ function Shell({ title, nav, locale, locales, brand, viewerName, children }: She
   );
 }
 
-function Hero({ title, monogram, headline, dateLine, startsOn, timezone, locale, heroUrl }: HeroProps) {
+function Hero({ title, monogram, headline, dateLine, startsOn, timezone, locale, heroUrl, copy }: HeroProps) {
   return (
     <section className="relative overflow-hidden rounded-[28px]">
       <div
@@ -95,9 +96,10 @@ function Hero({ title, monogram, headline, dateLine, startsOn, timezone, locale,
       {heroUrl && <div className="absolute inset-0 bg-gradient-to-b from-[#f6f1e8]/70 via-transparent to-[#f6f1e8]/40" aria-hidden />}
       <Petals />
       <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 py-24 text-center sm:py-32">
-        <p className="text-[0.65rem] uppercase tracking-[0.4em] text-muted">{headline}</p>
+        <p className="text-[0.65rem] uppercase tracking-[0.4em] text-muted">{copy.eyebrow}</p>
         <h1 className="mt-6 font-display text-5xl leading-[1.02] tracking-[-0.03em] sm:text-7xl">{title}</h1>
-        {monogram && <p className="mt-4 font-display text-xl italic text-accent">{monogram}</p>}
+        <p className="mt-4 font-display text-xl italic text-accent">{monogram || copy.accent}</p>
+        {headline && <p className="mt-5 max-w-md text-base text-muted">{headline}</p>}
         <p className="mt-6 text-sm text-muted">{dateLine || (startsOn ? fmtDayLabel(startsOn, timezone, locale) : "")}</p>
         {startsOn && (
           <div className="mt-12">

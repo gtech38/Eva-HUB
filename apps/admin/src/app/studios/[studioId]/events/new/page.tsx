@@ -1,4 +1,4 @@
-import { getStudio, THEMES } from "@/lib/data";
+import { getStudio, THEMES, EVENT_KINDS } from "@/lib/data";
 import { requireAdmin, isStale } from "@/lib/auth";
 import { can } from "@hub/shared";
 import { redirect, notFound } from "next/navigation";
@@ -19,7 +19,7 @@ export default async function NewEventPage({ params }: { params: Promise<{ studi
     <>
       <PageHeader title="New event" description="Creates the event, its hostname, default pages and a 'Highlights' album." crumbs={[{ href: `/studios/${studioId}`, label: studio.name }, { label: "New event" }]} />
       <Card className="max-w-2xl">
-        <NewEventForm studioId={studioId} themes={THEMES} rootDomain={process.env.ROOT_DOMAIN ?? "localhost"} />
+        <NewEventForm studioId={studioId} themes={THEMES} kinds={EVENT_KINDS} rootDomain={process.env.ROOT_DOMAIN ?? "localhost"} />
       </Card>
     </>
   );

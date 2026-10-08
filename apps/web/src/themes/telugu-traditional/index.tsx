@@ -93,7 +93,7 @@ function Hero({ title, headline, dateLine, startsOn, timezone, locale, heroUrl, 
       )}
       <div className="relative mx-auto flex max-w-3xl flex-col items-center px-6 py-16 text-center sm:py-24">
         <Kalasam />
-        <p className="mt-5 font-display text-sm tracking-[0.3em] text-[color:var(--accent-3)]">{"శుభం"}</p>
+        <p className="mt-5 font-display text-sm tracking-[0.3em] text-[color:var(--accent-3)]" aria-hidden>{"శుభం"}</p>
         <p className="mt-4 text-base text-muted">{copy.invite}</p>
         <h1 className="mt-3 font-display text-4xl leading-tight text-[color:var(--accent)] sm:text-6xl">{title}</h1>
         <p className="mt-3 font-display text-xl text-[color:var(--accent-2)]">{copy.accent}</p>

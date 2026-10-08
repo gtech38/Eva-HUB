@@ -85,6 +85,7 @@ function Hero({ title, headline, dateLine, startsOn, timezone, locale, heroUrl, 
         className="maroon-panel relative min-h-[18rem] sm:min-h-[34rem]"
         style={heroUrl ? { backgroundImage: `url(${heroUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
       >
+        {heroUrl && <div className="absolute inset-0 bg-gradient-to-t from-[#2a0000]/80 via-[#2a0000]/40 to-transparent" aria-hidden />}
         <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-[#f6f4ee]">
           <p className="font-script text-3xl sm:text-4xl">{copy.invite}</p>
           <h1 className="mt-3 font-display text-3xl uppercase tracking-[0.22em] sm:text-4xl">{title}</h1>

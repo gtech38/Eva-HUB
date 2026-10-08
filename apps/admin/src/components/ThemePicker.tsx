@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-export function ThemePicker({ themes, name, defaultValue }: { themes: Array<{ key: string; label: string; swatch: string[] }>; name: string; defaultValue: string }) {
+export function ThemePicker({ themes, name, defaultValue }: { themes: Array<{ key: string; label: string; swatch: string[]; suits?: string }>; name: string; defaultValue: string }) {
   const [v, setV] = useState(defaultValue);
   return (
     <div className="grid gap-2 sm:grid-cols-3">
@@ -12,7 +12,7 @@ export function ThemePicker({ themes, name, defaultValue }: { themes: Array<{ ke
           <span className="flex overflow-hidden rounded border border-neutral-200">
             {t.swatch.map((c) => <span key={c} className="h-6 w-4" style={{ background: c }} />)}
           </span>
-          <span className="text-xs"><span className="block font-medium">{t.label}</span><span className="font-mono text-[10px] text-neutral-500">{t.key}</span></span>
+          <span className="text-xs"><span className="block font-medium">{t.label}</span><span className="font-mono text-[10px] text-neutral-500">{t.key}</span>{t.suits && <span className="block text-[11px] text-neutral-600">{t.suits}</span>}</span>
         </label>
       ))}
     </div>

@@ -56,7 +56,7 @@ export default async function SiteLayout({ children }: { children: ReactNode }) 
 
   const shell = (viewerName: string | null, body: ReactNode) => (
     <div style={style} className={`min-h-dvh bg-bg text-fg ${theme.rootClass ?? ""}`} data-theme={event.theme} lang={locale}>
-      <theme.Shell title={title} monogram={monogram} nav={buildNav(site)} locale={locale} locales={locales} brand={brand} kind={event.kind} copy={copy} viewerName={viewerName}>
+      <theme.Shell title={title} monogram={monogram} nav={buildNav(site)} locale={locale} locales={locales} brand={brand} copy={copy} viewerName={viewerName}>
         {body}
       </theme.Shell>
     </div>

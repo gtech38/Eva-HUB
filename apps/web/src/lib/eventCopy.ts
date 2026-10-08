@@ -6,6 +6,8 @@
 import type { EventKind } from "@hub/db";
 import { t, type Locale, type LocalizedText } from "@hub/shared/i18n";
 
+export const EVENT_KINDS = ["WEDDING", "ENGAGEMENT", "BABY_SHOWER", "BIRTHDAY", "ANNIVERSARY", "CEREMONY", "PARTY", "CORPORATE", "OTHER"] as const satisfies readonly EventKind[];
+
 export type EventCopy = {
   /** small uppercase line under the names: "are getting married" */
   eyebrow: string;
@@ -27,7 +29,7 @@ const COPY: Record<EventKind, CopySet> = {
     signoff: { en: "with love", te: "ప్రేమతో", hi: "प्यार के साथ" },
   },
   ENGAGEMENT: {
-    eyebrow: { en: "are engaged", te: "నిశ్చితార్థం", hi: "सगाई" },
+    eyebrow: { en: "are engaged", te: "నిశ్చితార్థం చేసుకుంటున్నారు", hi: "सगाई कर रहे हैं" },
     accent: { en: "Engaged!", te: "శుభ నిశ్చితార్థం", hi: "शुभ सगाई" },
     invite: { en: "You're invited", te: "మీకు ఆహ్వానం", hi: "आप आमंत्रित हैं" },
     signoff: { en: "with love", te: "ప్రేమతో", hi: "प्यार के साथ" },
