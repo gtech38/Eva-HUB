@@ -7,13 +7,13 @@
  * CI run means the atomicity test ran. Every key is prefixed with a per-run marker so the file is
  * rerunnable without db:reset.
  */
-import { createHash } from "node:crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { createHash, createHmac } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@hub/db";
 import { acquireSlot, hashRateKey, limit, memoryRateLimitStore, pgRateLimitStore, SWEEP_BATCH, type RateLimitStore } from "./ratelimit.ts";
 
 const SECRET = "test-ratelimit-secret-0123456789";
-process.env.AUTH_SECRET = SECRET; // limit() reads the HMAC key at call time
+vi.stubEnv("AUTH_SECRET", SECRET); // limit() derives its HMAC key from AUTH_SECRET at call time
 
 const run = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const created: string[] = []; // hashes written by this run, deleted in afterAll
@@ -51,6 +51,14 @@ describe("key hashing", () => {
     expect(r.keyHash).toBe(hashRateKey(k, SECRET));
   });
 
+  it("uses a subkey derived from AUTH_SECRET (domain separation), never AUTH_SECRET itself as the HMAC key", () => {
+    const k = "signInAddress:priya@localhost";
+    const direct = createHmac("sha256", SECRET).update(k).digest("hex");
+    expect(hashRateKey(k, SECRET), "a value HMAC'd elsewhere with AUTH_SECRET must not equal a rate-limit key").not.toBe(direct);
+    const subkey = createHmac("sha256", SECRET).update("hub:rate-limit-key:v1").digest();
+    expect(hashRateKey(k, SECRET)).toBe(createHmac("sha256", subkey).update(k).digest("hex"));
+  });
+
   it("refuses to run without a usable secret", async () => {
     await expect(limit("k", { max: 1, windowSec: 60 }, { store: memoryRateLimitStore(), secret: "short" })).rejects.toThrow(/AUTH_SECRET/);
   });
@@ -59,6 +67,7 @@ describe("key hashing", () => {
 afterAll(async () => {
   if (dbUp) await prisma.$executeRaw`DELETE FROM "RateLimit" WHERE "key" = ANY(${created})`;
   await prisma.$disconnect();
+  vi.unstubAllEnvs();
 });
 
 const stores: Array<[string, () => RateLimitStore, boolean]> = [

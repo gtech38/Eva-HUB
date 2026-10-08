@@ -5,7 +5,8 @@ import { prisma as defaultPrisma, Prisma, type PrismaClient } from "@hub/db";
  * Fixed-window rate limiting on Postgres (no Redis by design, SHR-003).
  *
  * `limit(key, { max, windowSec })` counts one hit for `key` and says whether it is within `max` hits
- * per window. The key is stored as HMAC-SHA256(AUTH_SECRET, key) only, so callers pass
+ * per window. The key is stored as HMAC-SHA256(subkey, key) only, with the subkey derived from
+ * AUTH_SECRET under a purpose label (domain separation from the session cookie), so callers pass
  * `"<policy>:<value>"` and neither the raw address / IP nor a dictionary-reversible plain hash of it
  * reaches the table or the audit log. Time is injectable (`now`) so windows are testable without
  * sleeping.
@@ -63,9 +64,15 @@ export const JANITOR_RATE = 0.01;
 /** Upper bound on rows one sweep deletes, so the 1 % of callers that sweep pay a bounded cost. */
 export const SWEEP_BATCH = 500;
 
+/** Purpose label for the subkey: AUTH_SECRET also signs session cookies, so it is never used directly here. */
+const SUBKEY_LABEL = "hub:rate-limit-key:v1";
+const subkeys = new Map<string, Buffer>();
+
 export function hashRateKey(key: string, secret: string): string {
   if (secret.length < 16) throw new Error("rate limit keys need AUTH_SECRET (at least 16 characters)");
-  return createHmac("sha256", secret).update(key).digest("hex");
+  let subkey = subkeys.get(secret);
+  if (!subkey) subkeys.set(secret, (subkey = createHmac("sha256", secret).update(SUBKEY_LABEL).digest()));
+  return createHmac("sha256", subkey).update(key).digest("hex");
 }
 
 const secretOf = (opts: { secret?: string }) => opts.secret ?? process.env.AUTH_SECRET ?? "";
