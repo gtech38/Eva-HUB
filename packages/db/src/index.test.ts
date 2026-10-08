@@ -73,7 +73,7 @@ describe.skipIf(!dbUp)(suite, () => {
     const farFuture = future(10 * HOUR);
     await prisma.job.update({
       where: { id: a.id },
-      data: { status: "SUCCEEDED", attempts: 3, lastError: "old", runAt: farFuture, lockedBy: "w1", lockedAt: new Date() },
+      data: { status: "SUCCEEDED", attempts: 3, lastError: "old", runAt: farFuture, lockedBy: "w1", lockedAt: new Date(), finishedAt: new Date() },
     });
 
     const next = future(0);
@@ -84,8 +84,19 @@ describe.skipIf(!dbUp)(suite, () => {
     expect(b.lastError).toBe(null);
     expect(b.lockedBy).toBe(null);
     expect(b.lockedAt).toBe(null);
+    expect(b.finishedAt, "a fresh run must not look finished (the jobs dashboard reads finishedAt)").toBe(null);
     expect(b.runAt.getTime(), "new runAt wins when the row was not QUEUED (no GREATEST)").toBe(next.getTime());
     expect(b.payload).toStrictEqual({ run, photoId: "p1", v: 2 });
+  });
+
+  it("enqueue with dedupeKey on a QUEUED retry clears its lastError and finishedAt together", async () => {
+    const a = await enqueue(T, { run }, { dedupeKey: key("retry"), runAt: future() });
+    await prisma.job.update({ where: { id: a.id }, data: { attempts: 1, lastError: "boom", finishedAt: new Date() } });
+    const b = await enqueue(T, { run, v: 2 }, { dedupeKey: key("retry"), runAt: future() });
+    expect(b.id).toBe(a.id);
+    expect(b.lastError).toBe(null);
+    expect(b.finishedAt).toBe(null);
+    expect(b.attempts, "attempts are kept while QUEUED").toBe(1);
   });
 
   it("enqueue with dedupeKey leaves a RUNNING job untouched", async () => {

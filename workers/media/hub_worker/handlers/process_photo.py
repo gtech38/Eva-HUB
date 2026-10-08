@@ -83,7 +83,13 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
                         WHERE id = %s''',
                     (width, height, shot_at, jsonb(derivatives), photo_sort_key, photo_id),
                 )
-            enqueue(conn, "INDEX_FACES", {"photoId": photo_id}, dedupe_key=f"faces:{photo_id}")
+            # eventId/studioId ride along so per-event views (admin Jobs tab, logs) can scope the job;
+            # the INDEX_FACES handler itself reads only photoId.
+            enqueue(
+                conn, "INDEX_FACES",
+                {"photoId": photo_id, "eventId": photo["eventId"], "studioId": photo["studioId"]},
+                dedupe_key=f"faces:{photo_id}",
+            )
     except Exception:
         with conn.cursor() as cur:
             cur.execute('UPDATE "Photo" SET status = \'FAILED\'::"PhotoStatus" WHERE id = %s', (photo_id,))
