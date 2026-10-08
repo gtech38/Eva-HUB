@@ -1,5 +1,26 @@
 import { prisma, type RsvpStatus } from "@hub/db";
+import { can, type Principal, type Resource } from "@hub/shared";
 import { lt } from "@/lib/format";
+
+// ───────────────────────────── RSVP report access ─────────────────────────────
+
+/** "names": guest-level lists. "totals": headcounts and meal counts only (vendors). */
+export type ReportAccess = "names" | "totals";
+
+/** What this principal may see of the RSVP report; null when nothing. Decided by `can()` only. */
+export function reportAccess(p: Principal | null, r: Resource): ReportAccess | null {
+  if (!p || !can(p, "rsvp.report", r)) return null;
+  return can(p, "rsvp.report.names", r) ? "names" : "totals";
+}
+
+/** One row of a sub-event's guest list (names mode only). */
+export type ReportGuestLine = { household: string; guest: string; isChild: boolean; status: RsvpStatus; meal: string };
+export type SubEventReport = {
+  id: string; name: unknown; servesMeal: boolean; summary: SubEventSummary;
+  /** Present only when the report was loaded with access "names". */
+  guests?: ReportGuestLine[];
+};
+export type RsvpReport = { access: ReportAccess; subEvents: SubEventReport[] };
 
 // ───────────────────────────── RSVP report aggregation (pure) ─────────────────────────────
 

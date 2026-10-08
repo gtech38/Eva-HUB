@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mealTotals, summarizeSubEvent, type ReportMealOption, type ReportRsvp } from "./guests";
+import type { Principal } from "@hub/shared";
+import { mealTotals, reportAccess, summarizeSubEvent, type ReportMealOption, type ReportRsvp } from "./guests";
 
 const VEG: ReportMealOption = { id: "veg", label: { en: "Vegetarian", te: "శాకాహారం" }, isKidsMeal: false };
 const NONVEG: ReportMealOption = { id: "nonveg", label: { en: "Non-vegetarian" }, isKidsMeal: false };
@@ -70,5 +71,23 @@ describe("summarizeSubEvent()", () => {
 
   it("is all zeros for a sub-event with no invitations", () => {
     expect(summarizeSubEvent([], [])).toMatchObject({ invited: 0, attending: 0, declined: 0, pending: 0, adults: 0, kids: 0 });
+  });
+});
+
+describe("reportAccess()", () => {
+  const p = (over: Partial<Principal>): Principal => ({
+    userId: "u", isPlatformAdmin: false, studioRoles: {}, eventRoles: {}, guestOf: new Set(), authMethod: "EMAIL_LINK", authedAt: new Date(), ...over,
+  });
+  const res = { studioId: "s1", eventId: "e1" };
+
+  it("is names for hosts, planners, owners and staff; totals for vendors; null for everyone else", () => {
+    expect(reportAccess(p({ eventRoles: { e1: ["HOST"] } }), res)).toBe("names");
+    expect(reportAccess(p({ eventRoles: { e1: ["PLANNER"] } }), res)).toBe("names");
+    expect(reportAccess(p({ studioRoles: { s1: "OWNER" } }), res)).toBe("names");
+    expect(reportAccess(p({ studioRoles: { s1: "STAFF" } }), res)).toBe("names");
+    expect(reportAccess(p({ eventRoles: { e1: ["VENDOR"] } }), res)).toBe("totals");
+    expect(reportAccess(p({ guestOf: new Set(["e1"]) }), res)).toBeNull();
+    expect(reportAccess(p({ eventRoles: { e9: ["HOST"] } }), res)).toBeNull();
+    expect(reportAccess(null, res)).toBeNull();
   });
 });
