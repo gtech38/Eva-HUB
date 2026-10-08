@@ -16,6 +16,7 @@ Households, guests, per-guest sub-event invites, RSVP, CSV import, invitations a
 - ADM-009 RSVP report exports and vendor meal counts
 - ADM-010 Google Contacts import
 - ADM-011 Google OAuth app verification (external)
+- ADM-028 Parse admin date inputs in the event's timezone; startsOn-only events end at local end of day
 
 ## Definition of Done
 - [ ] A host sets a reminder deadline; at `sendAt` every household with a PENDING invited sub-event receives an SMS (or email when no phone), opted-out numbers excluded, exactly once.

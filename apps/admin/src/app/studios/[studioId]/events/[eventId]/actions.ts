@@ -9,11 +9,28 @@ import { act, EmailSchema, str, opt, bool, localized, type ActionState } from "@
 import { authorize, requireSignedIn } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { userForEmail } from "@/lib/users";
+import { extendInviteTokens } from "@/lib/inviteTokens";
 
 async function loadEvent(studioId: string, eventId: string) {
   const e = await prisma.event.findFirst({ where: { id: eventId, studioId } });
   if (!e) throw new Error("Event not found");
   return e;
+}
+
+/**
+ * A date change may move the event end later: keep live invitation links valid until end + 90 d.
+ * Runs after the date write has committed, so a failure here is logged, not returned: the save
+ * itself succeeded and the next date change (or a resend) re-extends.
+ */
+async function reextendInvites(actorUserId: string, studioId: string, eventId: string) {
+  try {
+    const r = await extendInviteTokens(studioId, eventId);
+    if (r && r.count > 0) {
+      await audit({ studioId, eventId, actorUserId, action: "invite.extend", target: eventId, data: { count: r.count, expiresAt: r.expiresAt.toISOString() } });
+    }
+  } catch (e) {
+    console.error("[invite.extend] failed", { studioId, eventId }, e);
+  }
 }
 
 const base = (studioId: string, eventId: string) => `/studios/${studioId}/events/${eventId}`;
@@ -85,6 +102,7 @@ export async function updateEventSettings(_p: ActionState, fd: FormData): Promis
       }
     });
 
+    await reextendInvites(p.userId, studioId, eventId);
     if (before.faceIndexRetentionDays !== input.faceIndexRetentionDays) {
       await audit({ studioId, eventId, actorUserId: p.userId, action: "event.retention.change", target: eventId, data: { from: before.faceIndexRetentionDays, to: input.faceIndexRetentionDays, effective: effectiveRetention } });
     }
@@ -250,6 +268,7 @@ export async function saveSubEvent(_p: ActionState, fd: FormData): Promise<Actio
     } else {
       await prisma.subEvent.create({ data: { eventId, ...data } });
     }
+    await reextendInvites(p.userId, studioId, eventId);
     revalidatePath(`${base(studioId, eventId)}/schedule`);
     return { ok: true, message: "Saved." };
   });

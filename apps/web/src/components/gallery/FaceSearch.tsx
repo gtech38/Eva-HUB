@@ -1,16 +1,18 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { PhotoDTO } from "@/lib/gallery";
 import { PhotoGrid, type GalleryStrings } from "./PhotoGrid";
+import { consentFor, type ConsentTexts, type ConsentView } from "@/lib/consentView";
+import { ConsentText } from "./ConsentText";
 
 export type FaceStrings = {
   title: string;
   intro: string;
-  consentLabel: string;
-  consentDetail: string;
-  rememberLabel: string;
-  rememberDetail: string;
+  /** Disclosure summary for the full consent text ("What you're agreeing to"). */
+  consentFull: string;
+  consentVersion: string;
   searchFor: string;
   me: string;
   takeSelfie: string;
@@ -28,6 +30,7 @@ type Result = { subject: string; photos: PhotoDTO[] };
 
 type Props = {
   strings: FaceStrings;
+  consentTexts: ConsentTexts;
   gallery: GalleryStrings;
   subjects: Subject[];
   canRemember: boolean;
@@ -35,7 +38,7 @@ type Props = {
   previous: { me: PhotoDTO[]; family: Array<{ guestId: string; name: string; photos: PhotoDTO[] }> };
 };
 
-export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavorite, previous }: Props) {
+export function FaceSearch({ strings: S, consentTexts, gallery, subjects, canRemember, canFavorite, previous }: Props) {
   const [subject, setSubject] = useState(subjects[0]?.id ?? "me");
   const [consent, setConsent] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -43,6 +46,9 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+  const shown = consentFor(subject, consentTexts);
+  const profileShown = canRemember && subject === "me";
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -55,11 +61,24 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
       fd.append("file", file);
       fd.append("subject", subject);
       fd.append("consent", consent ? "on" : "");
-      if (remember && subject === "me") fd.append("remember", "on");
+      // Prove which words were shown; the route rejects anything but the current text.
+      fd.append("consentVersion", shown.version);
+      fd.append("consentLocale", shown.locale);
+      if (remember && profileShown) {
+        fd.append("remember", "on");
+        fd.append("profileConsentVersion", consentTexts.profile.version);
+      }
       const res = await fetch("/api/face/search", { method: "POST", body: fd });
       const body = (await res.json().catch(() => ({ ok: false, reason: "unavailable" }))) as { ok: boolean; reason?: string; photos?: PhotoDTO[] };
-      if (!body.ok) setError(S.errors[body.reason ?? ""] ?? S.errors.unavailable);
-      else setResult({ subject, photos: body.photos ?? [] });
+      if (!body.ok) {
+        setError(S.errors[body.reason ?? ""] ?? S.errors.unavailable);
+        if (body.reason === "consent_stale") {
+          // The text changed since this page loaded: reload it and ask for consent again.
+          setConsent(false);
+          setRemember(false);
+          router.refresh();
+        }
+      } else setResult({ subject, photos: body.photos ?? [] });
     } catch {
       setError(S.errors.unavailable);
     } finally {
@@ -78,7 +97,15 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
         {subjects.length > 1 && (
           <label className="mt-5 block text-sm">
             <span className="mb-1 block text-muted">{S.searchFor}</span>
-            <select value={subject} onChange={(e) => setSubject(e.target.value)} className="input">
+            <select
+              value={subject}
+              onChange={(e) => {
+                // Consent is per subject: searching for yourself and for a child are different texts.
+                setSubject(e.target.value);
+                setConsent(false);
+              }}
+              className="input"
+            >
               {subjects.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.label}
@@ -88,22 +115,14 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
           </label>
         )}
 
-        <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm">
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1 h-4 w-4 accent-[var(--accent)]" />
-          <span>
-            <span className="font-medium">{S.consentLabel}</span>
-            <span className="mt-1 block text-muted">{S.consentDetail}</span>
-          </span>
-        </label>
+        <ConsentCheckbox checked={consent} onChange={setConsent} view={shown} className="mt-5" />
+        <ConsentText key={shown.version} summary={S.consentFull} versionLabel={S.consentVersion} text={shown} testId="face-consent-text" />
 
-        {canRemember && subject === "me" && (
-          <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm">
-            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="mt-1 h-4 w-4 accent-[var(--accent)]" />
-            <span>
-              <span className="font-medium">{S.rememberLabel}</span>
-              <span className="mt-1 block text-muted">{S.rememberDetail}</span>
-            </span>
-          </label>
+        {profileShown && (
+          <>
+            <ConsentCheckbox checked={remember} onChange={setRemember} view={consentTexts.profile} className="mt-4" />
+            <ConsentText summary={S.consentFull} versionLabel={S.consentVersion} text={consentTexts.profile} testId="face-profile-consent-text" />
+          </>
         )}
 
         <div className="mt-6">
@@ -156,5 +175,18 @@ export function FaceSearch({ strings: S, gallery, subjects, canRemember, canFavo
         </section>
       )}
     </div>
+  );
+}
+
+/** Checkbox whose label and summary come from the versioned consent file. */
+function ConsentCheckbox({ checked, onChange, view, className }: { checked: boolean; onChange: (v: boolean) => void; view: ConsentView; className: string }) {
+  return (
+    <label className={`${className} flex cursor-pointer items-start gap-3 text-sm`}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-1 h-4 w-4 accent-[var(--accent)]" />
+      <span lang={view.locale}>
+        <span className="font-medium">{view.label}</span>
+        <span className="mt-1 block text-muted">{view.summary}</span>
+      </span>
+    </label>
   );
 }

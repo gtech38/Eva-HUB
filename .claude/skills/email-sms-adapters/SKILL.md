@@ -18,7 +18,8 @@ description: Use when sending or tracking email/SMS: packages/shared/src/email.t
 | `packages/shared/src/sms.ts` | `SmsMessage {to, body}`, `SmsSender`, `ConsoleSms` (logs to stdout), `sms()` singleton, `smsSegments()` |
 | `packages/shared/src/env.ts` | `EMAIL_PROVIDER` enum, `SMS_PROVIDER` enum (`console` only), SMTP vars, `EMAIL_FROM` |
 | `packages/db/prisma/schema.prisma` | `Message` (`studioId`, `eventId?`, `householdId?`, `guestId?`, `channel`, `purpose`, `to`, `locale`, `providerId?`, `status`, `error?`), enums `MessagePurpose` (INVITATION, REMINDER, MAGIC_LINK, OTP, GALLERY_READY, RECEIPT), `MessageStatus` (QUEUED, SENT, DELIVERED, OPENED, CLICKED, BOUNCED, FAILED, SUPPRESSED); `ContactPoint.smsOptOut`; `InviteToken`; `ReminderRule` |
-| `apps/admin/src/lib/invites.ts` | `inviteExpiry(event)` (`startsOn + 90d` or `now + 180d`), `buildMessages(event, guest, link, intro)` -> subject/text/html/smsBody |
+| `apps/admin/src/lib/invites.ts` | `buildMessages(event, guest, link, intro)` -> subject/text/html/smsBody (presentation only) |
+| `packages/shared/src/invites.ts` | `eventEnd(event)`, `inviteExpiry(event)` (event end + `INVITE_GRACE_DAYS` 90, or `now + 180d` without dates); admin `lib/inviteTokens.ts` `extendInviteTokens()` re-extends live tokens after date changes (audit `invite.extend`) |
 | `apps/admin/src/app/studios/[studioId]/events/[eventId]/invites/actions.ts` | `sendInvitations` (channels, scope all/pending, onlyUnsent), `resendInvite` (revokes live tokens, reissues on every channel), `saveReminderRule` (enqueues `FIRE_REMINDER` at `sendAt`, dedupe `reminder:{ruleId}`), `deleteReminderRule`, `previewInvite` |
 | `apps/admin/src/app/studios/[studioId]/events/[eventId]/invites/page.tsx`, `InviteComposer.tsx` | recipients table with active links / last message, reminder rules |
 | `apps/web/src/app/sites/[slug]/auth/actions.ts` | guest magic link by email or SMS; writes `Message MAGIC_LINK` |
@@ -32,7 +33,7 @@ description: Use when sending or tracking email/SMS: packages/shared/src/email.t
 - **Invitation = personal token per guest per channel.** `InviteToken { tokenHash, guestId, channel, sentTo, expiresAt, revokedAt?, lastUsedAt? }`; link `${eventOrigin(slug)}/i/${token}`; reusable until revoked; "resend" revokes all live tokens for that guest first. Children never receive invitations; adults without email or phone are reached through their household.
 - **Opt-out is honoured before sending**: `optOuts()` looks up `ContactPoint.smsOptOut` for the target phones and records `SUPPRESSED` instead of sending.
 - **Copy is English-only on the admin side** (`buildMessages`), with the face-search notice included; guest magic-link copy uses `ui()` in the guest's locale. SMS bodies are short: `"{title}: you're invited! Schedule & RSVP: {link}"`.
-- **Audit:** `invites.send` (counts), `invite.resend` (per-channel results), `reminder.create`, `reminder.delete`.
+- **Audit:** `invites.send` (counts), `invite.resend` (per-channel results), `invite.extend` (`{ count, expiresAt }`; `saveSubEvent`/`updateEventSettings` moved the event end later and live tokens were extended), `reminder.create`, `reminder.delete`.
 - **Reminders** are host-scheduled `ReminderRule` rows plus a delayed job; actually composing and sending the reminder is not implemented (worker stub). docs/01 §7 describes the intended behaviour: SMS to households with any PENDING invited sub-event, email if no phone.
 
 ## Common tasks
@@ -65,7 +66,7 @@ cd apps/admin && pnpm exec tsx scripts/smoke-check-invites.mts
 - Seed emails lack a TLD (`lakshmi@localhost`); real providers will reject them. Zod `.email()` rejects them too -- use `EmailSchema()` from `apps/admin/src/lib/action.ts`.
 - `sendInvitations` loops sequentially and writes one `Message` per channel per guest; 500 guests x 2 channels inside one server action will approach timeouts -- move to `SEND_MESSAGE` jobs before scale.
 - `Message.locale` is `event.defaultLocale`, not the recipient's preference (there is no per-guest locale yet).
-- Invite tokens are valid long after the event (`startsOn + 90d`); expiry is per token, so a resend extends access.
+- Invite tokens are valid until the event end (latest sub-event end, else `startsOn`) + 90 d; expiry is per token, so a resend extends access, and moving the schedule later re-extends live tokens.
 - Admin magic links do not create `Message` rows; guest magic links do (`MAGIC_LINK`).
 - The console SMS/email senders print with an emoji prefix in server logs (`sms.ts`, `email.ts`); fine for logs, but UI copy must stay emoji-free.
 

@@ -7,27 +7,20 @@ import { FaceSearch, type FaceStrings } from "@/components/gallery/FaceSearch";
 import { galleryStrings } from "@/lib/gallery-strings";
 import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs, type PhotoDTO } from "@/lib/gallery";
 import { fullName } from "@/lib/format";
+import { consentTextsFor } from "@/lib/consentTexts";
+import { FACE_PROFILE_ENROLMENT, faceSearchAllowed } from "@/lib/faceConsent";
 
 export const dynamic = "force-dynamic";
 
+// Consent checkbox labels, summaries and full texts come from legal/consent/* (versioned), not here.
 const S = {
   intro: {
-    en: "Take a selfie and we'll find the photos you appear in. Your selfie is used once to compute a face signature and is never stored.",
-    te: "ఒక సెల్ఫీ తీయండి, మీరు ఉన్న ఫోటోలను మేము కనుగొంటాము. మీ సెల్ఫీ ఒకసారి మాత్రమే ఉపయోగించబడుతుంది మరియు ఎప్పుడూ నిల్వ చేయబడదు.",
-    hi: "एक सेल्फ़ी लें और हम वे तस्वीरें ढूँढेंगे जिनमें आप हैं। आपकी सेल्फ़ी केवल एक बार उपयोग होती है और कभी संग्रहीत नहीं की जाती।",
+    en: "Take a selfie and we'll find the photos you appear in. Your selfie is processed temporarily to compute a face signature, then deleted. It is never saved.",
+    te: "ఒక సెల్ఫీ తీయండి, మీరు ఉన్న ఫోటోలను మేము కనుగొంటాము. ముఖ సంతకాన్ని లెక్కించడానికి మీ సెల్ఫీ తాత్కాలికంగా ప్రాసెస్ చేయబడి, ఆ తర్వాత తొలగించబడుతుంది. అది ఎప్పుడూ సేవ్ చేయబడదు.",
+    hi: "एक सेल्फ़ी लें और हम वे तस्वीरें ढूँढेंगे जिनमें आप हैं। चेहरा-हस्ताक्षर बनाने के लिए आपकी सेल्फ़ी को अस्थायी रूप से संसाधित करके हटा दिया जाता है। वह कभी सहेजी नहीं जाती।",
   },
-  consentLabel: { en: "I agree to a one-time face search", te: "ఒకసారి ముఖ శోధనకు నేను అంగీకరిస్తున్నాను", hi: "मैं एक बार की चेहरा खोज के लिए सहमत हूँ" },
-  consentDetail: {
-    en: "A face signature is computed from your selfie and compared with faces in this event's gallery. The selfie is discarded immediately. The gallery's face index is deleted after the studio's retention period.",
-    te: "మీ సెల్ఫీ నుండి ముఖ సంతకం లెక్కించబడి ఈ ఈవెంట్ గ్యాలరీలోని ముఖాలతో పోల్చబడుతుంది. సెల్ఫీ వెంటనే తొలగించబడుతుంది.",
-    hi: "आपकी सेल्फ़ी से एक चेहरा-हस्ताक्षर बनाकर इस आयोजन की गैलरी के चेहरों से मिलाया जाता है। सेल्फ़ी तुरंत हटा दी जाती है।",
-  },
-  rememberLabel: { en: "Remember my face (optional)", te: "నా ముఖాన్ని గుర్తుంచుకో (ఐచ్ఛికం)", hi: "मेरा चेहरा याद रखें (वैकल्पिक)" },
-  rememberDetail: {
-    en: "Keep only the face signature on your account so new galleries you're invited to are matched automatically. Adults only. You can revoke this at any time.",
-    te: "కొత్త గ్యాలరీలు స్వయంచాలకంగా సరిపోల్చడానికి ముఖ సంతకాన్ని మాత్రమే మీ ఖాతాలో ఉంచండి. పెద్దలకు మాత్రమే.",
-    hi: "केवल चेहरा-हस्ताक्षर आपके खाते में रखा जाता है ताकि नई गैलरी अपने आप मिलाई जा सकें। केवल वयस्कों के लिए।",
-  },
+  consentFull: { en: "What you're agreeing to", te: "మీరు దేనికి అంగీకరిస్తున్నారు", hi: "आप किस बात के लिए सहमति दे रहे हैं" },
+  consentVersion: { en: "Consent text version", te: "అంగీకార పాఠం వెర్షన్", hi: "सहमति पाठ संस्करण" },
   searchFor: { en: "Search for", te: "ఎవరి కోసం వెతకాలి", hi: "किसके लिए खोजें" },
   me: { en: "Me", te: "నేను", hi: "मैं" },
   takeSelfie: { en: "Take a selfie", te: "సెల్ఫీ తీయండి", hi: "सेल्फ़ी लें" },
@@ -42,6 +35,11 @@ const S = {
   errNoFace: { en: "We couldn't find a face in that photo. Try again with your face centered and well lit.", te: "ఆ ఫోటోలో ముఖం కనిపించలేదు. మళ్ళీ ప్రయత్నించండి.", hi: "उस तस्वीर में चेहरा नहीं मिला। कृपया पुनः प्रयास करें।" },
   errMultiple: { en: "Please use a selfie with just one face.", te: "ఒకే ముఖం ఉన్న సెల్ఫీ ఉపయోగించండి.", hi: "कृपया केवल एक चेहरे वाली सेल्फ़ी का उपयोग करें।" },
   errConsent: { en: "Please tick the consent box first.", te: "దయచేసి ముందుగా అంగీకార పెట్టెను టిక్ చేయండి.", hi: "कृपया पहले सहमति बॉक्स पर टिक करें।" },
+  errStale: {
+    en: "The consent text has been updated since this page loaded. Please read it again and tick the box before searching.",
+    te: "ఈ పేజీ తెరిచిన తర్వాత అంగీకార పాఠం మారింది. దయచేసి దాన్ని మళ్ళీ చదివి, శోధించే ముందు పెట్టెను టిక్ చేయండి.",
+    hi: "यह पेज खुलने के बाद सहमति पाठ बदल गया है। कृपया इसे फिर से पढ़ें और खोजने से पहले बॉक्स पर टिक करें।",
+  },
   errOptOut: { en: "Face search has been turned off for this guest.", te: "ఈ అతిథికి ముఖ శోధన ఆపివేయబడింది.", hi: "इस अतिथि के लिए चेहरा खोज बंद कर दी गई है।" },
   errTooLarge: { en: "That image is too large. Please use a photo under 12 MB.", te: "ఆ చిత్రం చాలా పెద్దది. 12 MB లోపు ఫోటో ఉపయోగించండి.", hi: "वह छवि बहुत बड़ी है। कृपया 12 MB से छोटी तस्वीर का उपयोग करें।" },
 } satisfies Record<string, LocalizedText>;
@@ -51,10 +49,8 @@ function faceStrings(locale: Locale): FaceStrings {
   return {
     title: "",
     intro: g("intro"),
-    consentLabel: g("consentLabel"),
-    consentDetail: g("consentDetail"),
-    rememberLabel: g("rememberLabel"),
-    rememberDetail: g("rememberDetail"),
+    consentFull: g("consentFull"),
+    consentVersion: g("consentVersion"),
     searchFor: g("searchFor"),
     me: g("me"),
     takeSelfie: g("takeSelfie"),
@@ -69,6 +65,7 @@ function faceStrings(locale: Locale): FaceStrings {
       no_face: g("errNoFace"),
       multiple_faces: g("errMultiple"),
       consent_required: g("errConsent"),
+      consent_stale: g("errStale"),
       opted_out: g("errOptOut"),
       too_large: g("errTooLarge"),
       disabled: g("disabled"),
@@ -93,7 +90,7 @@ export default async function MyPhotosPage() {
     </p>
   );
 
-  if (!event.faceSearchEnabled || !viewer.can("face.search")) {
+  if (!event.faceSearchEnabled || !faceSearchAllowed(process.env.NODE_ENV) || !viewer.can("face.search")) {
     return (
       <div>
         {back}
@@ -127,13 +124,14 @@ export default async function MyPhotosPage() {
     })),
   );
 
-  const canRemember = !!viewer.guest && !viewer.guest.isChild;
+  // Hidden until face profiles can be revoked by their owner (WEB-006); the route ignores `remember` too.
+  const canRemember = FACE_PROFILE_ENROLMENT && !!viewer.guest && !viewer.guest.isChild;
 
   return (
     <div>
       {back}
       <PageHeader title={G.myPhotos} />
-      <FaceSearch strings={F} gallery={G} subjects={subjects} canRemember={canRemember} canFavorite={viewer.can("favorites")} previous={{ me, family }} />
+      <FaceSearch strings={F} consentTexts={consentTextsFor(locale)} gallery={G} subjects={subjects} canRemember={canRemember} canFavorite={viewer.can("favorites")} previous={{ me, family }} />
     </div>
   );
 }
