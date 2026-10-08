@@ -74,17 +74,32 @@ export async function enqueue(
 ) {
   const db = opts.tx ?? prisma;
   if (opts.dedupeKey) {
-    // Coalescing enqueue, matching the worker's semantics (workers/media/hub_worker/jobs.py):
-    // QUEUED → refresh payload/runAt; SUCCEEDED/FAILED/DEAD → reset to QUEUED; RUNNING → leave alone.
+    // Coalescing enqueue. ONE semantics, shared with the worker's ON CONFLICT upsert
+    // (workers/media/hub_worker/jobs.py `enqueue`) -- keep the two in lock-step:
+    //   * no row            -> insert
+    //   * QUEUED            -> payload refreshed; runAt = GREATEST(existing, new); attempts kept
+    //   * SUCCEEDED/FAILED/DEAD -> reset to QUEUED; runAt = new; attempts = 0
+    //   * RUNNING           -> untouched (returned as-is; the worker returns None)
+    //   * always on update  -> lastError/lockedBy/lockedAt cleared; `type` is NOT changed
+    // Unlike the worker this is read-then-write, not a single upsert; pass `tx` when that matters.
     const runAt = opts.runAt ?? new Date();
     const existing = await db.job.findUnique({ where: { dedupeKey: opts.dedupeKey } });
     if (!existing) {
       return db.job.create({ data: { type, payload, runAt, dedupeKey: opts.dedupeKey } });
     }
     if (existing.status === "RUNNING") return existing;
+    const queued = existing.status === "QUEUED";
     return db.job.update({
       where: { id: existing.id },
-      data: { type, payload, runAt, status: "QUEUED", attempts: 0, lastError: null, lockedBy: null, lockedAt: null },
+      data: {
+        payload,
+        status: "QUEUED",
+        runAt: queued && existing.runAt > runAt ? existing.runAt : runAt,
+        attempts: queued ? existing.attempts : 0,
+        lastError: null,
+        lockedBy: null,
+        lockedAt: null,
+      },
     });
   }
   return db.job.create({ data: { type, payload, runAt: opts.runAt ?? new Date() } });

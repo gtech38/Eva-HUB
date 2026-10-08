@@ -7,7 +7,8 @@ failing test first, run it, watch it fail, then come back.
 
 Escape hatches (both leave an audit trail):
   * put `// tdd-exempt: <reason>` (or `# tdd-exempt:`) in the content you are writing — for
-    glue/wiring that genuinely has no behaviour;
+    glue/wiring that genuinely has no behaviour; a file that already carries the marker in its
+    first 4 KB stays exempt for later edits (Edit, Write and MultiEdit payloads are all scanned);
   * TDD_GATE=off in the environment for a one-off session (don't commit with it on).
 """
 import os
@@ -29,7 +30,7 @@ if not path or not is_source(path) or is_test(path):
 if existing_test(path):
     sys.exit(0)
 
-reason = exempt_marker(p)
+reason = exempt_marker(p, path)
 if reason:
     print(f"tdd-gate: exempt ({reason}) — {rel(path)}", file=sys.stderr)
     sys.exit(0)

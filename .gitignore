@@ -17,3 +17,4 @@ workers/media/models/*.onnx
 .fseventsd
 coverage/
 .tsbuildinfo-hook
+.claude/.touched/

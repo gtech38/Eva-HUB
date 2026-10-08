@@ -4,14 +4,14 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && python3 session_start.py", "timeout": 15 }
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session_start.py\"", "timeout": 15 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && python3 prompt_context.py", "timeout": 5 }
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/prompt_context.py\"", "timeout": 5 }
         ]
       }
     ],
@@ -19,7 +19,7 @@
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && python3 tdd_gate.py", "timeout": 10 }
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/tdd_gate.py\"", "timeout": 10 }
         ]
       }
     ],
@@ -27,14 +27,14 @@
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && python3 post_edit_check.py", "timeout": 200 }
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/post_edit_check.py\"", "timeout": 200 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && python3 stop_verify.py", "timeout": 600 }
+          { "type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/stop_verify.py\"", "timeout": 600 }
         ]
       }
     ]

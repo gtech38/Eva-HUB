@@ -43,9 +43,11 @@ Connection: `postgresql://hub:hub@localhost:5433/hub` (compose maps 5433 -> 5432
 |---|---|---|
 | no dedupeKey | plain insert | plain insert |
 | key absent | insert | insert |
-| key QUEUED | update payload/runAt (TS uses the new runAt; Python takes the later of the two) | `ON CONFLICT ... DO UPDATE` |
-| key SUCCEEDED/FAILED/DEAD | reset to QUEUED, attempts 0, clear lock/error | same |
+| key QUEUED | payload refreshed; `runAt = GREATEST(existing, new)`; `attempts` kept; lock/error cleared | same (`ON CONFLICT ... DO UPDATE`) |
+| key SUCCEEDED/FAILED/DEAD | reset to QUEUED; `runAt = new`; `attempts = 0`; lock/error cleared | same |
 | key RUNNING | return existing, no change | returns `None` |
+
+Both sides implement the **same** semantics (the TS side mirrors the worker's upsert; `packages/db/src/index.test.ts` and `workers/media/tests/test_jobs.py::test_dedupe_key_semantics` pin it). Neither side changes `type` on an update. The one difference: TS is read-then-update, the worker is a single `INSERT ... ON CONFLICT`; pass `tx` from TS when atomicity matters.
 
 Dedupe keys in use: `process:{photoId}`, `faces:{photoId}`, `cluster:{eventId}`, `reminder:{ruleId}`, `purge-face:{eventId}:{ts}`. The claim query is `FOR UPDATE SKIP LOCKED ... WHERE status='QUEUED' AND "runAt" <= now()`; a retrying failure sits in QUEUED with `lastError` set, never in FAILED (see `python-media-worker`). Pass `tx` to enqueue inside the same transaction as the row that triggers the job.
 

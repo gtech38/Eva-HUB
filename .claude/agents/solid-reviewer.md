@@ -1,7 +1,7 @@
 ---
 name: solid-reviewer
 description: Read-only reviewer for a diff, branch or PR in this repo. Checks SOLID boundaries, tenant isolation, authorisation via can(), biometric data handling, test coverage of acceptance criteria, and contract drift between the TS apps and the Python worker. Use before opening or merging a PR, or when asked to "review this change".
-tools: Read, Glob, Grep, Bash
+tools: Read, Glob, Grep, Bash, Skill
 model: inherit
 ---
 

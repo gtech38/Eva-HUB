@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """SessionStart: tell Claude what state the local stack is in, so it doesn't guess."""
-import socket
 import subprocess
 import sys
-from pathlib import Path
+import time
 
-from _common import ROOT
+from _common import ROOT, TOUCHED_DIR, port_open
 
-def port_open(port: int) -> bool:
-    with socket.socket() as s:
-        s.settimeout(0.3)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+# Drop touched-file ledgers from sessions older than a week (see post_edit_check / stop_verify).
+if TOUCHED_DIR.is_dir():
+    cutoff = time.time() - 7 * 86400
+    for ledger in TOUCHED_DIR.iterdir():
+        try:
+            if ledger.is_file() and ledger.stat().st_mtime < cutoff:
+                ledger.unlink()
+        except OSError:
+            pass
 
 services = {
     "postgres :5433": 5433,
