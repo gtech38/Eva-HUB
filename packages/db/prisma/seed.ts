@@ -9,7 +9,8 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-const ROOT = process.env.ROOT_DOMAIN ?? "localhost";
+// packages/db cannot import env() (@hub/shared depends on @hub/db); same rule: a blank value means unset.
+const ROOT = process.env.ROOT_DOMAIN?.trim() || "localhost";
 
 async function upsertUserWithEmail(email: string, displayName: string, extra: Partial<{ isPlatformAdmin: boolean }> = {}) {
   const existing = await prisma.contactPoint.findUnique({ where: { kind_value: { kind: "EMAIL", value: email } }, include: { user: true } });
