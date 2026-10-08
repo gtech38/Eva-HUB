@@ -70,6 +70,17 @@ any problem the script prints every error, exits 1 and writes nothing. Unchanged
 no API calls; `gh` is retried with back-off when GitHub rate-limits, so a full sync of a
 hundred tickets is safe to run repeatedly.
 
+## Label taxonomy
+
+A ticket's `labels:` must use exactly one `type:`, one `priority:` and one `size:` label, any number of `area:` labels, and optionally `agent-ready`. `--check` rejects anything else offline.
+
+| Prefix | Values |
+|---|---|
+| `type:` | `feature`, `bug` (a defect in shipped code, often found in review), `chore`, `tech-debt`, `spike`, `epic` |
+| `area:` | `web`, `admin`, `worker`, `db`, `shared`, `infra`, `docs`, `legal` |
+| `priority:` | `p0` (blocks MVP launch), `p1` (first paying event), `p2`, `p3` |
+| `size:` | `S` (≤ half a day), `M` (1–2 days), `L` (epics only; split before `agent-ready`) |
+
 ## Status labels
 
 | Label | Owner | Meaning |
