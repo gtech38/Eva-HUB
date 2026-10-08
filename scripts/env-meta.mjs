@@ -235,7 +235,7 @@ export const SECTIONS = [
     title: "Rate limits",
     intro: [
       "packages/shared/src/ratePolicies.ts; docs/01 §9. Overrides are max/windowSec (1..1000000 / 1..604800),",
-      "checked when web/admin start: a bad value logs the reason and the process exits with code 1. Per-IP limits are loose on purpose (venue",
+      "checked when web/admin start: a bad value logs the reason and the process exits with code 1 (`next start`; `next dev` stops before Ready). Per-IP limits are loose on purpose (venue",
       "Wi-Fi, carrier NAT); the per-address limits are the real control.",
     ],
     vars: {

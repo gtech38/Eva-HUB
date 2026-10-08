@@ -227,7 +227,7 @@ describe("TRUSTED_PROXY_HOPS (SHR-003)", () => {
     expect((await envWith({ ...local, TRUSTED_PROXY_HOPS: "2" }))().TRUSTED_PROXY_HOPS).toBe(2);
   });
 
-  it.each(["0", "11", "1.5", "two"])("rejects %s", async (value) => {
+  it.each(["0", "11", "1.5", "two", "0x2", "1e1", "2.0"])("rejects %s (digits only)", async (value) => {
     const env = await envWith({ ...local, TRUSTED_PROXY_HOPS: value });
     expect(() => env()).toThrow(/TRUSTED_PROXY_HOPS/);
   });

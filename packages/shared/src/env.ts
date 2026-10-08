@@ -62,7 +62,7 @@ const schema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().default(30),
   INVITE_SESSION_TTL_DAYS: z.coerce.number().default(90),
 
-  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1), // read per request by clientIp.ts
+  TRUSTED_PROXY_HOPS: z.string().regex(/^\d+$/).default("1").pipe(z.coerce.number().int().min(1).max(10)), // digits only; read by clientIp.ts
   RATE_LIMIT_SIGN_IN_IP: z.string().optional(), // RATE_LIMIT_*: "max/windowSec", parsed and bounded by ratePolicies.ts
   RATE_LIMIT_SIGN_IN_ADDRESS_IP: z.string().optional(),
   RATE_LIMIT_SIGN_IN_ADDRESS: z.string().optional(),

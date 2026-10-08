@@ -5,7 +5,7 @@ import { acquireSlot, limit, type LimitResult, type RateLimitStore, type RateWin
 /**
  * Every rate limit in the product, in one place (SHR-003). Override one with
  * `RATE_LIMIT_<POLICY_IN_SNAKE_CASE>=max/windowSec`, e.g. `RATE_LIMIT_SIGN_IN_ADDRESS_IP=5/900`.
- * Overrides are validated at server boot (`validateRateLimitConfig`, apps' instrumentation.ts).
+ * Overrides are checked at startup by `exitOnInvalidRateLimitConfig` (apps' src/instrumentation.ts).
  *
  * Shape of the sign-in limits: the strict per-address limit is keyed on (address, client IP), so a
  * stranger elsewhere cannot burn a guest's attempts; a looser address-only cap still bounds an
