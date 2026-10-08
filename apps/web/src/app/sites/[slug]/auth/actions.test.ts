@@ -117,7 +117,7 @@ describe("requestSignIn rate limits (SHR-003)", () => {
   it("off-list addresses are counted exactly like on-list ones, so a trip reveals nothing about the list", async () => {
     for (let i = 0; i < 6; i++) await signIn("stranger@example.com");
     for (let i = 0; i < 6; i++) await signIn("priya@localhost");
-    expect(limits.audits.map((a) => a.data.policy)).toStrictEqual(["signInAddress", "signInAddress"]);
+    expect(limits.audits.map((a) => a.data.policy)).toStrictEqual(["signInAddressIp", "signInAddressIp"]);
   });
 
   it("limits SMS sign-in per phone number the same way", async () => {
@@ -125,20 +125,52 @@ describe("requestSignIn rate limits (SHR-003)", () => {
     expect(sent.sms).toStrictEqual(Array(5).fill("+15551234567"));
   });
 
-  it("30 requests per IP per 15 minutes across different addresses, then nothing is sent", async () => {
-    for (let i = 0; i < 31; i++) db.onList.add(`guest${i}@localhost`);
-    for (let i = 0; i < 31; i++) await signIn(`guest${i}@localhost`);
-    expect(sent.emails).toHaveLength(30);
-    expect(sent.emails).not.toContain("guest30@localhost");
+  it("60 requests per IP per 15 minutes across different addresses, then nothing is sent", async () => {
+    for (let i = 0; i < 61; i++) db.onList.add(`guest${i}@localhost`);
+    for (let i = 0; i < 61; i++) await signIn(`guest${i}@localhost`);
+    expect(sent.emails).toHaveLength(60);
+    expect(sent.emails).not.toContain("guest60@localhost");
     req.headers = new Headers({ "x-forwarded-for": "198.51.100.7" });
-    await signIn("guest30@localhost");
-    expect(sent.emails, "another client is unaffected").toContain("guest30@localhost");
+    await signIn("guest60@localhost");
+    expect(sent.emails, "another client is unaffected").toContain("guest60@localhost");
+  });
+
+  it("a stranger on another network cannot burn a guest's attempts (strict limit is per address and IP)", async () => {
+    req.headers = new Headers({ "x-forwarded-for": "6.6.6.6" });
+    for (let i = 0; i < 10; i++) await signIn("priya@localhost");
+    expect(sent.emails).toHaveLength(5);
+    req.headers = new Headers({ "x-forwarded-for": "203.0.113.9" });
+    await signIn("priya@localhost");
+    expect(sent.emails, "the guest's own network still gets a link").toHaveLength(6);
+  });
+
+  it("an attacker rotating IPs is still capped at 20 per address per 15 minutes", async () => {
+    for (let i = 0; i < 25; i++) {
+      req.headers = new Headers({ "x-forwarded-for": `198.51.100.${i}` });
+      await signIn("priya@localhost");
+    }
+    expect(sent.emails).toHaveLength(20);
+  });
+
+  it("uses the client from a spoofed, appended X-Forwarded-For chain (rightmost hop)", async () => {
+    for (let i = 0; i < 6; i++) {
+      req.headers = new Headers({ "x-forwarded-for": `10.9.9.${i}, 203.0.113.9` });
+      await signIn("priya@localhost");
+    }
+    expect(sent.emails, "rotating the client-written first hop does not reset the pair limit").toHaveLength(5);
   });
 
   it("audits the trip once, scoped to the event, with the hashed key only", async () => {
     for (let i = 0; i < 8; i++) await signIn("priya@localhost");
     expect(limits.audits).toHaveLength(1);
-    expect(limits.audits[0]).toMatchObject({ action: "auth.rate_limited", studioId: "studio-1", eventId: "event-1", data: { policy: "signInAddress" } });
+    expect(limits.audits[0]).toMatchObject({ action: "auth.rate_limited", studioId: "studio-1", eventId: "event-1", data: { policy: "signInAddressIp" } });
     expect(JSON.stringify(limits.audits)).not.toContain("priya");
+  });
+
+  it("if the limiter fails, nothing is sent and the reply is unchanged", async () => {
+    limits.current = { check: async () => Promise.reject(new Error("db down")), acquire: async () => Promise.reject(new Error("db down")) };
+    const r = await signIn("priya@localhost");
+    expect(r).toStrictEqual({ message: "If you're on the guest list, we've sent you a link." });
+    expect(sent.emails).toStrictEqual([]);
   });
 });

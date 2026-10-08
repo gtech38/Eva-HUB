@@ -5,7 +5,8 @@ import { email, sms } from "@hub/shared";
 import { newToken, hashToken, normalizeContact } from "@hub/shared/auth";
 import { eventOrigin } from "@hub/shared/env";
 import { t, ui } from "@hub/shared/i18n";
-import { clientIp, rateLimits } from "@hub/shared/ratePolicies";
+import { addressAtIp, rateLimits } from "@hub/shared/ratePolicies";
+import { clientIp } from "@hub/shared/clientIp";
 import { headers } from "next/headers";
 import { getSite } from "@/lib/site";
 
@@ -102,10 +103,15 @@ export async function requestSignIn(_prev: SignInState, formData: FormData): Pro
   return done;
 }
 
-/** Per-IP first (so one client spraying addresses does not also lock those addresses out), then per address. */
+/**
+ * Per IP first (so one client spraying addresses does not also use up those addresses), then the
+ * strict per-(address, IP) limit, then the looser address-only cap. Each stops at the first refusal.
+ */
 async function withinSignInLimits(address: string, event: { id: string; studioId: string }) {
   const ctx = { studioId: event.studioId, eventId: event.id };
-  if (!(await rateLimits.check("signInIp", clientIp(await headers()), ctx)).ok) return false;
+  const ip = clientIp(await headers());
+  if (!(await rateLimits.check("signInIp", ip, ctx)).ok) return false;
+  if (!(await rateLimits.check("signInAddressIp", addressAtIp(address, ip), ctx)).ok) return false;
   return (await rateLimits.check("signInAddress", address, ctx)).ok;
 }
 

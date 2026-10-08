@@ -6,7 +6,9 @@ import { setSessionCookie } from "@/lib/session";
 import { fullName } from "@/lib/format";
 import { inviteUsable } from "@/lib/inviteLink";
 import { INVITE_EXPIRED_PATH } from "@/lib/inviteNotice";
-import { clientIp, rateLimits } from "@hub/shared/ratePolicies";
+import { rateLimits } from "@hub/shared/ratePolicies";
+import { clientIp } from "@hub/shared/clientIp";
+import { ui } from "@hub/shared/i18n";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +28,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ token: stri
   const ip = clientIp(req.headers);
   const limited = await rateLimits.check("inviteIp", ip, { studioId: site.event.studioId, eventId: site.event.id });
   if (!limited.ok) {
-    return new NextResponse("Too many requests. Please try again later.", {
+    return new NextResponse(ui("tooManyRequests", site.locale), {
       status: 429,
-      headers: { "Retry-After": String(limited.retryAfterSec), "Cache-Control": "private, no-store" },
+      headers: { "Retry-After": String(limited.retryAfterSec), "Cache-Control": "private, no-store", "Content-Type": "text/plain; charset=utf-8" },
     });
   }
 
