@@ -1,8 +1,16 @@
 /**
- * All theme fonts are declared once (next/font requires module-scope constants) and
- * exposed as CSS variables on <html>. Each theme's tokens pick which variables feed
- * --font-display / --font-body / --font-script. Noto Telugu + Devanagari are always in
+ * All theme fonts are declared once (next/font requires module-scope constants and literal
+ * arguments) and exposed as CSS variables on <html>. Each theme's tokens pick which variables
+ * feed --font-display / --font-body / --font-script. Noto Telugu + Devanagari are always in
  * the fallback stack because Telugu glyphs are taller and longer than Latin.
+ *
+ * Self-hosted (WEB-012): the WOFF2 files live in ./font-files/<family>/ with their OFL licence;
+ * how they were built (source commit, axis ranges, subsets) is in ./font-files/README.md and
+ * ./font-files/build.sh. The build never contacts Google. Latin families are subset to Google's
+ * "latin" + "latin-ext" ranges (Inter: latin only, to stay in the 1.2 MB budget), the Noto
+ * families to their script. Variable files keep only the weight range the themes use;
+ * `fonts.test.ts` checks every `var(--font-*)` a theme references is declared here and
+ * `fontFiles.test.ts` checks the files themselves.
  *
  * Font choices follow docs/05-theme-references.md:
  *   Luxury              → Instrument Serif + Luxurious Script + Inter     (ref: Velvet Promise)
@@ -11,40 +19,140 @@
  *   Nursery Sage        → Cormorant Garamond italic + Inter                (baby shower)
  *   Telugu Traditional  → Marcellus + Noto Serif Telugu + Cormorant        (ceremonies)
  *   Midnight Gala       → Bodoni Moda + Manrope + JetBrains Mono           (ref: Vervee)
+ *
+ * adjustFontFallback mirrors what next/font/google did: Times New Roman metrics for serif
+ * families, Arial for everything else.
  */
-import {
-  Instrument_Serif,
-  Luxurious_Script,
-  Inria_Serif,
-  Cinzel,
-  Pinyon_Script,
-  Cormorant_Garamond,
-  Marcellus,
-  Bodoni_Moda,
-  Manrope,
-  JetBrains_Mono,
-  Inter,
-  Noto_Sans_Telugu,
-  Noto_Serif_Telugu,
-  Noto_Sans_Devanagari,
-  Noto_Serif_Devanagari,
-} from "next/font/google";
+import localFont from "next/font/local";
 
-export const instrumentSerif = Instrument_Serif({ subsets: ["latin"], weight: "400", style: ["normal", "italic"], variable: "--font-instrument", display: "swap", preload: false });
-export const luxuriousScript = Luxurious_Script({ subsets: ["latin"], weight: "400", variable: "--font-luxurious", display: "swap", preload: false });
-export const inriaSerif = Inria_Serif({ subsets: ["latin"], weight: ["300", "400", "700"], style: ["normal", "italic"], variable: "--font-inria", display: "swap", preload: false });
-export const cinzel = Cinzel({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-cinzel", display: "swap", preload: false });
-export const pinyonScript = Pinyon_Script({ subsets: ["latin"], weight: "400", variable: "--font-pinyon", display: "swap", preload: false });
-export const cormorant = Cormorant_Garamond({ subsets: ["latin"], weight: ["400", "500", "600"], style: ["normal", "italic"], variable: "--font-cormorant", display: "swap", preload: false });
-export const marcellus = Marcellus({ subsets: ["latin"], weight: "400", variable: "--font-marcellus", display: "swap", preload: false });
-export const bodoni = Bodoni_Moda({ subsets: ["latin"], weight: ["400", "500", "600"], style: ["normal", "italic"], variable: "--font-bodoni", display: "swap", preload: false });
-export const manrope = Manrope({ subsets: ["latin"], weight: ["300", "400", "500", "600"], variable: "--font-manrope", display: "swap", preload: false });
-export const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono", display: "swap", preload: false });
-export const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap", preload: false });
-export const notoTelugu = Noto_Sans_Telugu({ subsets: ["telugu"], weight: ["400", "600"], variable: "--font-telugu", display: "swap", preload: false });
-export const notoSerifTelugu = Noto_Serif_Telugu({ subsets: ["telugu"], weight: ["400", "600"], variable: "--font-telugu-serif", display: "swap", preload: false });
-export const notoDevanagari = Noto_Sans_Devanagari({ subsets: ["devanagari"], weight: ["400", "600"], variable: "--font-devanagari", display: "swap", preload: false });
-export const notoSerifDevanagari = Noto_Serif_Devanagari({ subsets: ["devanagari"], weight: ["400", "600"], variable: "--font-devanagari-serif", display: "swap", preload: false });
+export const instrumentSerif = localFont({
+  src: [
+    { path: "./font-files/instrument-serif/InstrumentSerif-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./font-files/instrument-serif/InstrumentSerif-Italic.woff2", weight: "400", style: "italic" },
+  ],
+  variable: "--font-instrument",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const luxuriousScript = localFont({
+  src: [{ path: "./font-files/luxurious-script/LuxuriousScript-Regular.woff2", weight: "400", style: "normal" }],
+  variable: "--font-luxurious",
+  display: "swap",
+  preload: false,
+});
+
+export const inriaSerif = localFont({
+  src: [
+    { path: "./font-files/inria-serif/InriaSerif-Light.woff2", weight: "300", style: "normal" },
+    { path: "./font-files/inria-serif/InriaSerif-LightItalic.woff2", weight: "300", style: "italic" },
+    { path: "./font-files/inria-serif/InriaSerif-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./font-files/inria-serif/InriaSerif-Italic.woff2", weight: "400", style: "italic" },
+    { path: "./font-files/inria-serif/InriaSerif-Bold.woff2", weight: "700", style: "normal" },
+    { path: "./font-files/inria-serif/InriaSerif-BoldItalic.woff2", weight: "700", style: "italic" },
+  ],
+  variable: "--font-inria",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const cinzel = localFont({
+  src: [{ path: "./font-files/cinzel/Cinzel-VF.woff2", weight: "400 600", style: "normal" }],
+  variable: "--font-cinzel",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const pinyonScript = localFont({
+  src: [{ path: "./font-files/pinyon-script/PinyonScript-Regular.woff2", weight: "400", style: "normal" }],
+  variable: "--font-pinyon",
+  display: "swap",
+  preload: false,
+});
+
+export const cormorant = localFont({
+  src: [
+    { path: "./font-files/cormorant-garamond/CormorantGaramond-VF.woff2", weight: "400 600", style: "normal" },
+    { path: "./font-files/cormorant-garamond/CormorantGaramond-Italic-VF.woff2", weight: "400 600", style: "italic" },
+  ],
+  variable: "--font-cormorant",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const marcellus = localFont({
+  src: [{ path: "./font-files/marcellus/Marcellus-Regular.woff2", weight: "400", style: "normal" }],
+  variable: "--font-marcellus",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const bodoni = localFont({
+  src: [
+    { path: "./font-files/bodoni-moda/BodoniModa-VF.woff2", weight: "400 600", style: "normal" },
+    { path: "./font-files/bodoni-moda/BodoniModa-Italic-VF.woff2", weight: "400 600", style: "italic" },
+  ],
+  variable: "--font-bodoni",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const manrope = localFont({
+  src: [{ path: "./font-files/manrope/Manrope-VF.woff2", weight: "300 600", style: "normal" }],
+  variable: "--font-manrope",
+  display: "swap",
+  preload: false,
+});
+
+export const jetbrainsMono = localFont({
+  src: [{ path: "./font-files/jetbrains-mono/JetBrainsMono-VF.woff2", weight: "400 500", style: "normal" }],
+  variable: "--font-mono",
+  display: "swap",
+  preload: false,
+});
+
+export const inter = localFont({
+  src: [{ path: "./font-files/inter/Inter-VF.woff2", weight: "100 900", style: "normal" }],
+  variable: "--font-inter",
+  display: "swap",
+  preload: false,
+});
+
+export const notoTelugu = localFont({
+  src: [{ path: "./font-files/noto-sans-telugu/NotoSansTelugu-VF.woff2", weight: "400 600", style: "normal" }],
+  variable: "--font-telugu",
+  display: "swap",
+  preload: false,
+});
+
+export const notoSerifTelugu = localFont({
+  src: [{ path: "./font-files/noto-serif-telugu/NotoSerifTelugu-VF.woff2", weight: "400 600", style: "normal" }],
+  variable: "--font-telugu-serif",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
+
+export const notoDevanagari = localFont({
+  src: [{ path: "./font-files/noto-sans-devanagari/NotoSansDevanagari-VF.woff2", weight: "400 600", style: "normal" }],
+  variable: "--font-devanagari",
+  display: "swap",
+  preload: false,
+});
+
+export const notoSerifDevanagari = localFont({
+  src: [{ path: "./font-files/noto-serif-devanagari/NotoSerifDevanagari-VF.woff2", weight: "400 600", style: "normal" }],
+  variable: "--font-devanagari-serif",
+  adjustFontFallback: "Times New Roman",
+  display: "swap",
+  preload: false,
+});
 
 export const fontVariableClasses = [
   instrumentSerif.variable,
