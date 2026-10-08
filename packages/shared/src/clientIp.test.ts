@@ -3,7 +3,7 @@
  * APPEND to X-Forwarded-For, the client is the Nth entry from the right; everything left of it is
  * client-controlled. Pure: no env reads (hops and production are passed in).
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clientIp, trustedProxyHops, UNKNOWN_CLIENT } from "./clientIp.ts";
 
 const xff = (value?: string) => new Headers(value === undefined ? {} : { "x-forwarded-for": value });
@@ -48,6 +48,22 @@ describe("clientIp", () => {
       expect(clientIp(xff(h), prod), JSON.stringify(h)).toBe(UNKNOWN_CLIENT);
       expect(clientIp(xff(h), dev), JSON.stringify(h)).toBeNull();
     }
+  });
+});
+
+describe("clientIp production default", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("follows the repo rule: APP_ENV wins over NODE_ENV", () => {
+    vi.stubEnv("TRUSTED_PROXY_HOPS", "");
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ENV", "production");
+    expect(clientIp(xff())).toBe(UNKNOWN_CLIENT);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ENV", "development");
+    expect(clientIp(xff())).toBeNull();
+    vi.stubEnv("APP_ENV", " ");
+    expect(clientIp(xff()), "a blank APP_ENV is unset, so NODE_ENV decides").toBe(UNKNOWN_CLIENT);
   });
 });
 

@@ -28,6 +28,7 @@ const KEYS = [
   "SESSION_TTL_DAYS",
   "INVITE_SESSION_TTL_DAYS",
   "EMAIL_FROM",
+  "TRUSTED_PROXY_HOPS",
 ] as const;
 type Vars = Partial<Record<(typeof KEYS)[number], string>>;
 
@@ -217,6 +218,18 @@ describe("blank values mean unset (same as the worker's _value in config.py)", (
     const env = await envWith({ ...local, S3_PUBLIC_ENDPOINT: " " });
     env();
     expect(process.env.S3_PUBLIC_ENDPOINT).toBe(" ");
+  });
+});
+
+describe("TRUSTED_PROXY_HOPS (SHR-003)", () => {
+  it("defaults to 1 and accepts 1..10", async () => {
+    expect((await envWith(local))().TRUSTED_PROXY_HOPS).toBe(1);
+    expect((await envWith({ ...local, TRUSTED_PROXY_HOPS: "2" }))().TRUSTED_PROXY_HOPS).toBe(2);
+  });
+
+  it.each(["0", "11", "1.5", "two"])("rejects %s", async (value) => {
+    const env = await envWith({ ...local, TRUSTED_PROXY_HOPS: value });
+    expect(() => env()).toThrow(/TRUSTED_PROXY_HOPS/);
   });
 });
 

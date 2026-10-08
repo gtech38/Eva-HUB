@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { withoutBlanks } from "./env.ts";
 
 /**
  * The client address for per-IP rate limits (SHR-003).
@@ -30,13 +31,19 @@ export function trustedProxyHops(source: EnvSource = process.env): number {
 
 export function clientIp(headers: Pick<Headers, "get">, opts: ClientIpOptions = {}): string | null {
   const hops = opts.hops ?? trustedProxyHops();
-  const production = opts.production ?? process.env.NODE_ENV === "production";
+  const production = opts.production ?? isProductionRuntime();
   const valid = (headers.get("x-forwarded-for") ?? "")
     .split(",")
     .map(normalizeIp)
     .filter((ip): ip is string => ip !== null);
   if (valid.length === 0) return production ? UNKNOWN_CLIENT : null;
   return valid[Math.max(0, valid.length - hops)]!;
+}
+
+/** The repo-wide rule (env.ts isProduction): APP_ENV wins over NODE_ENV; blank means unset. */
+function isProductionRuntime(): boolean {
+  const e = withoutBlanks({ APP_ENV: process.env.APP_ENV, NODE_ENV: process.env.NODE_ENV });
+  return (e.APP_ENV ?? e.NODE_ENV) === "production";
 }
 
 const V4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;

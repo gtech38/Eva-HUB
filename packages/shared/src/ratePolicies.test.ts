@@ -2,9 +2,20 @@
  * SHR-003 policies: the agreed numbers, bounded env overrides validated once, audit on trip.
  * Pure: memory store and a recording audit sink, injected clock. (Client IP: clientIp.test.ts.)
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { hashRateKey, memoryRateLimitStore } from "./ratelimit.ts";
-import { addressAtIp, RATE_LIMITS, ratePolicies, rateLimiter, validateRateLimitConfig, type RateAuditEntry } from "./ratePolicies.ts";
+import {
+  addressAtIp,
+  envName,
+  RATE_LIMITS,
+  ratePolicies,
+  rateLimiter,
+  validateRateLimitConfig,
+  type RateAuditEntry,
+  type RatePolicy,
+} from "./ratePolicies.ts";
 
 const SECRET = "test-policies-secret-0123456789";
 const NOW = new Date("2026-10-08T12:00:00.000Z");
@@ -51,6 +62,15 @@ describe("ratePolicies(env)", () => {
       expect(() => ratePolicies({ RATE_LIMIT_INVITE_IP: bad })).toThrow(/RATE_LIMIT_INVITE_IP/);
     },
   );
+});
+
+describe("env reference", () => {
+  it("every RATE_LIMIT_* override and TRUSTED_PROXY_HOPS is declared in env.ts, so docs/deploy/env.md lists it", () => {
+    const schema = readFileSync(fileURLToPath(new URL("./env.ts", import.meta.url)), "utf8");
+    for (const name of [...(Object.keys(RATE_LIMITS) as RatePolicy[]).map(envName), "TRUSTED_PROXY_HOPS"]) {
+      expect(schema, name).toMatch(new RegExp(`^  ${name}: z\\.`, "m"));
+    }
+  });
 });
 
 describe("validateRateLimitConfig (called at server boot)", () => {

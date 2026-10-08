@@ -62,6 +62,18 @@ const schema = z.object({
   SESSION_TTL_DAYS: z.coerce.number().default(30),
   INVITE_SESSION_TTL_DAYS: z.coerce.number().default(90),
 
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1), // read per request by clientIp.ts
+  RATE_LIMIT_SIGN_IN_IP: z.string().optional(), // RATE_LIMIT_*: "max/windowSec", parsed and bounded by ratePolicies.ts
+  RATE_LIMIT_SIGN_IN_ADDRESS_IP: z.string().optional(),
+  RATE_LIMIT_SIGN_IN_ADDRESS: z.string().optional(),
+  RATE_LIMIT_OTP_VERIFY_ADDRESS: z.string().optional(),
+  RATE_LIMIT_INVITE_IP: z.string().optional(),
+  RATE_LIMIT_FACE_SEARCH_USER: z.string().optional(),
+  RATE_LIMIT_FACE_SEARCH_CONCURRENT: z.string().optional(),
+  RATE_LIMIT_ADMIN_MAGIC_LINK_IP: z.string().optional(),
+  RATE_LIMIT_ADMIN_MAGIC_LINK_ADDRESS_IP: z.string().optional(),
+  RATE_LIMIT_ADMIN_MAGIC_LINK_ADDRESS: z.string().optional(),
+
   WORKER_INTERNAL_URL: z.string().default("http://localhost:8010"),
   FACE_MATCH_THRESHOLD: z.coerce.number().gt(0).lte(1).default(0.363),
 });
