@@ -7,21 +7,27 @@ import { email, sms, eventOrigin, hashToken, newToken } from "@hub/shared";
 import { act, str, bool, type ActionState } from "@/lib/action";
 import { authorize, requireSignedIn } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { inviteExpiry, buildMessages, type Ev, type G } from "@/lib/invites";
+import { inviteExpiry } from "@hub/shared/invites";
+import { buildMessages, type Ev, type G } from "@/lib/invites";
 
 const base = (studioId: string, eventId: string) => `/studios/${studioId}/events/${eventId}/invites`;
+
+/** The event plus the sub-event dates `inviteExpiry()` needs, scoped to the studio. */
+async function loadEvent(studioId: string, eventId: string) {
+  const event = await prisma.event.findFirst({ where: { id: eventId, studioId }, include: { subEvents: { select: { startsAt: true, endsAt: true } } } });
+  if (!event) throw new Error("Event not found");
+  return event;
+}
 
 async function guard(fd: FormData) {
   const p = await requireSignedIn();
   const studioId = str(fd, "studioId"); const eventId = str(fd, "eventId");
   authorize(p, "invites.send", { studioId, eventId });
-  const event = await prisma.event.findFirst({ where: { id: eventId, studioId } });
-  if (!event) throw new Error("Event not found");
-  return { p, studioId, eventId, event };
+  return { p, studioId, eventId, event: await loadEvent(studioId, eventId) };
 }
 
 /** Issue a token per channel for one guest and deliver. Returns per-channel results. */
-async function deliver(event: Ev, guest: G, channels: Set<"EMAIL" | "PHONE">, intro: string, optedOut: Set<string>) {
+async function deliver(event: Ev, guest: G, channels: Set<"EMAIL" | "PHONE">, intro: string, optedOut: Set<string>, expiresAt: Date) {
   const results: Array<{ channel: "EMAIL" | "PHONE"; to: string; ok: boolean; error?: string }> = [];
   const targets: Array<["EMAIL" | "PHONE", string]> = [];
   if (channels.has("EMAIL") && guest.email) targets.push(["EMAIL", guest.email]);
@@ -32,7 +38,7 @@ async function deliver(event: Ev, guest: G, channels: Set<"EMAIL" | "PHONE">, in
       results.push({ channel, to, ok: false, error: "opted out" }); continue;
     }
     const token = newToken();
-    await prisma.inviteToken.create({ data: { tokenHash: hashToken(token), guestId: guest.id, channel, sentTo: to, expiresAt: inviteExpiry(event) } });
+    await prisma.inviteToken.create({ data: { tokenHash: hashToken(token), guestId: guest.id, channel, sentTo: to, expiresAt } });
     const link = `${eventOrigin(event.slug)}/i/${token}`;
     const m = buildMessages(event, guest, link, intro);
     try {
@@ -72,9 +78,10 @@ export async function sendInvitations(_p: ActionState, fd: FormData): Promise<Ac
       },
     });
     const opted = await optOuts(guests.map((g) => g.phone).filter((x): x is string => !!x));
+    const expiresAt = inviteExpiry(event);
     let sent = 0; let failed = 0; let suppressed = 0;
     for (const g of guests) {
-      for (const r of await deliver(event, g, channels, intro, opted)) { if (r.ok) sent++; else if (r.error === "opted out") suppressed++; else failed++; }
+      for (const r of await deliver(event, g, channels, intro, opted, expiresAt)) { if (r.ok) sent++; else if (r.error === "opted out") suppressed++; else failed++; }
     }
     await audit({ studioId, eventId, actorUserId: p.userId, action: "invites.send", data: { channels: [...channels], scope, guests: guests.length, sent, failed, suppressed } });
     revalidatePath(base(studioId, eventId));
@@ -92,7 +99,7 @@ export async function resendInvite(_p: ActionState, fd: FormData): Promise<Actio
     if (!guest.email && !guest.phone) return { ok: false, error: "Guest has no email or phone." };
     const revoked = await prisma.inviteToken.updateMany({ where: { guestId: guest.id, revokedAt: null }, data: { revokedAt: new Date() } });
     const opted = await optOuts(guest.phone ? [guest.phone] : []);
-    const results = await deliver(event, guest, new Set(["EMAIL", "PHONE"]), "", opted);
+    const results = await deliver(event, guest, new Set(["EMAIL", "PHONE"]), "", opted, inviteExpiry(event));
     await audit({ studioId, eventId, actorUserId: p.userId, action: "invite.resend", target: guest.id, data: { revoked: revoked.count, results } });
     revalidatePath(base(studioId, eventId));
     const ok = results.filter((r) => r.ok).length;
@@ -137,8 +144,7 @@ export async function deleteReminderRule(_p: ActionState, fd: FormData): Promise
 export async function previewInvite(studioId: string, eventId: string, intro: string) {
   const p = await requireSignedIn();
   authorize(p, "invites.send", { studioId, eventId });
-  const event = await prisma.event.findFirst({ where: { id: eventId, studioId } });
-  if (!event) throw new Error("Event not found");
+  const event = await loadEvent(studioId, eventId);
   const sample: G = { id: "sample", householdId: "", firstName: "Lakshmi", lastName: "Rao", email: "lakshmi@example.com", phone: "+15125550101", isPlusOne: false };
   const link = `${eventOrigin(event.slug)}/i/<token>`;
   const m = buildMessages(event, sample, link, intro);
