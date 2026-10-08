@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Pre-commit: fast, local, no network. Blocks the mistakes that are expensive to undo.
+# Installed by `pnpm install` via the "prepare" script (git config core.hooksPath .githooks).
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+fail() { echo "pre-commit: $1" >&2; exit 1; }
+
+# 1. Never commit env files or secrets.
+if echo "$staged" | grep -Eq '(^|/)\.env(\..*)?$' && ! echo "$staged" | grep -Eq '\.env\.example$'; then
+  fail ".env files are never committed (use .env.example)."
+fi
+if git diff --cached -U0 | grep -E '^\+' | grep -Eq '(sk_live_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----)'; then
+  fail "a live secret or private key is in the staged diff."
+fi
+
+# 2. No oversized blobs (originals/derivatives belong in the bucket, models are downloaded).
+while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  size=$(wc -c < "$f")
+  if [ "$size" -gt 5000000 ]; then fail "$f is $((size/1000000)) MB; files over 5 MB are not committed."; fi
+done <<< "$staged"
+
+# 3. TDD escape hatches must not leak into committed *code* (docs and the hooks themselves may name them).
+code=$(echo "$staged" | grep -E '^(apps|packages|workers)/' | grep -Ev '\.md$' || true)
+if [ -n "$code" ]; then
+  if git diff --cached -U0 -- $code | grep -E '^\+' | grep -q 'TDD_GATE=off'; then
+    fail "TDD_GATE=off must not be committed in code."
+  fi
+  if git diff --cached -U0 -- $code | grep -E '^\+' | grep -Eq 'tdd-exempt:\s*$'; then
+    fail "tdd-exempt marker needs a reason: // tdd-exempt: <why>"
+  fi
+fi
+
+# 4. Schema changes must come with a migration and must validate.
+if echo "$staged" | grep -q 'packages/db/prisma/schema.prisma'; then
+  echo "$staged" | grep -q 'packages/db/prisma/migrations/' || fail "schema.prisma changed without a migration (run: cd packages/db && pnpm exec prisma migrate dev --name <name>)."
+  (cd packages/db && DATABASE_URL="${DATABASE_URL:-postgresql://x@localhost/x}" pnpm exec prisma validate --schema prisma/schema.prisma >/dev/null) || fail "prisma validate failed."
+fi
+
+# 5. Backlog tickets must parse (frontmatter + required sections).
+if echo "$staged" | grep -Eq '^backlog/.*\.md$'; then
+  for f in $(echo "$staged" | grep -E '^backlog/.*\.md$' | grep -v README.md); do
+    head -1 "$f" | grep -q '^---$' || fail "$f: missing frontmatter."
+    case "$(basename "$f")" in
+      EPIC-*) secs=("## Context" "## Children" "## Definition of Done") ;;
+      *)      secs=("## Context" "## Scope" "## Acceptance criteria" "## Verification") ;;
+    esac
+    for sec in "${secs[@]}"; do
+      grep -q "^$sec" "$f" || fail "$f: missing section '$sec'."
+    done
+  done
+fi
+
+# 6. Source edits must be accompanied by tests somewhere in the commit, unless exempt.
+src=$(echo "$staged" | grep -E '^(apps|packages|workers)/.*\.(ts|tsx|py)$' | grep -Ev '(\.test\.|\.spec\.|/tests/|/__tests__/|/e2e/|/test_|\.d\.ts$|/themes/|/components/|page\.tsx$|layout\.tsx$|loading\.tsx$|error\.tsx$|not-found\.tsx$|middleware\.ts$|types\.ts$|__init__\.py$|__main__\.py$|config\.py$|/prisma/|/scripts/)' || true)
+tests=$(echo "$staged" | grep -E '(\.test\.|\.spec\.|/tests/|/__tests__/|/test_)' || true)
+if [ -n "$src" ] && [ -z "$tests" ]; then
+  if ! git diff --cached -U0 -- $src | grep -q 'tdd-exempt:'; then
+    echo "pre-commit: source files changed with no test files in this commit:" >&2
+    echo "$src" | sed 's/^/  /' >&2
+    echo "Add or update the test that covers the change (or mark pure wiring with // tdd-exempt: <why>)." >&2
+    exit 1
+  fi
+fi
+
+exit 0
