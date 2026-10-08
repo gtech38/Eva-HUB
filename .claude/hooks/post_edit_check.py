@@ -22,7 +22,7 @@ import re
 import sys
 
 from _common import (
-    Deadline, PY_EXT, SRC_EXT, TS_EXT, bootstrap_problem, checkout_env, existing_test, file_from_payload, is_test, package_root, read_payload, record_touched, rel, run, tail, venv_python,
+    Deadline, PY_EXT, SRC_EXT, TS_EXT, bootstrap_problem, checkout_env, existing_test, file_from_payload, is_test, is_tooling, package_root, read_payload, record_touched, rel, run, tail, venv_python,
 )
 
 TOTAL_BUDGET_S = 170
@@ -31,6 +31,9 @@ p = read_payload()
 if p.get("tool_name") not in {"Edit", "Write", "MultiEdit"}:
     sys.exit(0)
 path = file_from_payload(p)
+if path and path.exists() and is_tooling(path):
+    record_touched(p, path)  # scripts/** and docs/adr/**: no checks here, Stop runs the @hub/scripts tests
+    sys.exit(0)
 if not path or not path.exists() or path.suffix not in SRC_EXT:
     sys.exit(0)
 r = rel(path)
