@@ -4,11 +4,13 @@
  * feed --font-display / --font-body / --font-script. Noto Telugu + Devanagari are always in
  * the fallback stack because Telugu glyphs are taller and longer than Latin.
  *
- * Self-hosted (WEB-012): the WOFF2 files live in ./fonts/<family>/ with their OFL licence;
- * how they were built (source commit, axis ranges, subsets) is in ./fonts/README.md. The build
- * never contacts Google. Latin families are subset to Google's "latin" range, the Noto families
- * to their script. Variable files keep only the weight range the themes use; `fonts.test.ts`
- * checks every `var(--font-*)` a theme references is declared here.
+ * Self-hosted (WEB-012): the WOFF2 files live in ./font-files/<family>/ with their OFL licence;
+ * how they were built (source commit, axis ranges, subsets) is in ./font-files/README.md and
+ * ./font-files/build.sh. The build never contacts Google. Latin families are subset to Google's
+ * "latin" + "latin-ext" ranges (Inter: latin only, to stay in the 1.2 MB budget), the Noto
+ * families to their script. Variable files keep only the weight range the themes use;
+ * `fonts.test.ts` checks every `var(--font-*)` a theme references is declared here and
+ * `fontFiles.test.ts` checks the files themselves.
  *
  * Font choices follow docs/05-theme-references.md:
  *   Luxury              → Instrument Serif + Luxurious Script + Inter     (ref: Velvet Promise)
@@ -25,8 +27,8 @@ import localFont from "next/font/local";
 
 export const instrumentSerif = localFont({
   src: [
-    { path: "./fonts/instrument-serif/InstrumentSerif-Regular.woff2", weight: "400", style: "normal" },
-    { path: "./fonts/instrument-serif/InstrumentSerif-Italic.woff2", weight: "400", style: "italic" },
+    { path: "./font-files/instrument-serif/InstrumentSerif-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./font-files/instrument-serif/InstrumentSerif-Italic.woff2", weight: "400", style: "italic" },
   ],
   variable: "--font-instrument",
   adjustFontFallback: "Times New Roman",
@@ -35,7 +37,7 @@ export const instrumentSerif = localFont({
 });
 
 export const luxuriousScript = localFont({
-  src: [{ path: "./fonts/luxurious-script/LuxuriousScript-Regular.woff2", weight: "400", style: "normal" }],
+  src: [{ path: "./font-files/luxurious-script/LuxuriousScript-Regular.woff2", weight: "400", style: "normal" }],
   variable: "--font-luxurious",
   display: "swap",
   preload: false,
@@ -43,12 +45,12 @@ export const luxuriousScript = localFont({
 
 export const inriaSerif = localFont({
   src: [
-    { path: "./fonts/inria-serif/InriaSerif-Light.woff2", weight: "300", style: "normal" },
-    { path: "./fonts/inria-serif/InriaSerif-LightItalic.woff2", weight: "300", style: "italic" },
-    { path: "./fonts/inria-serif/InriaSerif-Regular.woff2", weight: "400", style: "normal" },
-    { path: "./fonts/inria-serif/InriaSerif-Italic.woff2", weight: "400", style: "italic" },
-    { path: "./fonts/inria-serif/InriaSerif-Bold.woff2", weight: "700", style: "normal" },
-    { path: "./fonts/inria-serif/InriaSerif-BoldItalic.woff2", weight: "700", style: "italic" },
+    { path: "./font-files/inria-serif/InriaSerif-Light.woff2", weight: "300", style: "normal" },
+    { path: "./font-files/inria-serif/InriaSerif-LightItalic.woff2", weight: "300", style: "italic" },
+    { path: "./font-files/inria-serif/InriaSerif-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./font-files/inria-serif/InriaSerif-Italic.woff2", weight: "400", style: "italic" },
+    { path: "./font-files/inria-serif/InriaSerif-Bold.woff2", weight: "700", style: "normal" },
+    { path: "./font-files/inria-serif/InriaSerif-BoldItalic.woff2", weight: "700", style: "italic" },
   ],
   variable: "--font-inria",
   adjustFontFallback: "Times New Roman",
@@ -57,7 +59,7 @@ export const inriaSerif = localFont({
 });
 
 export const cinzel = localFont({
-  src: [{ path: "./fonts/cinzel/Cinzel-VF.woff2", weight: "400 600", style: "normal" }],
+  src: [{ path: "./font-files/cinzel/Cinzel-VF.woff2", weight: "400 600", style: "normal" }],
   variable: "--font-cinzel",
   adjustFontFallback: "Times New Roman",
   display: "swap",
@@ -65,7 +67,7 @@ export const cinzel = localFont({
 });
 
 export const pinyonScript = localFont({
-  src: [{ path: "./fonts/pinyon-script/PinyonScript-Regular.woff2", weight: "400", style: "normal" }],
+  src: [{ path: "./font-files/pinyon-script/PinyonScript-Regular.woff2", weight: "400", style: "normal" }],
   variable: "--font-pinyon",
   display: "swap",
   preload: false,
@@ -73,8 +75,8 @@ export const pinyonScript = localFont({
 
 export const cormorant = localFont({
   src: [
-    { path: "./fonts/cormorant-garamond/CormorantGaramond-VF.woff2", weight: "400 600", style: "normal" },
-    { path: "./fonts/cormorant-garamond/CormorantGaramond-Italic-VF.woff2", weight: "400 600", style: "italic" },
+    { path: "./font-files/cormorant-garamond/CormorantGaramond-VF.woff2", weight: "400 600", style: "normal" },
+    { path: "./font-files/cormorant-garamond/CormorantGaramond-Italic-VF.woff2", weight: "400 600", style: "italic" },
   ],
   variable: "--font-cormorant",
   adjustFontFallback: "Times New Roman",
@@ -83,7 +85,7 @@ export const cormorant = localFont({
 });
 
 export const marcellus = localFont({
-  src: [{ path: "./fonts/marcellus/Marcellus-Regular.woff2", weight: "400", style: "normal" }],
+  src: [{ path: "./font-files/marcellus/Marcellus-Regular.woff2", weight: "400", style: "normal" }],
   variable: "--font-marcellus",
   adjustFontFallback: "Times New Roman",
   display: "swap",
@@ -92,8 +94,8 @@ export const marcellus = localFont({
 
 export const bodoni = localFont({
   src: [
-    { path: "./fonts/bodoni-moda/BodoniModa-VF.woff2", weight: "400 600", style: "normal" },
-    { path: "./fonts/bodoni-moda/BodoniModa-Italic-VF.woff2", weight: "400 600", style: "italic" },
+    { path: "./font-files/bodoni-moda/BodoniModa-VF.woff2", weight: "400 600", style: "normal" },
+    { path: "./font-files/bodoni-moda/BodoniModa-Italic-VF.woff2", weight: "400 600", style: "italic" },
   ],
   variable: "--font-bodoni",
   adjustFontFallback: "Times New Roman",
@@ -102,35 +104,35 @@ export const bodoni = localFont({
 });
 
 export const manrope = localFont({
-  src: [{ path: "./fonts/manrope/Manrope-VF.woff2", weight: "300 600", style: "normal" }],
+  src: [{ path: "./font-files/manrope/Manrope-VF.woff2", weight: "300 600", style: "normal" }],
   variable: "--font-manrope",
   display: "swap",
   preload: false,
 });
 
 export const jetbrainsMono = localFont({
-  src: [{ path: "./fonts/jetbrains-mono/JetBrainsMono-VF.woff2", weight: "400 500", style: "normal" }],
+  src: [{ path: "./font-files/jetbrains-mono/JetBrainsMono-VF.woff2", weight: "400 500", style: "normal" }],
   variable: "--font-mono",
   display: "swap",
   preload: false,
 });
 
 export const inter = localFont({
-  src: [{ path: "./fonts/inter/Inter-VF.woff2", weight: "100 900", style: "normal" }],
+  src: [{ path: "./font-files/inter/Inter-VF.woff2", weight: "100 900", style: "normal" }],
   variable: "--font-inter",
   display: "swap",
   preload: false,
 });
 
 export const notoTelugu = localFont({
-  src: [{ path: "./fonts/noto-sans-telugu/NotoSansTelugu-VF.woff2", weight: "400 600", style: "normal" }],
+  src: [{ path: "./font-files/noto-sans-telugu/NotoSansTelugu-VF.woff2", weight: "400 600", style: "normal" }],
   variable: "--font-telugu",
   display: "swap",
   preload: false,
 });
 
 export const notoSerifTelugu = localFont({
-  src: [{ path: "./fonts/noto-serif-telugu/NotoSerifTelugu-VF.woff2", weight: "400 600", style: "normal" }],
+  src: [{ path: "./font-files/noto-serif-telugu/NotoSerifTelugu-VF.woff2", weight: "400 600", style: "normal" }],
   variable: "--font-telugu-serif",
   adjustFontFallback: "Times New Roman",
   display: "swap",
@@ -138,14 +140,14 @@ export const notoSerifTelugu = localFont({
 });
 
 export const notoDevanagari = localFont({
-  src: [{ path: "./fonts/noto-sans-devanagari/NotoSansDevanagari-VF.woff2", weight: "400 600", style: "normal" }],
+  src: [{ path: "./font-files/noto-sans-devanagari/NotoSansDevanagari-VF.woff2", weight: "400 600", style: "normal" }],
   variable: "--font-devanagari",
   display: "swap",
   preload: false,
 });
 
 export const notoSerifDevanagari = localFont({
-  src: [{ path: "./fonts/noto-serif-devanagari/NotoSerifDevanagari-VF.woff2", weight: "400 600", style: "normal" }],
+  src: [{ path: "./font-files/noto-serif-devanagari/NotoSerifDevanagari-VF.woff2", weight: "400 600", style: "normal" }],
   variable: "--font-devanagari-serif",
   adjustFontFallback: "Times New Roman",
   display: "swap",
