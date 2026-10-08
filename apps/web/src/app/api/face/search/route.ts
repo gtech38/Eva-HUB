@@ -7,7 +7,8 @@ import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery
 import { consentRecordVersion } from "@hub/shared/consent";
 import { checkConsentSubmission, faceSearchAllowed, mayEnrolFaceProfile } from "@/lib/faceConsent";
 import { rateLimits } from "@hub/shared/ratePolicies";
-import type { Slot } from "@hub/shared/ratelimit";
+import type { LimitResult, Slot } from "@hub/shared/ratelimit";
+import { clientIp, UNKNOWN_CLIENT } from "@hub/shared/clientIp";
 import type { FaceSearchReason } from "@/lib/face";
 
 export const dynamic = "force-dynamic";
@@ -80,7 +81,13 @@ export async function POST(req: NextRequest) {
   }
   if (!slot.ok) return rateLimited(slot.retryAfterSec);
   try {
-    const hourly = await rateLimits.check("faceSearchUser", userId, limitCtx);
+    let hourly: LimitResult;
+    try {
+      hourly = await rateLimits.check("faceSearchUser", userId, limitCtx);
+    } catch (err) {
+      console.error("[face-search] rate limiter unavailable", (err as Error).message);
+      return fail("unavailable", 503);
+    }
     if (!hourly.ok) return rateLimited(hourly.retryAfterSec);
     return await runSearch(req, { site, file, subject, subjectGuestId, consent });
   } finally {
@@ -217,7 +224,8 @@ async function runSearch(req: NextRequest, { site, file, subject, subjectGuestId
   return NextResponse.json({ ok: true, subject, model, photos: dtos });
 }
 
+/** Same client-IP rule as the rate limits (trusted proxy hops, IPv6 /64); unknown clients get no hash. */
 function hashIp(req: NextRequest, salt: string) {
-  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || req.headers.get("x-real-ip") || "";
-  return ip ? createHash("sha256").update(`${salt}:${ip}`).digest("hex") : null;
+  const ip = clientIp(req.headers);
+  return ip && ip !== UNKNOWN_CLIENT ? createHash("sha256").update(`${salt}:${ip}`).digest("hex") : null;
 }

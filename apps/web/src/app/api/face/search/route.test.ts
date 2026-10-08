@@ -10,6 +10,7 @@ const db = vi.hoisted(() => ({
   writes: [] as Array<{ model: string; op: string; data: Record<string, unknown> }>,
   child: null as null | { id: string; faceSearchOptOut: boolean },
   rawExecs: 0,
+  failTx: false,
 }));
 
 vi.mock("@hub/db", async (importActual) => {
@@ -34,7 +35,10 @@ vi.mock("@hub/db", async (importActual) => {
       guest: { findFirst: async () => db.child },
       $queryRaw: async () => [{ photoId: "photo-1", score: 0.9 }],
       photo: { findMany: async () => [{ id: "photo-1" }] },
-      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => {
+        if (db.failTx) throw new Error("transaction failed");
+        return fn(tx);
+      },
     },
   };
 });
@@ -75,11 +79,11 @@ const { POST } = await import("./route.ts");
 const SELF = { subject: "me", consent: "on", consentVersion: "SEARCH_SELF:v1-2026-10", consentLocale: "en" };
 const GUARDIAN = { subject: "guest-child", consent: "on", consentVersion: "SEARCH_GUARDIAN:v1-2026-10", consentLocale: "hi" };
 
-function selfieRequest(fields: Record<string, string>) {
+function selfieRequest(fields: Record<string, string>, headers: Record<string, string> = {}) {
   const fd = new FormData();
   fd.append("file", new File([new Uint8Array([0xff, 0xd8, 0xff])], "selfie.jpg", { type: "image/jpeg" }));
   for (const [k, v] of Object.entries(fields)) fd.append(k, v);
-  return new NextRequest("http://priya-arjun.localhost/api/face/search", { method: "POST", body: fd });
+  return new NextRequest("http://priya-arjun.localhost/api/face/search", { method: "POST", body: fd, headers });
 }
 
 const consents = () => db.writes.filter((w) => w.model === "biometricConsent").map((w) => w.data);
@@ -90,8 +94,9 @@ beforeEach(() => {
   db.writes = [];
   db.rawExecs = 0;
   db.child = null;
+  db.failTx = false;
   limits.current = rateLimiter({ store: memoryRateLimitStore(), audit: async () => {}, env: {}, random: () => 1 });
-  site.guest ={ id: "guest-adult", householdId: "hh-1", isChild: false, faceSearchOptOut: false };
+  site.guest = { id: "guest-adult", householdId: "hh-1", isChild: false, faceSearchOptOut: false };
   const embedding = Array.from({ length: 128 }, (_, i) => (i === 0 ? 1 : 0));
   worker = vi.fn(async () => Response.json({ ok: true, embedding, model: "test-model" }));
   vi.stubGlobal("fetch", worker);
@@ -219,5 +224,33 @@ describe("rate limits (SHR-003)", () => {
     expect((await POST(selfieRequest(SELF))).status).toBe(200);
     const slots = await Promise.all([1, 2, 3].map(() => limits.current!.acquire("faceSearchConcurrent", "user-1")));
     expect(slots.every((s) => s.ok), "both searches gave their slot back").toBe(true);
+  });
+
+  it("releases the concurrency slot when the search throws after taking it", async () => {
+    db.failTx = true;
+    await expect(POST(selfieRequest(SELF))).rejects.toThrow("transaction failed");
+    const slots = await Promise.all([1, 2, 3].map(() => limits.current!.acquire("faceSearchConcurrent", "user-1")));
+    expect(slots.every((s) => s.ok), "the thrown search gave its slot back").toBe(true);
+  });
+
+  it("a failing hourly check answers 503 unavailable, never reaches the worker, and frees the slot", async () => {
+    const real = limits.current!;
+    limits.current = { acquire: real.acquire, check: async () => Promise.reject(new Error("db down")) };
+    const res = await POST(selfieRequest(SELF));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toStrictEqual({ ok: false, reason: "unavailable" });
+    expect(worker).not.toHaveBeenCalled();
+    const slots = await Promise.all([1, 2, 3].map(() => real.acquire("faceSearchConcurrent", "user-1")));
+    expect(slots.every((s) => s.ok)).toBe(true);
+  });
+});
+
+describe("consent ipHash uses the shared client-IP rule (SHR-003 review)", () => {
+  it("hashes the rightmost X-Forwarded-For hop, so a client-written first hop changes nothing", async () => {
+    await POST(selfieRequest(SELF, { "x-forwarded-for": "6.6.6.6, 203.0.113.9" }));
+    await POST(selfieRequest(SELF, { "x-forwarded-for": "1.1.1.1, 203.0.113.9" }));
+    const [a, b] = consents().map((c) => c.ipHash);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(b).toBe(a);
   });
 });
