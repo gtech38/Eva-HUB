@@ -118,7 +118,7 @@ When `APP_ENV=production` (or, with `APP_ENV` unset, `NODE_ENV=production`):
 |---|---|---|---|---|---|---|---|
 | `AUTH_SECRET` | web, admin | none: must be set | dev placeholder | **required** | secret | Platform secret store; generate with `openssl rand -base64 32` | HMAC key that signs the session cookie and salts IP hashes in face-search records. env() rejects fewer than 32 random bytes or a dev placeholder in production. Rotating it signs everyone out until dual-key support (SHR-018) lands (see Rotation). |
 | `SESSION_TTL_DAYS` | web, admin | `30` | `30` | optional | no | Product decision | Lifetime of a verified sign-in session. |
-| `INVITE_SESSION_TTL_DAYS` | web, admin | `90` | `90` | optional | no | Product decision | Lifetime of an invitation-link session (INVITE_LINK scope). |
+| `INVITE_SESSION_TTL_DAYS` | web, admin | `90` | `90` | optional | no | Product decision | Max lifetime of an invitation-link session (INVITE_LINK scope); it also ends when the link itself expires (event end + 90 days, packages/shared/src/invites.ts). |
 
 ### Worker
 

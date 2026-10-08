@@ -164,7 +164,7 @@ function renderExample() {
     out.push("", `# ─── ${section.title} `.padEnd(60, "─"));
     for (const line of section.intro ?? []) out.push(`# ${line}`);
     for (const [key, m] of Object.entries(section.vars)) {
-      if (m.hint) out.push(`# ${m.hint}`);
+      for (const line of [m.hint ?? []].flat()) out.push(`# ${line}`);
       if (m.example !== undefined) {
         out.push(`${key}=${m.example}`);
       } else {

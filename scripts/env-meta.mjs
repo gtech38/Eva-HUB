@@ -15,7 +15,7 @@
 //   notes       one or two sentences for docs/deploy/env.md
 //   example     value written to .env.example (a working local value). Omit to write a commented
 //               `# KEY=<default>` line, i.e. "unset; the default applies".
-//   hint        optional comment line written above the key in .env.example
+//   hint        optional comment line (or array of lines) written above the key in .env.example
 //   readBy      consumers outside the two parsers (prisma, seed, db)
 //   planned     ticket that will start reading the variable
 //   derived     how the default is computed when the parser has no literal
@@ -208,7 +208,11 @@ export const SECTIONS = [
       INVITE_SESSION_TTL_DAYS: {
         production: "optional",
         owner: "Product decision",
-        notes: "Lifetime of an invitation-link session (INVITE_LINK scope).",
+        notes: "Max lifetime of an invitation-link session (INVITE_LINK scope); it also ends when the link itself expires (event end + 90 days, packages/shared/src/invites.ts).",
+        hint: [
+          "Max lifetime of a session opened from an invitation link; it also ends when the link",
+          "itself expires (event end + 90 days, packages/shared/src/invites.ts).",
+        ],
         example: "90",
       },
     },
