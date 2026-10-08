@@ -1,5 +1,5 @@
 ---
-id: INF-021
+id: INF-023
 title: Production backup schedule, least-privilege backup credentials and quarterly real-size restore drill
 labels: [type:chore, area:infra, area:db, priority:p1, size:S]
 milestone: Phase 1 — MVP
