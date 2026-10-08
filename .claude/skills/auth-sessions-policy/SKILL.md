@@ -52,20 +52,21 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 | `rsvp.report.names` | OWNER, assigned STAFF (studio STAFF + event STAFF role), HOST, COHOST, PLANNER (names, response counts, household figures, name-level exports; not VENDOR, not unassigned staff) |
 | `rsvp.respond`, `face.search`, `favorites` | linked guest, HOST, COHOST |
 | `registry.manage`, `proofing.edit` | HOST, COHOST (+OWNER for registry) |
+| `registry.claim` | linked guest of that event only (invite-link sessions included; not HOST, STAFF, VENDOR, OWNER, and **not platform admins** unless they are also a guest of the event: the check runs before the platform-admin bypass, so a claim always means "a real guest bought this") |
 | `photos.upload`, `albums.manage` | OWNER, assigned STAFF |
 | `photos.hide` | OWNER, assigned STAFF, HOST, COHOST |
 | `gallery.view` | OWNER, STAFF, HOST, COHOST, PLANNER, VENDOR, guest |
 | `gallery.view.hostsOnly` | OWNER, STAFF, HOST, COHOST |
 | `site.view` | OWNER, STAFF, any event role, guest |
 
-Elevated (INVITE_LINK + 12 h gate apply): everything except `rsvp.respond`, `gallery.view`, `gallery.view.hostsOnly`, `face.search`, `favorites`, `site.view`.
+Elevated (INVITE_LINK + 12 h gate apply): everything except `rsvp.respond`, `registry.claim`, `gallery.view`, `gallery.view.hostsOnly`, `face.search`, `favorites`, `site.view`.
 
 ## Common tasks
 
 ### Add an Action (e.g. `registry.claim`)
 1. Test first: add a `test(...)` to `packages/shared/src/policy.test.ts` asserting who may and may not (guest yes, INVITE_LINK guest yes if non-elevated, other-studio owner no). Run `pnpm --filter @hub/shared test` -- it fails to compile on the unknown action.
 2. Add the literal to the `Action` union; add it to `ELEVATED` if it is a management action.
-3. Add a `case` in the `switch` (the switch is exhaustive; TypeScript errors until you do).
+3. Add a `case` in the `switch` (the switch is exhaustive; TypeScript errors until you do). If the action must be refused even for platform admins (like `registry.claim`, which is guest-only), decide it with an early `if (action === "...") return ...` before the `if (p.isPlatformAdmin) return true` line instead; TypeScript then narrows it out of the `switch`, so do not add a `case` for it. Add a platform-admin cell to the matrix test either way.
 4. Add the row to `docs/02-users-and-roles.md` §4 so the matrix and code stay aligned.
 5. Use it: `authorize(p, "registry.claim", res)` in admin or `viewer.can("registry.claim")` in web.
 
