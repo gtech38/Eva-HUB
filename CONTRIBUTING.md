@@ -22,6 +22,6 @@ See [README.md](README.md#running-locally). Everything runs on your machine; no 
 | `.claude/settings.json` | Hooks wiring and a permission allow-list for routine commands |
 | `.claude/hooks/` | `tdd_gate.py` (PreToolUse), `post_edit_check.py` (PostToolUse), `stop_verify.py` (Stop), `session_start.py`, `prompt_context.py` |
 | `.claude/skills/` | One skill per tool/library/area; `README.md` there lists them |
-| `.claude/agents/` | `ticket-worker`, `test-author`, `solid-reviewer` |
+| `.claude/agents/` | `ticket-worker` (opus), `test-author` (sonnet), `solid-reviewer` (opus), `pr-shepherd` (sonnet), `backlog-curator` (sonnet) |
 
 Escape hatches exist (`TDD_GATE=off`, `// tdd-exempt: reason`) and are visible in review. Use them for wiring, never for behaviour.
