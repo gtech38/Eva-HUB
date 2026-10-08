@@ -1,20 +1,27 @@
 import { z } from "zod";
 
-/** `KEY=` in a dotenv file is "unset", not an empty value. */
-const unsetIfEmpty = (v: unknown) => (v === "" ? undefined : v);
+/**
+ * A copy of the environment without blank values: `KEY=` (or whitespace only) means unset, so the default
+ * applies or a required key is reported as missing. Same rule as `_value()` in the worker's config.py.
+ * Without it `z.coerce.number()` turns "" into 0, e.g. FACE_MATCH_THRESHOLD=0 would match every face.
+ */
+export function withoutBlanks(source: Record<string, string | undefined>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(source)) if (v !== undefined && v.trim() !== "") out[k] = v;
+  return out;
+}
 
 const TRUE_FLAGS = ["1", "true", "yes", "on"];
 const FALSE_FLAGS = ["0", "false", "no", "off"];
 
 /**
  * Boolean flag, same vocabulary as the worker's `_bool` (config.py): 1/true/yes/on and 0/false/no/off,
- * case-insensitive; unset or empty falls through to the default; anything else is left for z.boolean() to reject.
- * (`z.coerce.boolean()` would turn "false" into true.)
+ * case-insensitive; unset (blanks are removed by withoutBlanks) falls through to the default; anything else is
+ * left for z.boolean() to reject. (`z.coerce.boolean()` would turn "false" into true.)
  */
 function parseFlag(v: unknown): unknown {
   if (typeof v !== "string") return v;
   const s = v.trim().toLowerCase();
-  if (s === "") return undefined;
   if (TRUE_FLAGS.includes(s)) return true;
   if (FALSE_FLAGS.includes(s)) return false;
   return v;
@@ -23,8 +30,8 @@ function parseFlag(v: unknown): unknown {
 // One key per line: scripts/env-docs.mjs reads this object (key, `.default(...)`, `.optional()`) to
 // generate docs/deploy/env.md and .env.example. Add the key's metadata in scripts/env-meta.mjs.
 const schema = z.object({
-  NODE_ENV: z.preprocess(unsetIfEmpty, z.enum(["development", "test", "production"]).default("development")),
-  APP_ENV: z.preprocess(unsetIfEmpty, z.enum(["development", "test", "production"]).optional()),
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  APP_ENV: z.enum(["development", "test", "production"]).optional(),
   ROOT_DOMAIN: z.string().default("localhost"),
   WEB_PORT: z.coerce.number().default(3000),
   ADMIN_PORT: z.coerce.number().default(3001),
@@ -80,14 +87,23 @@ export function secretBytes(secret: string): number | null {
   return null;
 }
 
+/** localhost, *.localhost, 127.0.0.0/8, ::1, 0.0.0.0, or no host at all. */
 function isLoopback(value: string): boolean {
-  let host = value;
+  let host = value.trim();
   try {
-    host = new URL(value.includes("://") ? value : `http://${value}`).hostname;
+    host = new URL(host.includes("://") ? host : `http://${host}`).hostname;
   } catch {
-    // not a URL: compare the raw text
+    // not a URL (a bare "::1", say): compare the raw text
   }
-  return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]" || host === "0.0.0.0";
+  host = host.replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  return (
+    host === "" ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    host === "0.0.0.0"
+  );
 }
 
 type ProductionIssue = { key: keyof Env; message: string };
@@ -104,7 +120,7 @@ export function productionIssues(e: Env, raw: Record<string, string | undefined>
   if (PLACEHOLDER.test(e.AUTH_SECRET)) {
     add("AUTH_SECRET", "looks like a dev placeholder; generate one with `openssl rand -base64 32` (this check is on format and length, not entropy)");
   } else if (bytes === null) {
-    add("AUTH_SECRET", "must be hex or base64, e.g. from `openssl rand -base64 32`; passphrases are rejected (this check is on format and length, not entropy)");
+    add("AUTH_SECRET", "must be hex or base64, e.g. from `openssl rand -base64 32` (this check is on format and length only, not entropy)");
   } else if (bytes < MIN_SECRET_BYTES) {
     add("AUTH_SECRET", `must decode to at least ${MIN_SECRET_BYTES} bytes (hex or base64); this is a length check, not an entropy test`);
   }
@@ -122,9 +138,13 @@ export function productionIssues(e: Env, raw: Record<string, string | undefined>
   return issues;
 }
 
-/** `next build` evaluates route modules with NODE_ENV=production and the developer's .env; runtime use is still validated. */
-function isNextBuild(): boolean {
-  return process.env.NEXT_PHASE === "phase-production-build";
+/**
+ * `next build` evaluates route modules with NODE_ENV=production and the developer's .env, so the production checks
+ * are skipped then, but only while APP_ENV is unset: with APP_ENV=production the build is a production build and a
+ * prerendered page must not bake in localhost values. Runtime use is always validated.
+ */
+function isUnlabelledNextBuild(e: Env): boolean {
+  return process.env.NEXT_PHASE === "phase-production-build" && e.APP_ENV === undefined;
 }
 
 let cached: Env | undefined;
@@ -133,12 +153,13 @@ let warnedAppEnv = false;
 /** Parsed, validated process.env. Throws at first use with a readable list of what's missing. */
 export function env(): Env {
   if (cached) return cached;
-  const parsed = schema.safeParse(process.env);
+  const source = withoutBlanks(process.env);
+  const parsed = schema.safeParse(source);
   const problems: { key: string; message: string }[] = parsed.success
     ? []
     : parsed.error.issues.map((i) => ({ key: i.path.join("."), message: i.message }));
 
-  if (parsed.success && !isNextBuild()) {
+  if (parsed.success && !isUnlabelledNextBuild(parsed.data)) {
     const e = parsed.data;
     if (e.NODE_ENV === "production" && e.APP_ENV !== "production" && !warnedAppEnv) {
       warnedAppEnv = true;
@@ -148,7 +169,7 @@ export function env(): Env {
           : "env: NODE_ENV=production without APP_ENV=production; set APP_ENV=production on every service (see docs/deploy/env.md)",
       );
     }
-    if (isProduction(e)) problems.push(...productionIssues(e));
+    if (isProduction(e)) problems.push(...productionIssues(e, source));
   }
 
   if (!parsed.success || problems.length > 0) {

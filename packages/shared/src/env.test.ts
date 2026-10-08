@@ -22,6 +22,12 @@ const KEYS = [
   "S3_FORCE_PATH_STYLE",
   "EMAIL_PROVIDER",
   "AUTH_SECRET",
+  "FACE_MATCH_THRESHOLD",
+  "WEB_PORT",
+  "SMTP_PORT",
+  "SESSION_TTL_DAYS",
+  "INVITE_SESSION_TTL_DAYS",
+  "EMAIL_FROM",
 ] as const;
 type Vars = Partial<Record<(typeof KEYS)[number], string>>;
 
@@ -169,6 +175,61 @@ describe("env() production validation", () => {
   });
 });
 
+describe("blank values mean unset (same as the worker's _value in config.py)", () => {
+  it.each([
+    ["FACE_MATCH_THRESHOLD", "", 0.363],
+    ["FACE_MATCH_THRESHOLD", "   ", 0.363],
+    ["WEB_PORT", "", 3000],
+    ["SMTP_PORT", " ", 1025],
+    ["SESSION_TTL_DAYS", "", 30],
+    ["INVITE_SESSION_TTL_DAYS", "\t", 90],
+    ["EMAIL_FROM", "", "Event Hub <hello@localhost>"],
+    ["ROOT_DOMAIN", "", "localhost"],
+  ] satisfies [(typeof KEYS)[number], string, unknown][])("%s=%j gets the default %j", async (key, blank, expected) => {
+    const env = await envWith({ ...local, [key]: blank });
+    expect((env() as Record<string, unknown>)[key]).toBe(expected);
+  });
+
+  it("a blank FACE_MATCH_THRESHOLD never becomes 0 (0 would match every face)", async () => {
+    const env = await envWith({ ...local, FACE_MATCH_THRESHOLD: "" });
+    expect(env().FACE_MATCH_THRESHOLD).not.toBe(0);
+  });
+
+  it.each(["S3_BUCKET", "S3_ENDPOINT", "DATABASE_URL", "AUTH_SECRET"] as const)("a blank required %s is a 'required' error", async (key) => {
+    const env = await envWith({ ...local, [key]: "  " });
+    expect(() => env()).toThrow(new RegExp(`${key}: Required`));
+  });
+
+  it.each(["ROOT_DOMAIN", "WEB_ORIGIN", "ADMIN_ORIGIN", "WORKER_INTERNAL_URL"] as const)("a blank %s fails the production check", async (key) => {
+    const env = await envWith({ ...production(), [key]: "" });
+    expect(() => env()).toThrow(new RegExp(key));
+  });
+
+  it("does not modify process.env", async () => {
+    const env = await envWith({ ...local, S3_PUBLIC_ENDPOINT: " " });
+    env();
+    expect(process.env.S3_PUBLIC_ENDPOINT).toBe(" ");
+  });
+});
+
+describe("loopback detection", () => {
+  it.each([
+    ["ROOT_DOMAIN", "127.4.5.6"],
+    ["WEB_ORIGIN", "http://127.0.0.2:3000"],
+    ["ADMIN_ORIGIN", "http://[::1]:3001"],
+    ["ROOT_DOMAIN", "::1"],
+    ["WEB_ORIGIN", "http://app.localhost:3000"],
+  ] as const)("rejects %s=%s in production", async (key, value) => {
+    const env = await envWith({ ...production(), [key]: value });
+    expect(() => env()).toThrow(new RegExp(key));
+  });
+
+  it("does not treat a public host that merely starts with 127 as loopback", async () => {
+    const env = await envWith({ ...production(), WEB_ORIGIN: "https://127studio.example.com" });
+    expect(env().WEB_ORIGIN).toBe("https://127studio.example.com");
+  });
+});
+
 describe("APP_ENV and NODE_ENV", () => {
   it("APP_ENV=production enforces the rules even when NODE_ENV is development", async () => {
     const env = await envWith({ ...local, APP_ENV: "production" });
@@ -229,6 +290,11 @@ describe("next build", () => {
     const env = await envWith({ ...local, NODE_ENV: "production", NEXT_PHASE: "phase-production-build" });
     expect(env().AUTH_SECRET).toBe(DEV_SECRET);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not skip them during the build when APP_ENV=production says this is a production build", async () => {
+    const env = await envWith({ ...local, NODE_ENV: "production", APP_ENV: "production", NEXT_PHASE: "phase-production-build" });
+    expect(() => env()).toThrow(/AUTH_SECRET/);
   });
 
   it("still enforces them when the server runs (NEXT_PHASE=phase-production-server)", async () => {
