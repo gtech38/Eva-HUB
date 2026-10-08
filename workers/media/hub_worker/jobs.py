@@ -260,8 +260,9 @@ class HeartbeatThread(threading.Thread):
     is the throttle: one single-row UPDATE per worker per interval, whatever the poll rate (no index on
     lastSeenAt, so the update can stay HOT).
 
-    A failed write (database restart, migration not applied yet) is logged, the connection dropped, and
-    the next interval retries; it never affects job processing.
+    A failed write (database restart, migration not applied yet, or any other exception) is logged, the
+    connection dropped, and the next interval retries; it never affects job processing. On a clean stop
+    the row is deleted, so a worker shut down on purpose leaves the dashboard at once.
     """
 
     def __init__(self, worker_id: str, interval_s: float = HEARTBEAT_INTERVAL_S) -> None:
@@ -283,11 +284,24 @@ class HeartbeatThread(threading.Thread):
                     if conn is None or conn.closed:
                         conn = connect(autocommit=True)
                     upsert_heartbeat(conn, self.worker_id, self._version, self._hostname)
-                except psycopg.Error as exc:
+                except Exception as exc:  # noqa: BLE001 - a dead heartbeat thread would make a healthy worker look dead
                     log.warning("heartbeat write failed (retrying in %.0f s): %s", self.interval_s, exc)
                     _close_quietly(conn)
                     conn = None
                 self._halt.wait(self.interval_s)
+            self._remove_row(conn)
+        finally:
+            _close_quietly(conn)
+
+    def _remove_row(self, conn: psycopg.Connection | None) -> None:
+        """Best effort on a clean stop; if it fails, the row just ages out and is pruned after a day."""
+        try:
+            if conn is None or conn.closed:
+                conn = connect(autocommit=True)
+            with conn.cursor() as cur:
+                cur.execute('DELETE FROM "WorkerHeartbeat" WHERE "workerId" = %s', (self.worker_id,))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not remove heartbeat row for %s on stop: %s", self.worker_id, exc)
         finally:
             _close_quietly(conn)
 

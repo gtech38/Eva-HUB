@@ -289,6 +289,13 @@ def test_heartbeat_written_within_5s_of_consumer_start(queue, conn, worker_id):
     assert _beat_threads(worker_id) == [], "the heartbeat thread must stop with the consumer"
 
 
+def test_clean_stop_removes_the_workers_heartbeat_row(queue, conn, worker_id):
+    """A worker stopped on purpose disappears from the dashboard at once instead of lingering as 'silent' for a day."""
+    with running_consumer(queue, worker_id):
+        _wait_for(lambda: _heartbeat(conn, worker_id), "the first heartbeat")
+    assert _heartbeat(conn, worker_id) is None
+
+
 def test_heartbeat_continues_while_a_handler_is_running(queue, conn, worker_id):
     """A worker inside a long handler (a big BUILD_ZIP) must still look alive; silence means the process died."""
     started, release = threading.Event(), threading.Event()
@@ -307,7 +314,7 @@ def test_heartbeat_continues_while_a_handler_is_running(queue, conn, worker_id):
 
 
 def test_heartbeat_is_one_write_per_interval_not_one_per_poll(queue, conn, worker_id, monkeypatch):
-    """No write amplification: dozens of poll iterations inside the (default) interval write once."""
+    """No write amplification: dozens of poll iterations inside one interval write once."""
     writes = []
     real = jobs.upsert_heartbeat
     monkeypatch.setattr(jobs, "upsert_heartbeat", lambda *a, **k: (writes.append(1), real(*a, **k))[1])
@@ -318,13 +325,14 @@ def test_heartbeat_is_one_write_per_interval_not_one_per_poll(queue, conn, worke
         if len(seen) == n:
             done.set()
 
-    with running_consumer(queue, worker_id, handlers={queue.type: handler}):
+    # an explicit, long interval: the assertion must not depend on the default or on how fast this machine is
+    with running_consumer(queue, worker_id, handlers={queue.type: handler}, heartbeat_interval_s=60):
         first = _wait_for(lambda: (r := _heartbeat(conn, worker_id)) and r["lastSeenAt"], "the first heartbeat")
         for _ in range(n):
             queue.enqueue()
         assert done.wait(10), f"only {len(seen)} of {n} jobs ran"
+        assert _heartbeat(conn, worker_id)["lastSeenAt"] == first
     assert len(writes) == 1
-    assert _heartbeat(conn, worker_id)["lastSeenAt"] == first
 
 
 def test_heartbeat_survives_a_failed_write_and_recovers(queue, conn, worker_id, monkeypatch):
@@ -342,6 +350,23 @@ def test_heartbeat_survives_a_failed_write_and_recovers(queue, conn, worker_id, 
     with running_consumer(queue, worker_id, heartbeat_interval_s=0.05):
         _wait_for(lambda: _heartbeat(conn, worker_id), "a heartbeat after the failed first write")
     assert len(calls) >= 2
+
+
+def test_heartbeat_thread_survives_any_exception_not_only_database_errors(queue, conn, worker_id, monkeypatch):
+    """A bug outside psycopg (here a RuntimeError) must not kill the thread and make a healthy worker look dead."""
+    real = jobs.upsert_heartbeat
+    calls = []
+
+    def buggy(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("not a database error")
+        return real(*a, **k)
+
+    monkeypatch.setattr(jobs, "upsert_heartbeat", buggy)
+    with running_consumer(queue, worker_id, heartbeat_interval_s=0.05):
+        _wait_for(lambda: _heartbeat(conn, worker_id), "a heartbeat after a non-database exception")
+        assert _beat_threads(worker_id), "the heartbeat thread died"
 
 
 def test_heartbeat_interval_keeps_a_3x_margin_under_the_dashboards_30s_window():

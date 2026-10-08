@@ -75,11 +75,13 @@ package), so no symlink is needed and the cwd does not matter. Real environment 
 - Heartbeat: `consume_forever` starts a `HeartbeatThread` with its own connection that upserts
   `WorkerHeartbeat(workerId = WORKER_ID or host:pid)` immediately and then every 10 s (the dashboard calls a
   worker live when seen < 30 s ago). It is a thread so a worker inside a long handler keeps beating and a
-  crashed one (OOM kill) goes silent; the dashboard judges liveness from the heartbeat alone. A failed write is
-  logged and retried next interval. Rows silent for 24 h are pruned in the minutely housekeeping (best effort).
+  crashed one (OOM kill) goes silent; the dashboard judges liveness from the heartbeat alone. A failed write (any
+  exception) is logged and retried next interval. A clean stop (or the consumer loop exiting on an error) deletes
+  the worker's row, so it leaves the dashboard at once; rows of killed workers are pruned after 24 h in the
+  minutely housekeeping (best effort).
   **Apply the Prisma migration `job_finished_at_worker_heartbeat` before starting a worker built from this
-  code**: without the table the heartbeat only logs warnings, but the `finishedAt` writes in `mark_succeeded` /
-  `mark_failed` fail and every job would retry.
+  code**: without it the consumer refuses to start. Its first housekeeping pass (`requeue_stale`, which writes
+  `finishedAt`) raises `UndefinedColumn` and `consume_forever` exits; the heartbeat alone would only log warnings.
   Give each process a distinct `WORKER_ID` (the default `host:pid` is unique): two processes sharing one id share
   one heartbeat row, so one of them dying is masked by the other. `consume_forever(worker_id=, only_types=,
   heartbeat_interval_s=)` lets a process (or a test) serve a subset of types under its own id.
