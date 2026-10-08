@@ -15,6 +15,8 @@ pnpm dev                              # event sites on :3000, admin on :3001
 cd workers/media && make models && make dev
 ```
 
+Environment variables, which ones are secrets and what production must set are in [docs/deploy/env.md](docs/deploy/env.md); `.env.example` is generated (`pnpm env:docs`). A production build (`next build`) works with the dev `.env`, but to *run* one locally (`next start`) set `APP_ENV=development`, otherwise `env()` rejects the dev secrets exactly as it would in production.
+
 | URL | What |
 |---|---|
 | http://priya-arjun.localhost:3000 | Hindu Traditional wedding |

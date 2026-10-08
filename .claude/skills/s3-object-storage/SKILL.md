@@ -86,7 +86,7 @@ Then configure CORS on the bucket for `PUT` from the admin origin so direct uplo
 Not implemented (`deletePhoto` has a TODO). Plan: enqueue a worker job that deletes `originalKey` and every key under `keys.derivativePrefix(...)` (`list_objects_v2` by prefix in Python). Write the Python handler test first against a fake `storage` module.
 
 ## Gotchas
-- `.env.example` still says "MinIO locally"; compose uses **RustFS** because MinIO's public images were withdrawn. Same API, same creds.
+- Compose uses **RustFS** because MinIO's public images were withdrawn; the `minio`/`minio12345` creds and `S3_*` names are unchanged. `S3_PUBLIC_ENDPOINT` is optional locally but `env()` rejects production without it (docs/deploy/env.md).
 - RustFS has no CORS configured, so presigned PUTs from the browser fail with a bare network error -- expected locally; the proxy fallback handles it. Do not "fix" this by making the bucket public.
 - A presigned URL includes `Content-Type` in the signature when `ContentType` was passed to `PutObjectCommand`; the browser must send exactly that header (the `Uploader` does).
 - `headObject` swallows all errors and returns `null` -- a wrong endpoint looks like "object missing".

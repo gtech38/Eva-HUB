@@ -82,6 +82,7 @@ Agents usually work in a linked worktree (`git worktree add <scratch>/wt-<id> -b
 
 ```bash
 pnpm verify                          # everything the Stop hook runs, plus pytest
+node scripts/env-docs.mjs --check    # env reference drift (pnpm lint and CI run it); tested by packages/shared/src/env-docs.test.ts
 pnpm --filter @hub/shared test
 pnpm exec vitest run                 # all four TS packages from the root (test.projects)
 cd packages/shared && pnpm exec vitest run src/policy.test.ts

@@ -62,6 +62,9 @@ Rule: callers import the interface/factory (`email()`, `sms()`), never a concret
 - Business rules depend on `can()` and the adapter interfaces, not on Prisma shapes or Next APIs. Pass data in; don't reach for `cookies()` or `prisma` deep inside pure logic.
 - Tests substitute fakes at the interface (recording `EmailSender`, in-memory job list, fake worker returning a 128-d embedding as `apps/web`'s face route was tested).
 
+## Configuration is declared once
+Every environment variable is declared in exactly one parser (`env.ts` for web/admin, `DEFAULTS` in `workers/media/hub_worker/config.py` for the worker) plus its metadata in `scripts/env-meta.mjs`; new TypeScript code reads `env()`, not `process.env`. `pnpm env:docs` regenerates `.env.example` and `docs/deploy/env.md`, and `--check` (in `pnpm lint` and CI) fails on drift.
+
 ## Boundaries that are also security rules
 - Authorisation only via `can()`; UI hides, server decides.
 - Tenant scope on every query (`eventId`, `studioId`); the hook flags unscoped `findMany()`.
