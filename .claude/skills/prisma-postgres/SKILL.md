@@ -16,7 +16,7 @@ description: Use when touching packages/db (schema.prisma, migrations, seed.ts, 
 | Path | What |
 |---|---|
 | `packages/db/prisma/schema.prisma` | Source of truth (`docs/schema.draft.prisma` is the planning copy) |
-| `packages/db/prisma/migrations/20261007200507_init/migration.sql` | Only migration so far; creates `citext` + `vector` extensions |
+| `packages/db/prisma/migrations/20261007200507_init/migration.sql` | Initial migration; creates `citext` + `vector` extensions. Later ones sit beside it (`ls packages/db/prisma/migrations`); `20261008181710_job_finished_at_worker_heartbeat` adds `Job.finishedAt` and the `WorkerHeartbeat` table (ADM-022) |
 | `packages/db/prisma/seed.ts` | Idempotent seed: studio `studio`, admin `admin@localhost`, events `priya-arjun` (LIVE, HINDU_TRADITIONAL, 3 locales), `sofia-james` (LUXURY), `emma-liam` (ROMANTIC), price sheet |
 | `packages/db/src/index.ts` | `prisma` singleton (cached on `globalThis` in dev), `scoped()`, `JobType`, `enqueue()` |
 | `packages/db/.env -> ../../.env` | Symlink so the `prisma` CLI finds `DATABASE_URL` |
@@ -43,11 +43,13 @@ Connection: `postgresql://hub:hub@localhost:5433/hub` (compose maps 5433 -> 5432
 |---|---|---|
 | no dedupeKey | plain insert | plain insert |
 | key absent | insert | insert |
-| key QUEUED | payload refreshed; `runAt = GREATEST(existing, new)`; `attempts` kept; lock/error cleared | same (`ON CONFLICT ... DO UPDATE`) |
-| key SUCCEEDED/FAILED/DEAD | reset to QUEUED; `runAt = new`; `attempts = 0`; lock/error cleared | same |
+| key QUEUED | payload refreshed; `runAt = GREATEST(existing, new)`; `attempts` kept; lock/error/`finishedAt` cleared | same (`ON CONFLICT ... DO UPDATE`) |
+| key SUCCEEDED/FAILED/DEAD | reset to QUEUED; `runAt = new`; `attempts = 0`; lock/error/`finishedAt` cleared | same |
 | key RUNNING | return existing, no change | returns `None` |
 
 Both sides implement the **same** semantics (the TS side mirrors the worker's upsert; `packages/db/src/index.test.ts` and `workers/media/tests/test_jobs.py::test_dedupe_key_semantics` pin it). Neither side changes `type` on an update. The one difference: TS is read-then-update, the worker is a single `INSERT ... ON CONFLICT`; pass `tx` from TS when atomicity matters.
+
+`Job.finishedAt` is the end of the **latest** attempt (success or failure, not a Requeue); anything that re-queues a finished job must clear it (the four places today: both `enqueue`s, admin `retryJobAs`, `retryDeadOfType`). `WorkerHeartbeat(workerId PK, lastSeenAt, version, hostname)` is written only by the worker's heartbeat thread; read it with the database clock (`SELECT now() AT TIME ZONE 'UTC'`), not Node's.
 
 Dedupe keys in use: `process:{photoId}`, `faces:{photoId}`, `cluster:{eventId}`, `reminder:{ruleId}`, `purge-face:{eventId}:{ts}`. The claim query is `FOR UPDATE SKIP LOCKED ... WHERE status='QUEUED' AND "runAt" <= now()`; a retrying failure sits in QUEUED with `lastError` set, never in FAILED (see `python-media-worker`). Pass `tx` to enqueue inside the same transaction as the row that triggers the job.
 
