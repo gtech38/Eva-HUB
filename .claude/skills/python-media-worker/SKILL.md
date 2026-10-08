@@ -23,7 +23,8 @@ description: Use when working in workers/media (Python 3.13 job consumer + FastA
 | `hub_worker/handlers/*.py` | one `handle(conn, job)` per type: `process_photo`, `index_faces`, `cluster_faces`, `purge_face_index`, `build_zip`, `send_message` (stub), `fire_reminder` (stub: stamps `firedAt`), `print_submit` (stub) |
 | `hub_worker/imaging.py` | `open_oriented`, `captured_at`, `fit_long_edge`, `to_jpeg`, `watermark`, `make_variants` (thumb 400/q80, web 2048/q85, webWm) |
 | `hub_worker/storage.py`, `face.py`, `api.py` | see `s3-object-storage`, `face-recognition-pipeline` |
-| `tests/test_jobs.py` | consumer semantics against the real local Postgres (`TEST_*` job types; skips if DB down) |
+| `tests/conftest.py` | shared `conn` fixture (skips if DB down) and per-test `queue` fixture (`IsolatedJobQueue`: private `TEST_<LABEL>_<uuid8>` type, claims asserted by id, every enqueued row deleted at teardown; sweeps `TEST_*` rows older than 1 h) |
+| `tests/test_jobs.py` | consumer semantics against the real local Postgres (skips if DB down); must not share a database with a running consumer (see Write a Postgres-backed test) |
 | `tests/test_face_synthetic.py` | pure unit tests + model-backed tests (skip if ONNX files absent) |
 | `scripts/download_models.py`, `scripts/bench_faces.py` | models (sha256-pinned, Git LFS aware), accuracy/throughput bench |
 | `workers/media/README.md` | job table, env table, semantics -- keep it updated |
@@ -35,7 +36,7 @@ description: Use when working in workers/media (Python 3.13 job consumer + FastA
 - **Logging:** stdlib `logging`, logger per module (`log = logging.getLogger(__name__)`), one summary line per job with timings in ms. `WORKER_LOG_LEVEL` env. botocore/urllib3 are set to WARNING.
 - **State machine:** QUEUED -claim-> RUNNING -> SUCCEEDED | QUEUED (retry, `lastError` set, `runAt = now + 10s*2^(attempts-1)` +-25 %, cap 1 h) | DEAD (attempts >= maxAttempts, default 5). RUNNING rows locked > 60 min are released once a minute (`requeue_stale`, counts as a failed attempt). The row never rests in FAILED.
 - **Dedupe:** `enqueue(..., dedupe_key=)` uses `ON CONFLICT ("dedupeKey") DO UPDATE ... WHERE status <> 'RUNNING'` (see table in `prisma-postgres`). A handler that may be bypassed while RUNNING must detect late work itself (`cluster_faces` checks `facesIndexedAt > lockedAt`).
-- `run_once(conn, handlers, only_types=[...])` lets a process serve a subset (tests use `TEST_*` types so a dev server's real jobs are untouched).
+- `run_once(conn, handlers, only_types=[...])` lets a process serve a subset (tests use per-test `TEST_*` types so a dev server's real jobs are untouched; the reverse is not true, see below).
 - The worker only touches `Job`, `Photo`, `Studio.brandJson`, `Event`, `Face`, `FaceCluster`, `FaceProfile`, `BiometricConsent`, `PhotoMatch`, `Guest`, `Album`, `ZipExport`, `ReminderRule`, `AuditLog`. Prisma owns the schema; never DDL from Python.
 
 ## Running
@@ -69,7 +70,9 @@ Edit constants in `imaging.py` (`THUMB_EDGE`, `WEB_EDGE`, qualities; `watermark(
 Add a field to `Settings` in `config.py` + `load_settings()` with a default, document in README env table and `.env.example`. Note `_float()` strips inline `# comments` because `.env.example` has `FACE_MATCH_THRESHOLD=0.363   # ...`.
 
 ### Write a Postgres-backed test
-Copy the `conn` fixture from `tests/test_jobs.py` (module scope, `connect(autocommit=True)`, `pytest.skip` on `OperationalError`, cleanup in teardown). Use unique ids (`uuid4`) and `TEST_*` types/keys so parallel dev traffic is unaffected.
+Use the `conn` and `queue` fixtures from `tests/conftest.py` (module-scoped `connect(autocommit=True)`, `pytest.skip` on `OperationalError`; `queue` gives a private job type, `queue.run_job(handlers, job_id)` asserts the claimed id, and every `jobs.enqueue` during the test is tracked and deleted at teardown). Use unique ids (`uuid4`) and `TEST_*` types/keys so parallel dev traffic is unaffected.
+
+The DB-backed tests must not share a database with a running consumer (`make dev` / `make consume`): a consumer started without `only_types` claims every due row, `TEST_*` ones included. Point the suite at its own database (or stop the consumer) before running it.
 
 ## Gotchas
 - `make test` silently skips DB tests when Postgres is down and model tests when ONNX files are missing -- a green run may be partial. `pytest -ra` (set in `addopts`) prints the skip reasons; read them.
