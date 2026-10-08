@@ -1,5 +1,4 @@
-/** Version of the consent copy shown on /gallery/me. Bump when the wording changes. */
-export const CONSENT_TEXT_VERSION = "v1-2026-10";
+// tdd-exempt: type-only module. The consent text version lives in @hub/shared/consent (derived from legal/consent/*).
 
 export type FaceSearchReason =
   | "unauthorized"

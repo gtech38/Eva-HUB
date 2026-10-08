@@ -4,7 +4,7 @@ import { prisma, Prisma } from "@hub/db";
 import { env } from "@hub/shared/env";
 import { requireViewer } from "@/lib/site";
 import { visiblePhotoWhere, isEntitledFullRes, toPhotoDTOs } from "@/lib/gallery";
-import { CONSENT_TEXT_VERSION } from "@/lib/face";
+import { consentRecordVersion } from "@hub/shared/consent";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
 
   // ── 4. Persist: matches, consent, audit (and optional face profile) ──
   const ipHash = hashIp(req, env().AUTH_SECRET);
+  const kind = subjectGuestId ? "SEARCH_GUARDIAN" : "SEARCH_SELF";
   await prisma.$transaction(async (tx) => {
     for (const p of photos) {
       const score = scores.get(p.id) ?? 0;
@@ -119,11 +120,11 @@ export async function POST(req: NextRequest) {
     }
     await tx.biometricConsent.create({
       data: {
-        kind: subjectGuestId ? "SEARCH_GUARDIAN" : "SEARCH_SELF",
+        kind,
         consentedByUserId: viewer.principal.userId,
         subjectGuestId,
         eventId: event.id,
-        consentTextVersion: CONSENT_TEXT_VERSION,
+        consentTextVersion: consentRecordVersion(kind),
         ipHash,
       },
     });
@@ -134,14 +135,14 @@ export async function POST(req: NextRequest) {
         actorUserId: viewer.principal.userId,
         action: "face.search",
         target: subjectGuestId ?? viewer.principal.userId,
-        data: { kind: subjectGuestId ? "SEARCH_GUARDIAN" : "SEARCH_SELF", candidates: rows.length, visible: photos.length, model },
+        data: { kind, candidates: rows.length, visible: photos.length, model },
       },
     });
 
     // "Remember my face": adults searching for themselves only. Embedding only, never the image.
     if (remember && !subjectGuestId && !viewer.guest?.isChild) {
       const consent = await tx.biometricConsent.create({
-        data: { kind: "FACE_PROFILE", consentedByUserId: viewer.principal.userId, eventId: null, consentTextVersion: CONSENT_TEXT_VERSION, ipHash },
+        data: { kind: "FACE_PROFILE", consentedByUserId: viewer.principal.userId, eventId: null, consentTextVersion: consentRecordVersion("FACE_PROFILE"), ipHash },
       });
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO "FaceProfile" (id, "userId", "consentId", "modelVersion", embedding, stale, "createdAt", "lastUsedAt", "purgeAfter")
