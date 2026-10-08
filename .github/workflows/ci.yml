@@ -101,6 +101,15 @@ jobs:
       - name: Unit tests (TypeScript)
         run: pnpm -r test
 
+      # next build runs with NODE_ENV=production and the placeholder CI env above. env() must not apply its
+      # production checks then (NEXT_PHASE=phase-production-build), or every build without real secrets fails.
+      - name: Build apps (next build with the CI env)
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          pnpm --filter @hub/web build
+          pnpm --filter @hub/admin build
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

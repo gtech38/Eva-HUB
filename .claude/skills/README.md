@@ -6,7 +6,7 @@ Each folder holds one `SKILL.md` with frontmatter (`name` = folder, `description
 |---|---|---|
 | `tdd-workflow` | Red-green-refactor rules enforced by `.claude/hooks`; where tests live per language; `pnpm verify` | Any code change (always) |
 | `solid-design` | Boundaries to respect: adapters, `can()`, `scoped()`, one visibility function, handler shape | Designing or reviewing structure (always) |
-| `pnpm-monorepo` | Workspace layout, `workspace:*`, TS-source packages with `.ts` imports, `transpilePackages`, root scripts, exFAT `._*` quirks | Adding packages/deps, resolution or typecheck errors, root scripts |
+| `pnpm-monorepo` | Workspace layout, `workspace:*`, TS-source packages with `.ts` imports, `transpilePackages`, root scripts (`lint` runs the env-docs check, `env:docs` regenerates `.env.example` + `docs/deploy/env.md`), exFAT `._*` quirks | Adding packages/deps, env variables, resolution or typecheck errors, root scripts |
 | `nextjs-app-router` | Next 15 + React 19 patterns: hostname middleware and `/sites/[slug]` rewrite, `force-dynamic`, `authorize()`/`act()` actions, route handlers, sessions, `revalidatePath`, client/server imports | Any page, layout, action or route in `apps/web` or `apps/admin` |
 | `prisma-postgres` | `packages/db`: schema conventions, migrations (incl. raw SQL CHECK/RLS), `$queryRaw` quoting and enum casts, pgvector literals, `Job`/`enqueue()` dedupe, `scoped()`, Prisma Studio | Schema, migration, raw SQL, jobs, seed/reset |
 | `tailwind-themes` | Theme tokens -> Tailwind semantic classes, `Shell/Hero/Divider` contract, fonts with Noto fallbacks, adding a theme, admin CSS utilities, visual check in te/hi | Styling, themes, fonts, Indic rendering |
