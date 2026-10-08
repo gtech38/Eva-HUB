@@ -154,6 +154,17 @@ def is_source(path: Path) -> bool:
     return True
 
 
+TOOLING_PREFIXES = ("scripts/", "docs/adr/")
+
+
+def is_tooling(path: Path) -> bool:
+    """Repo tooling and ADRs: no TDD gate (not is_source), but the @hub/scripts tests cover them.
+
+    post_edit_check records these edits in the touched ledger; stop_verify then runs `scripts` tests.
+    """
+    return rel(path).startswith(TOOLING_PREFIXES)
+
+
 def is_test(path: Path) -> bool:
     r = "/" + rel(path)
     return any(m in r for m in TEST_MARKERS) or path.name.startswith("test_")

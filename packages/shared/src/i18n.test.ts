@@ -8,6 +8,18 @@ describe("UI strings", () => {
     }
   });
 
+  it("has the registry and wedding party strings (WEB-009)", () => {
+    expect(ui("party", "en")).toBe("Wedding Party");
+    expect(ui("youPurchased", "en")).toBe("You purchased this");
+    expect(ui("markPurchased", "en")).toBe("Mark as purchased");
+    expect(ui("comingSoon", "en")).toBe("Coming soon");
+    for (const key of ["party", "markPurchased", "youPurchased", "undo", "contribute", "comingSoon", "copy", "copied"] as const) {
+      // Telugu and Hindi must differ from English (a copy-pasted English string is untranslated).
+      expect(ui(key, "te"), `${key}.te`).not.toBe(ui(key, "en"));
+      expect(ui(key, "hi"), `${key}.hi`).not.toBe(ui(key, "en"));
+    }
+  });
+
   it("has the expired-invitation heading (ADM-005)", () => {
     expect(ui("inviteExpired", "en")).toBe("This link has expired");
   });

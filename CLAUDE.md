@@ -1,6 +1,6 @@
 # CLAUDE.md — Event & Photo Delivery Hub
 
-Multi-tenant event-site + photo-delivery platform. Planning docs in `docs/` are the source of design intent; `packages/db/prisma/schema.prisma` is the source of truth for data.
+Multi-tenant event-site + photo-delivery platform. Planning docs in `docs/` are the source of design intent; `packages/db/prisma/schema.prisma` is the source of truth for data. Architecture decisions and their reasons: [docs/adr/README.md](docs/adr/README.md) (new one: `node scripts/adr-new.mjs "<title>"`).
 
 ## Layout
 

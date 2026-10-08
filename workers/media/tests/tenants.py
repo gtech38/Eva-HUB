@@ -7,7 +7,7 @@ ids; they are found through the event.
 from __future__ import annotations
 
 import uuid
-from typing import Sequence
+from typing import Any, Sequence
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -50,16 +50,24 @@ class Tenant:
         self.user_ids.append(user_id)
         return user_id
 
-    def add_photo(self, studio_id: str | None = None) -> str:
+    def add_photo(
+        self,
+        studio_id: str | None = None,
+        *,
+        photo_id: str | None = None,
+        filename: str | None = None,
+        sort_key: str | None = None,
+        created_at: Any = None,
+    ) -> str:
         """A READY photo in this event; `studio_id` overrides the studio (for mismatch tests)."""
-        photo_id = new_id()
+        photo_id = photo_id or new_id()
         with self.conn.cursor() as cur:
             cur.execute(
                 '''INSERT INTO "Photo"(id, "studioId", "eventId", "originalKey", "originalBytes",
-                                       checksum, filename, status)
-                   VALUES (%s, %s, %s, %s, 0, %s, %s, 'READY'::"PhotoStatus")''',
+                                       checksum, filename, status, "sortKey", "createdAt")
+                   VALUES (%s, %s, %s, %s, 0, %s, %s, 'READY'::"PhotoStatus", %s, COALESCE(%s, now()))''',
                 (photo_id, studio_id or self.studio_id, self.event_id, f"orig/{photo_id}.jpg", photo_id,
-                 f"{photo_id}.jpg"),
+                 filename or f"{photo_id}.jpg", sort_key, created_at),
             )
         return photo_id
 
