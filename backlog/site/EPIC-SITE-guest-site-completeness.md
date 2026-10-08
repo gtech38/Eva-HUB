@@ -17,6 +17,9 @@ milestone: Phase 1 — MVP
 - WEB-014 Open Graph and crawler metadata limited to the sign-in screen
 - WEB-015 Accessibility pass (WCAG 2.1 AA)
 - WEB-020 Event kinds and three non-wedding themes (baby shower, Telugu ceremony, gala)
+- WEB-030 Resolve the event site from the trusted x-hub-host in getSite()
+- WEB-031 e2e: link-preview metadata and /og.png on event sites
+- WEB-032 Image snapshots of /og.png for every seeded theme
 
 ## Definition of Done
 - [ ] All nine `PageType`s render in all three themes and three locales with screenshots under version control.
