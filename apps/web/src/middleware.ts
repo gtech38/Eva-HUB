@@ -9,7 +9,8 @@ import { HUB_HOST_HEADER, hostOf } from "@/lib/hubHost";
 
 export const LANG_COOKIE = "hub_lang";
 
-const ROOT_DOMAIN = (process.env.ROOT_DOMAIN ?? "localhost").toLowerCase();
+// Edge runtime: read directly rather than through env(), with env()'s rule that a blank value means unset.
+const ROOT_DOMAIN = (process.env.ROOT_DOMAIN?.trim() || "localhost").toLowerCase();
 
 export function middleware(req: NextRequest) {
   const url = req.nextUrl;

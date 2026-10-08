@@ -16,7 +16,7 @@ description: Use when touching face detection, embedding, clustering, selfie sea
 |---|---|
 | `workers/media/hub_worker/face.py` | YuNet (`cv2.FaceDetectorYN`, score 0.8, NMS 0.3, top-k 5000) + SFace (`cv2.FaceRecognizerSF`) singletons; `detect()` (long edge <= 1600, drops faces < 24 px, largest first), `embed()` (alignCrop + feature, L2-normalized 128-d), `normalize_bbox()`, `face_quality()` |
 | `hub_worker/config.py` | `MODEL_VERSION = "yunet-2023mar+sface-2021dec"`, `FACE_MATCH_THRESHOLD` (0.363), `FACE_CLUSTER_DISTANCE` (default `1 - threshold` = 0.637), `FACE_MIN_QUALITY` (0.3), `FACE_MODEL_DIR` |
-| `hub_worker/handlers/index_faces.py` | `INDEX_FACES {photoId}`: embed on the `web` derivative, replace `Face` rows, stamp `facesIndexedAt`, enqueue `CLUSTER_FACES` (dedupe `cluster:{eventId}`, +20 s) |
+| `hub_worker/handlers/index_faces.py` | `INDEX_FACES {photoId, eventId, studioId}` (the handler reads only `photoId`; the ids scope the job for the admin Jobs tab, so every enqueuer must send all three, because a dedupe re-enqueue replaces the payload): embed on the `web` derivative, replace `Face` rows, stamp `facesIndexedAt`, enqueue `CLUSTER_FACES` (dedupe `cluster:{eventId}`, +20 s) |
 | `hub_worker/handlers/cluster_faces.py` | average-linkage agglomerative clustering (cosine), reconciles `FaceCluster` ids/labels/`suppressed`, `_match_profiles()` -> `PhotoMatch(PROFILE_AUTO)`, audit `faceindex.cluster`, self-`Requeue` on late arrivals |
 | `hub_worker/handlers/purge_face_index.py` | deletes `Face` + `FaceCluster`, clears `Photo.facesIndexedAt`, sets `Event.faceIndexPurgedAt`, drops queued cluster job, audit `faceindex.purge`; keeps `PhotoMatch` |
 | `hub_worker/api.py` | `POST /embed-selfie` (multipart `file`, 20 MB cap, 10 req/s token bucket) -> `{ok, embedding[128], model, faces, quality}` or `{ok:false, reason: no_face|bad_image|too_large|rate_limited}`; `GET /health` |
@@ -74,7 +74,7 @@ Both from opencv_zoo. `*.onnx` is git-ignored; `make models` fetches. Switching 
 Never edit a published version. Copy the current `legal/consent/v<N>/` to `v<N+1>/`, edit there (body, `label` and `summary` are all versioned), set a new `version:` in all nine files, add the nine `?raw` imports + a `BUNDLED` entry in `packages/shared/src/consent.ts` and move `CURRENT_DIR`. Keep old directories bundled forever (rules in `legal/consent/README.md`). Copy must describe only what exists today (no automation or self-service that is not shipped). Production stays disabled until LEG-006 fills `reviewed_by`. Legal review is a design input (docs/01 §6, LEG-006).
 
 ### Re-index an event after a model change
-Set new `MODEL_VERSION`, run `make models`, enqueue `INDEX_FACES` for each READY photo (`dedupeKey faces:{photoId}`), then `CLUSTER_FACES`; mark profiles stale: `UPDATE "FaceProfile" SET stale = true;`.
+Set new `MODEL_VERSION`, run `make models`, enqueue `INDEX_FACES {photoId, eventId, studioId}` for each READY photo (`dedupeKey faces:{photoId}`; payload ids from the `Photo` row, never just `photoId`, or the dedupe refresh drops the event scope), then `CLUSTER_FACES`; mark profiles stale: `UPDATE "FaceProfile" SET stale = true;`.
 
 ## Gotchas
 - `web` posts to `WORKER_INTERNAL_URL` (`http://localhost:8010`) with a 20 s timeout; worker down -> 503 `unavailable`, UI shows the "temporarily unavailable" string.

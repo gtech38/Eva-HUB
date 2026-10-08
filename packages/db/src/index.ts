@@ -80,7 +80,7 @@ export async function enqueue(
     //   * QUEUED            -> payload refreshed; runAt = GREATEST(existing, new); attempts kept
     //   * SUCCEEDED/FAILED/DEAD -> reset to QUEUED; runAt = new; attempts = 0
     //   * RUNNING           -> untouched (returned as-is; the worker returns None)
-    //   * always on update  -> lastError/lockedBy/lockedAt cleared; `type` is NOT changed
+    //   * always on update  -> lastError/finishedAt/lockedBy/lockedAt cleared; `type` is NOT changed
     // Unlike the worker this is read-then-write, not a single upsert; pass `tx` when that matters.
     const runAt = opts.runAt ?? new Date();
     const existing = await db.job.findUnique({ where: { dedupeKey: opts.dedupeKey } });
@@ -97,6 +97,7 @@ export async function enqueue(
         runAt: queued && existing.runAt > runAt ? existing.runAt : runAt,
         attempts: queued ? existing.attempts : 0,
         lastError: null,
+        finishedAt: null,
         lockedBy: null,
         lockedAt: null,
       },
