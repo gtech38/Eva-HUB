@@ -249,6 +249,7 @@ CUBI requires **informed consent before capturing a biometric identifier** for a
   - Optional passkey
   - Passwords are off by default.
 - **Elevated actions:** hosts, staff and admins must re-authenticate if their last authentication is more than 12 hours old. **A session that came from an invitation link can never perform host actions**, even if that user is a host, because invitations get forwarded.
+- **Rate limits** (no Redis; a `RateLimit` table in Postgres, one atomic upsert per hit, keys stored as sha256): sign-in requests 5 per address and 30 per IP per 15 minutes; OTP checks 10 per address per 15 minutes; invitation links 60 per IP per hour; face search 10 per user per hour and 3 at once; admin magic links 5 per address per 15 minutes. Over the limit, sign-in answers with the usual neutral sentence and sends nothing, so a limit never reveals who is on a guest list; invitation links and face search answer 429. The first refusal in a window writes an `auth.rate_limited` audit row with the hashed key. Per-IP limits trust the first hop of `X-Forwarded-For`, so the reverse proxy must replace that header rather than append to it. Numbers live in `packages/shared/src/ratePolicies.ts` and can be overridden with `RATE_LIMIT_*` env vars.
 
 Details are in [02-users-and-roles.md](02-users-and-roles.md).
 
