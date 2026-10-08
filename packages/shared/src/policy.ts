@@ -31,6 +31,7 @@ export type Action =
   | "rsvp.report"
   | "rsvp.respond"            // own household
   | "registry.manage"
+  | "registry.claim"          // guest marks an item purchased
   | "photos.upload"
   | "albums.manage"
   | "photos.hide"
@@ -85,6 +86,7 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     case "rsvp.report": return isOwner || isStaff || hostish || has("PLANNER") || has("VENDOR");
     case "rsvp.respond": return isGuest || hostish;
     case "registry.manage": return isOwner || hostish;
+    case "registry.claim": return isGuest;
     case "photos.upload": return isOwner || assignedStaff;
     case "albums.manage": return isOwner || assignedStaff;
     case "photos.hide": return isOwner || assignedStaff || hostish;
