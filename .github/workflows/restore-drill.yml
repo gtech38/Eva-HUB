@@ -18,6 +18,9 @@ on:
       - scripts/lib/**
       - scripts/tests/**
       - packages/db/prisma/**
+      # the runbook / replay SQL and the job upsert they copy are tested here
+      - docs/ops/**
+      - workers/media/hub_worker/jobs.py
       - .github/workflows/restore-drill.yml
 
 permissions:
@@ -48,7 +51,8 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
       # same S3 server as infra/docker-compose.yml, so `backup-db.sh --upload` is tested, not skipped
       s3:
-        image: rustfs/rustfs:latest
+        # pinned: a moving tag would change the S3 server under the drill without a PR
+        image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
         env:
           RUSTFS_ACCESS_KEY: minio
           RUSTFS_SECRET_KEY: minio12345
@@ -63,6 +67,8 @@ jobs:
       S3_SECRET_KEY: minio12345
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # nothing here pushes; don't leave the token in .git/config
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
