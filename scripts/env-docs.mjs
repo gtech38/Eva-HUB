@@ -76,7 +76,7 @@ function parseConfigPy(src) {
     }
     keys.set(m[1], m[2] === "None" ? { kind: "none" } : { kind: "default", value: m[3] });
   }
-  for (const m of src.matchAll(/(?:\bgetenv\(|\bget\(|\benviron\[)\s*"([A-Z][A-Z0-9_]*)"/g)) {
+  for (const m of src.matchAll(/(?:\bgetenv\(|\bget\(|\benviron\[|\b_value\(\s*[\w.]+\s*,)\s*"([A-Z][A-Z0-9_]*)"/g)) {
     if (!keys.has(m[1])) {
       errors.push(`${m[1]}: read in ${CONFIG_PY} but missing from its DEFAULTS dict, so ${EXAMPLE} and ${DOC} cannot list it`);
       keys.set(m[1], { kind: "none" });

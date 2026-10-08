@@ -32,7 +32,9 @@ when metadata names a key nobody reads, or when either generated file differs fr
 - **Read by**: `web, admin` = parsed by `env.ts`; `worker` = parsed by `config.py`; others read it directly
   (`prisma` CLI, `db` = packages/db, `seed` = prisma/seed.ts).
 - **Default**: what applies when the variable is unset. When the parsers disagree, both are shown. Secret
-  defaults are never printed.
+  defaults are never printed. A blank value (`KEY=` or whitespace only) means unset everywhere, in `env()` and
+  in the worker alike: the default applies, or a required variable is reported as missing. (A blank
+  `FACE_MATCH_THRESHOLD` is 0.363, never 0.)
 - **Local**: the value in `.env.example`. Secret values are dev placeholders that only work against the local
   compose stack.
 - **Production**: **required** = the local value is wrong in production and must be set deliberately;
@@ -52,7 +54,8 @@ Set `APP_ENV=production` on every service; a warning is logged once when `NODE_E
   - `AUTH_SECRET` is a dev placeholder (`change-me`, `dev-only`, `ci-only`, `placeholder`), is not hex or
     base64, or decodes to fewer than 32 bytes. **This is a format and length check, not an entropy test**: it
     cannot tell a random value from `aaaa...`. Generate the value with `openssl rand -base64 32`;
-  - `ROOT_DOMAIN`, `WEB_ORIGIN` or `ADMIN_ORIGIN` still point at `localhost`/`127.0.0.1` (including when unset);
+  - `ROOT_DOMAIN`, `WEB_ORIGIN` or `ADMIN_ORIGIN` point at a loopback host (`localhost`, `*.localhost`,
+    `127.0.0.0/8`, `::1`), including when unset or blank;
   - `WORKER_INTERNAL_URL` is not set explicitly (a loopback address is accepted for a single-host deploy);
   - `S3_PUBLIC_ENDPOINT` is unset;
   - `S3_ACCESS_KEY` or `S3_SECRET_KEY` is the local development key;
@@ -69,8 +72,10 @@ Set `APP_ENV=production` on every service; a warning is logged once when `NODE_E
 
 `next build` runs with `NODE_ENV=production` and whatever `.env` is on the machine. To keep a local or CI build
 from tripping the production checks, `env()` skips them (and the `APP_ENV` warning) while Next sets
-`NEXT_PHASE=phase-production-build`. Malformed variables (a bad `APP_ENV`, a missing `DATABASE_URL`) are still
-reported, and the production checks apply in full the first time a running server calls `env()`.
+`NEXT_PHASE=phase-production-build` **and `APP_ENV` is unset**. A build with `APP_ENV=production` is a production
+build and is checked in full, so a prerendered page can never bake a localhost value into the artifact. Malformed
+variables (a bad `APP_ENV`, a missing `DATABASE_URL`) are always reported, and the production checks apply in full
+the first time a running server calls `env()`.
 
 Today nothing calls `env()` while the apps build (pages are `force-dynamic` and `env()` is lazy), so a build
 with the dev `.env` passes regardless; CI runs `next build` for both apps with the CI environment to keep it

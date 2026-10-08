@@ -51,7 +51,7 @@ function configPyKeys(): string[] {
   const src = readFileSync(join(ROOT, CONFIG_PY), "utf8");
   const defaults = src.slice(src.indexOf("\nDEFAULTS"), src.indexOf("\n}", src.indexOf("\nDEFAULTS")));
   const dictKeys = [...defaults.matchAll(/^\s+"([A-Z][A-Z0-9_]+)":/gm)].map((m) => m[1]!);
-  const getenvKeys = [...src.matchAll(/getenv\(\s*"([A-Z][A-Z0-9_]+)"/g)].map((m) => m[1]!);
+  const getenvKeys = [...src.matchAll(/(?:getenv\(|_value\(\s*[\w.]+\s*,)\s*"([A-Z][A-Z0-9_]+)"/g)].map((m) => m[1]!);
   return [...new Set([...dictKeys, ...getenvKeys])];
 }
 
@@ -76,6 +76,14 @@ describe("scripts/env-docs.mjs --check", () => {
     const r = run("--check", "--root", dir);
     expect(r.status).toBe(1);
     expect(r.out).toMatch(/WORKER_SHINY/);
+  });
+
+  it("fails when config.py reads a new variable through _value() outside DEFAULTS", () => {
+    const dir = fixture();
+    edit(dir, CONFIG_PY, (s) => s.replace("def load_settings(", 'Y = _value(os.environ, "WORKER_SHINIER")\n\n\ndef load_settings('));
+    const r = run("--check", "--root", dir);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/WORKER_SHINIER/);
   });
 
   it("fails when .env.example lost a line", () => {

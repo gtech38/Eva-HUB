@@ -43,7 +43,7 @@ Sites: `http://priya-arjun.localhost:3000`, admin `http://localhost:3001` (sign 
 ```bash
 pnpm typecheck                       # all TS packages
 pnpm test                            # policy tests etc.
-pnpm --filter @hub/web build         # next build; NEXT_PHASE skips the production env checks (docs/deploy/env.md)
+pnpm --filter @hub/web build         # next build; skips the production env checks unless APP_ENV is set (docs/deploy/env.md)
 pnpm lint                            # env-docs --check, then next lint
 pnpm env:docs                        # regenerate .env.example + docs/deploy/env.md after editing env.ts, config.py DEFAULTS or scripts/env-meta.mjs
 cd workers/media && make test        # pytest (needs local postgres)
