@@ -1,6 +1,6 @@
 ---
 name: tdd-workflow
-description: How test-driven development is enforced and practised in this repo — the red→green→refactor loop, where tests live for each package, which runner to use (node:test, vitest, pytest, Playwright), how the .claude hooks gate source edits, and how to write acceptance-criteria-driven tests for a backlog ticket. Load before changing any code under apps/, packages/ or workers/.
+description: How test-driven development is enforced and practised in this repo — the red→green→refactor loop, where tests live for each package, which runner to use (vitest for all TypeScript, pytest, Playwright), how the .claude hooks gate source edits, and how to write acceptance-criteria-driven tests for a backlog ticket. Load before changing any code under apps/, packages/ or workers/.
 ---
 
 # TDD workflow
@@ -22,12 +22,14 @@ One failing test at a time. If you find yourself writing three tests before any 
 
 | Package | Runner | Test location | Run |
 |---|---|---|---|
-| `packages/shared` | `node:test` via tsx | `src/<name>.test.ts` (e.g. `src/policy.test.ts`) | `pnpm --filter @hub/shared test` or `node --import tsx --test src/policy.test.ts` |
-| `packages/db` | `node:test` via tsx (add) | `src/<name>.test.ts`; DB-backed tests hit local Postgres | `node --import tsx --test src/index.test.ts` |
-| `apps/web` | vitest (to be set up — see backlog EPIC-QUALITY) | `src/lib/<name>.test.ts`, `src/**/__tests__/` | `pnpm --filter @hub/web test` |
-| `apps/admin` | vitest (to be set up) | same pattern | `pnpm --filter @hub/admin test` |
+| `packages/shared` | vitest | `src/<name>.test.ts` (e.g. `src/policy.test.ts`) | `pnpm --filter @hub/shared test` or `cd packages/shared && pnpm exec vitest run src/policy.test.ts` |
+| `packages/db` | vitest | `src/<name>.test.ts`; DB-backed tests hit local Postgres | `cd packages/db && pnpm exec vitest run src/index.test.ts` |
+| `apps/web` | vitest | `src/lib/<name>.test.ts`, `src/**/__tests__/`; harness tests in `test/` | `pnpm --filter @hub/web test` |
+| `apps/admin` | vitest | same pattern | `pnpm --filter @hub/admin test` |
 | `workers/media` | pytest | `tests/test_<module>.py` | `cd workers/media && .venv/bin/pytest -q tests/test_jobs.py` |
 | e2e | Playwright (planned) | `apps/*/e2e/` | see `e2e-playwright` skill |
+
+One TypeScript runner: **vitest** (do not add `node:test` files; vitest reports them as "No test suite found"). Write `import { describe, it, expect } from "vitest"` explicitly (no globals). Each package has its own `vitest.config.ts` (`vitest.config.mts` in the Next apps, which are not `"type": "module"`) and lists `vitest` in its own `devDependencies` -- that is what makes the post-edit hook run `pnpm exec vitest run <file>`. The root `vitest.config.mts` lists all four as `test.projects`, so `pnpm exec vitest run` at the root runs everything; `pnpm test` (`pnpm -r test`) runs `vitest run` per package. In the Next apps, `@/` resolves to `src/`, `server-only` is stubbed, and `test/setup.ts` loads the root `.env` so `env()` parses.
 
 The gate looks for: `<stem>.test.ts(x)`, `<stem>.spec.ts(x)`, `__tests__/<stem>.test.ts(x)` beside the source, or `<pkg>/tests/<path-under-src>/<stem>.test.ts(x)` (the test's directory must mirror the source's, so `tests/foo/index.test.ts` does not count for `src/index.ts`); for Python `tests/test_<stem>.py`, `tests/test_<dir>_<stem>.py` or `tests/<dir>/test_<stem>.py`. Name tests to match.
 
@@ -40,7 +42,7 @@ Most existing modules have **no test yet** (at the time of writing: `packages/sh
 The gate applies to **edits**, not to history, so the first edit to an untested module is where its test gets written -- even for a one-line fix. Expect that cost; it is the point. In practice:
 
 - Pure logic (`lib/`, `policy.ts`, mappers, parsers): add `src/<name>.test.ts` next to it and test the seam directly. This is the common case and takes minutes.
-- Modules that need Postgres: follow `packages/db/src/index.test.ts` -- probe the DB at the top and `skip` with a message when it is unreachable, use `TEST_*` job types / unique prefixes, clean up in `after()`. The Stop hook already skips these when :5433 is closed.
+- Modules that need Postgres: follow `packages/db/src/index.test.ts` -- probe the DB at the top (top-level `await`), wrap the suite in `describe.skipIf(!dbUp)` and log why when it is unreachable, use `TEST_*` job types / unique prefixes, clean up in `afterAll()`. The Stop hook already skips these when :5433 is closed.
 - Modules that need S3/ONNX or a real browser: the harness is tracked under EPIC-QUALITY -- #83 (test infrastructure epic), #84 (Vitest workspace for shared/db/web/admin), #86 (Playwright against the local stack), #88 (first unit tests for auth helpers and gallery rules), #109 (tenant isolation suite). Until those land, lift the logic you are changing into a pure function and test that; leave the adapter call as thin wiring.
 - Genuinely untestable wiring (route shells, adapter registration, config glue): mark it `// tdd-exempt: <why>` (`# tdd-exempt:` in Python). The marker is the convention; `grep -r tdd-exempt` is the audit.
 
@@ -48,7 +50,7 @@ The gate applies to **edits**, not to history, so the first edit to an untested 
 Each ticket's **Acceptance criteria** checkbox becomes at least one test. Name the test with the criterion text:
 
 ```ts
-test("invite-link session can RSVP but cannot manage guests", () => { ... });
+it("invite-link session can RSVP but cannot manage guests", () => { ... });
 ```
 
 ```python
@@ -81,7 +83,8 @@ Agents usually work in a linked worktree (`git worktree add <scratch>/wt-<id> -b
 ```bash
 pnpm verify                          # everything the Stop hook runs, plus pytest
 pnpm --filter @hub/shared test
-node --import tsx --test packages/shared/src/policy.test.ts
+pnpm exec vitest run                 # all four TS packages from the root (test.projects)
+cd packages/shared && pnpm exec vitest run src/policy.test.ts
 cd workers/media && .venv/bin/pytest -q -x tests/test_jobs.py -k backoff
 HOOK_FAST=1                          # env: skip tsc in the post-edit hook (tests still run)
 TDD_GATE=off                         # env: disable the gate for a session; never commit with it on

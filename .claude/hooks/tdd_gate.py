@@ -42,7 +42,7 @@ msg = f"""TDD gate: {rel(path)} has no test, so this edit is blocked.
 Write the failing test first, then retry this edit:
   1. Create {suggest} (or any of: {", ".join(sorted({rel(c) for c in cands[:3]}))})
   2. Make it assert the behaviour this change should produce.
-  3. Run it and confirm it FAILS (TS: `node --import tsx --test <file>` or `pnpm --filter <pkg> test`; Py: `cd workers/media && .venv/bin/pytest <file>`).
+  3. Run it and confirm it FAILS (TS: `pnpm exec vitest run <file>` in the package or `pnpm --filter <pkg> test`; Py: `cd workers/media && .venv/bin/pytest <file>`).
   4. Re-issue this edit; the gate passes once the test file exists.
 
 If this file is pure wiring with no behaviour to test, include the marker
