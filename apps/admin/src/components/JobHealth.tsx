@@ -62,7 +62,7 @@ export function JobHealth({ health, typeActions, showWorkers = true }: {
                 <td className="font-mono text-xs" title={w.hostname ?? undefined}>{w.workerId}</td>
                 <td className="font-mono text-xs text-neutral-600">{w.version ?? "—"}</td>
                 <td className="whitespace-nowrap text-xs text-neutral-600">{fmtAge((now.getTime() - w.lastSeenAt.getTime()) / 1000)} ago</td>
-                <td>{w.busy ? <Badge tone="blue">busy</Badge> : w.live ? <Badge tone="green">live</Badge> : <Badge tone="neutral">silent</Badge>}</td>
+                <td>{w.live ? <Badge tone="green">live</Badge> : <Badge tone="neutral">silent</Badge>}</td>
               </tr>
             ))}
             {workers.length === 0 && <tr><td colSpan={4} className="text-neutral-500">No worker has ever reported.</td></tr>}

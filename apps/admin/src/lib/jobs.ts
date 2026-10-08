@@ -1,7 +1,8 @@
 /**
  * Job-queue health metrics (ADM-022). Pure: the dashboard runs one raw aggregate that groups the
- * Job table into `JobBucket`s (type x status x due x retrying) and hands them here with the same
- * `now` it bound into the query. Nothing in this file touches the database.
+ * Job table into `JobBucket`s (type x status x due x retrying), with Postgres computing the duration
+ * percentiles (`percentile_disc`, nearest rank) so no per-job durations travel to Node, and hands
+ * them here with the same `now` it bound into the query. Nothing in this file touches the database.
  */
 
 export const JOB_STATUSES = ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "DEAD"] as const;
@@ -23,9 +24,18 @@ export type JobBucket = {
   oldestRunAt: Date | null;
   /** Rows whose finishedAt falls within RECENT_WINDOW_MS. */
   finishedRecent: number;
-  /** finishedAt - lockedAt, ms, of SUCCEEDED rows finished within RECENT_WINDOW_MS. */
-  durationsMs: number[];
+  /**
+   * Failed attempts that preceded a success: sum(attempts - 1) over SUCCEEDED rows finished within the
+   * window. mark_succeeded clears lastError, so without this a job that failed four times and then
+   * succeeded would count as zero failures.
+   */
+  priorFailuresRecent: number;
+  /** p50/p95 of finishedAt - lockedAt (ms) over SUCCEEDED rows finished within the window; null otherwise. */
+  p50Ms: number | null;
+  p95Ms: number | null;
 };
+
+export type DurationPercentiles = { p50Ms: number | null; p95Ms: number | null };
 
 export type TypeSummary = {
   type: string;
@@ -40,7 +50,7 @@ export type TypeSummary = {
   /** Age of the earliest due QUEUED row, whole seconds; null when nothing is due. */
   oldestDueSec: number | null;
   succeededLastHour: number;
-  /** Retrying or DEAD rows whose last failure was within the window. */
+  /** Failed attempts in the window: retrying/DEAD rows whose last failure was recent, plus the attempts that failed before a recent success. */
   failedLastHour: number;
   p50Ms: number | null;
   p95Ms: number | null;
@@ -52,20 +62,17 @@ export type JobsSummary = {
   byStatus: Record<JobStatusName, number>;
 };
 
-/** Nearest-rank percentile; null for no samples. */
-export function percentile(xs: readonly number[], p: number): number | null {
-  if (xs.length === 0) return null;
-  const sorted = [...xs].sort((a, b) => a - b);
-  const rank = Math.max(1, Math.ceil((p / 100) * sorted.length));
-  return sorted[Math.min(rank, sorted.length) - 1]!;
-}
-
-type Acc = { s: Omit<TypeSummary, "type" | "oldestDueSec" | "p50Ms" | "p95Ms">; oldestDue: number | null; durations: number[] };
+type Acc = {
+  s: Omit<TypeSummary, "type" | "oldestDueSec" | "p50Ms" | "p95Ms">;
+  oldestDue: number | null;
+  /** Percentiles of the SUCCEEDED bucket with the most recent finishes (normally the only one). */
+  pct: (DurationPercentiles & { n: number }) | null;
+};
 
 const emptyAcc = (): Acc => ({
   s: { queued: 0, scheduled: 0, running: 0, retrying: 0, dead: 0, succeededLastHour: 0, failedLastHour: 0 },
   oldestDue: null,
-  durations: [],
+  pct: null,
 });
 
 function add(acc: Acc, b: JobBucket): void {
@@ -88,20 +95,25 @@ function add(acc: Acc, b: JobBucket): void {
     s.failedLastHour += b.finishedRecent;
   } else if (b.status === "SUCCEEDED") {
     s.succeededLastHour += b.finishedRecent;
-    acc.durations.push(...b.durationsMs);
+    s.failedLastHour += b.priorFailuresRecent;
+    if (acc.pct === null || b.finishedRecent > acc.pct.n) acc.pct = { n: b.finishedRecent, p50Ms: b.p50Ms, p95Ms: b.p95Ms };
   }
 }
 
-function finish(acc: Acc, now: Date): Omit<TypeSummary, "type"> {
+function finish(acc: Acc, now: Date, pct: DurationPercentiles | null = acc.pct): Omit<TypeSummary, "type"> {
   return {
     ...acc.s,
     oldestDueSec: acc.oldestDue === null ? null : Math.max(0, Math.floor((now.getTime() - acc.oldestDue) / 1000)),
-    p50Ms: percentile(acc.durations, 50),
-    p95Ms: percentile(acc.durations, 95),
+    p50Ms: pct?.p50Ms ?? null,
+    p95Ms: pct?.p95Ms ?? null,
   };
 }
 
-export function summarizeJobs(rows: readonly JobBucket[], now: Date): JobsSummary {
+/**
+ * `overall` is the p50/p95 across every type in scope: percentiles of several groups cannot be merged,
+ * so the loader asks Postgres for them separately (`loadDurations`).
+ */
+export function summarizeJobs(rows: readonly JobBucket[], now: Date, overall: DurationPercentiles = { p50Ms: null, p95Ms: null }): JobsSummary {
   const perType = new Map<string, Acc>();
   const total = emptyAcc();
   const byStatus = Object.fromEntries(JOB_STATUSES.map((s) => [s, 0])) as Record<JobStatusName, number>;
@@ -114,29 +126,38 @@ export function summarizeJobs(rows: readonly JobBucket[], now: Date): JobsSummar
   const types = [...perType.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([type, acc]) => ({ type, ...finish(acc, now) }));
-  return { types, total: finish(total, now), byStatus };
+  return { types, total: finish(total, now, overall), byStatus };
+}
+
+/**
+ * What studio staff may see of `Job.lastError`: the first line only (no traceback, no stack paths) with
+ * the `(worker host:pid)` suffix of a released stale lock removed, capped at 160 characters.
+ * The full text, including worker identities, stays on /platform/jobs.
+ */
+export function publicError(lastError: string | null): string | null {
+  const first = lastError?.split("\n").map((l) => l.trim()).find((l) => l !== "");
+  if (!first) return null;
+  const line = first.replace(/\s*\(worker [^)]*\)\s*$/, "");
+  return line.length > 160 ? `${line.slice(0, 159)}…` : line;
 }
 
 // ── workers ───────────────────────────────────────────────────────────
 
-/** A worker is live when its heartbeat (written every ~15 s by consume_forever) is younger than this. */
+/** A worker is live when its heartbeat (written every 10 s by a dedicated thread in the consumer, 3x margin) is younger than this. */
 export const LIVE_WINDOW_MS = 30_000;
 
 export type Heartbeat = { workerId: string; lastSeenAt: Date; version: string | null; hostname: string | null };
-export type WorkerStatus = Heartbeat & { live: boolean; busy: boolean };
+export type WorkerStatus = Heartbeat & { live: boolean };
 
 /**
- * `busyIds` are the `lockedBy` values of RUNNING jobs. The consumer beats between jobs, so a worker
- * inside a long handler (a big BUILD_ZIP) goes quiet; holding a RUNNING lock keeps it live. A worker
- * that crashed mid-job stops counting once the stale-lock sweep releases its job.
+ * Liveness is the heartbeat alone. The consumer beats from its own thread and connection, so a worker
+ * inside a long handler (a big BUILD_ZIP) keeps beating, and silence means the process is gone. Do not
+ * add a "holds a RUNNING lock" override: a worker that crashed mid-job leaves its lock for up to an hour
+ * and would hide the "No live workers" banner.
  */
-export function workerStatuses(beats: readonly Heartbeat[], busyIds: readonly string[], now: Date): WorkerStatus[] {
-  const busy = new Set(busyIds);
+export function workerStatuses(beats: readonly Heartbeat[], now: Date): WorkerStatus[] {
   return beats
-    .map((b) => {
-      const isBusy = busy.has(b.workerId);
-      return { ...b, busy: isBusy, live: isBusy || now.getTime() - b.lastSeenAt.getTime() < LIVE_WINDOW_MS };
-    })
+    .map((b) => ({ ...b, live: now.getTime() - b.lastSeenAt.getTime() < LIVE_WINDOW_MS }))
     .sort((a, b) => Number(b.live) - Number(a.live) || b.lastSeenAt.getTime() - a.lastSeenAt.getTime());
 }
 

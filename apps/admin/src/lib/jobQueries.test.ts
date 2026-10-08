@@ -1,14 +1,15 @@
 /**
- * Postgres-backed tests for the jobs dashboard queries and job actions (ADM-022). Skipped with a
- * message when Postgres is unreachable.
+ * Postgres-backed tests for the jobs dashboard queries (ADM-022). Skipped with a message when
+ * Postgres is unreachable.
  *
  * Isolation from a live worker: rows use a per-run `TEST_ADM022_*` type and are never due QUEUED in
- * real time (scheduled an hour ahead, RUNNING, or finished), so no consumer can claim them. Every
- * row carries a per-run eventId in its payload; afterAll() deletes by type.
+ * real time (scheduled an hour ahead, RUNNING, or finished), so no consumer can claim them; tests
+ * that need "due" rows look at the table from a later `now` instead. Every row carries a per-run
+ * eventId in its payload. Each test creates the rows it asserts on; afterAll() deletes by type.
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
-import { cancelJob, loadJobBuckets, loadJobHealth, loadWorkers, retryDeadOfType } from "./jobQueries";
+import { cancelJob, dbNow, loadDurations, loadJobBuckets, loadJobHealth, loadWorkers, recentJobs, retryDeadOfType } from "./jobQueries";
 
 const run = `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
 const T = `TEST_ADM022_${run}`;
@@ -24,7 +25,7 @@ if (!dbUp) console.log("# apps/admin jobQueries: Postgres unreachable -- skippin
 afterAll(async () => {
   if (dbUp) {
     await prisma.job.deleteMany({ where: { type: { startsWith: T } } });
-    await prisma.workerHeartbeat.deleteMany({ where: { workerId: WORKER } });
+    await prisma.workerHeartbeat.deleteMany({ where: { workerId: { startsWith: WORKER } } });
   }
   await prisma.$disconnect();
 });
@@ -35,6 +36,11 @@ const make = (data: Partial<Parameters<typeof prisma.job.create>[0]["data"]> & {
 };
 
 describe.skipIf(!dbUp)(suite, () => {
+  it("takes `now` from the database clock, read as UTC", async () => {
+    const now = await dbNow();
+    expect(Math.abs(now.getTime() - Date.now())).toBeLessThan(5_000);
+  });
+
   it("job.cancel is refused for RUNNING jobs and leaves the row untouched", async () => {
     const job = await make({ status: "RUNNING", lockedBy: WORKER, lockedAt: new Date(), attempts: 1 });
     const r = await cancelJob(job.id);
@@ -60,36 +66,43 @@ describe.skipIf(!dbUp)(suite, () => {
     expect((await prisma.job.findUniqueOrThrow({ where: { id: job.id } })).status).toBe("QUEUED");
   });
 
-  it("retries every DEAD job of one type and nothing else", async () => {
+  it("retries every DEAD job of one type, clears finishedAt, and touches nothing else", async () => {
     const type = `${T}_RETRY`;
-    const dead = await Promise.all([1, 2].map(() => make({ type, status: "DEAD", attempts: 5, lastError: "x", runAt: new Date(Date.now() - HOUR) })));
-    const done = await make({ type, status: "SUCCEEDED" });
+    const finishedAt = new Date(Date.now() - 60_000);
+    const dead = await Promise.all([1, 2].map(() => make({ type, status: "DEAD", attempts: 5, lastError: "x", finishedAt, runAt: new Date(Date.now() - HOUR) })));
+    const done = await make({ type, status: "SUCCEEDED", finishedAt });
     expect(await retryDeadOfType(type)).toBe(2);
     const rows = await prisma.job.findMany({ where: { type }, orderBy: { id: "asc" } });
-    expect(rows.filter((r) => dead.some((d) => d.id === r.id)).map((r) => [r.status, r.attempts])).toEqual([["QUEUED", 0], ["QUEUED", 0]]);
-    expect(rows.find((r) => r.id === done.id)!.status).toBe("SUCCEEDED");
+    expect(rows.filter((r) => dead.some((d) => d.id === r.id)).map((r) => [r.status, r.attempts, r.finishedAt])).toEqual([["QUEUED", 0, null], ["QUEUED", 0, null]]);
+    expect(rows.find((r) => r.id === done.id)).toMatchObject({ status: "SUCCEEDED", finishedAt });
     // park them again so no consumer can pick them up before afterAll
     await prisma.job.updateMany({ where: { type }, data: { runAt: new Date(Date.now() + HOUR) } });
   });
 
-  it("aggregates one event's jobs into buckets the summary understands", async () => {
+  it("aggregates one event's jobs into buckets, with Postgres computing the duration percentiles", async () => {
     const type = `${T}_AGG`;
     const now = new Date();
+    const ok = (durationMs: number, attempts: number, finishedAgoMs: number) =>
+      make({ type, status: "SUCCEEDED", attempts, lockedAt: new Date(now.getTime() - finishedAgoMs - durationMs), finishedAt: new Date(now.getTime() - finishedAgoMs) });
     await make({ type, lastError: "boom", finishedAt: new Date(now.getTime() - 60_000) }); // scheduled retry
-    await make({ type, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 2500), finishedAt: new Date(now.getTime() - 500) });
-    await make({ type, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 3 * HOUR), finishedAt: new Date(now.getTime() - 2 * HOUR) });
+    await make({ type, lastError: "requeued: more photos arrived" }); // a Requeue is not a failure
+    await ok(2000, 3, 500); // succeeded on its third attempt: two failures preceded it
+    await ok(4000, 1, 1000);
+    await ok(9000, 2, 2 * HOUR); // outside the window
     await make({ type, status: "RUNNING", eventId: OTHER_EVENT });
 
     const buckets = (await loadJobBuckets(now, { eventId: EVENT })).filter((b) => b.type === type);
-    const queued = buckets.find((b) => b.status === "QUEUED")!;
-    expect(queued).toMatchObject({ due: false, retrying: true, count: 1, finishedRecent: 1 });
-    const ok = buckets.find((b) => b.status === "SUCCEEDED")!;
-    expect(ok).toMatchObject({ count: 2, finishedRecent: 1, durationsMs: [2000] });
+    const retrying = buckets.find((b) => b.status === "QUEUED" && b.retrying)!;
+    expect(retrying).toMatchObject({ due: false, count: 1, finishedRecent: 1 });
+    const requeued = buckets.find((b) => b.status === "QUEUED" && !b.retrying)!;
+    expect(requeued).toMatchObject({ count: 1, finishedRecent: 0 });
+    const succeeded = buckets.find((b) => b.status === "SUCCEEDED")!;
+    expect(succeeded).toMatchObject({ count: 3, finishedRecent: 2, priorFailuresRecent: 2, p50Ms: 2000, p95Ms: 4000 });
     expect(buckets.some((b) => b.status === "RUNNING")).toBe(false); // other event
 
-    // seen from two hours later, the scheduled row is due and its oldest runAt is reported
+    // seen from two hours later, the scheduled rows are due and their oldest runAt is reported
     const later = await loadJobBuckets(new Date(now.getTime() + 2 * HOUR), { eventId: EVENT });
-    const due = later.find((b) => b.type === type && b.status === "QUEUED")!;
+    const due = later.find((b) => b.type === type && b.status === "QUEUED" && b.retrying)!;
     expect(due.due).toBe(true);
     expect(due.oldestRunAt).toBeInstanceOf(Date);
 
@@ -97,22 +110,52 @@ describe.skipIf(!dbUp)(suite, () => {
     expect(all.some((b) => b.type === type && b.status === "RUNNING")).toBe(true);
   });
 
-  it("loadJobHealth composes the event's summary, live workers and ETA", async () => {
-    const type = `${T}_HEALTH`;
-    const eventId = `${EVENT}-health`;
-    await make({ type, eventId, status: "SUCCEEDED", lockedAt: new Date(Date.now() - 4000), finishedAt: new Date(Date.now() - 1000) });
-    await make({ type, eventId, status: "RUNNING", lockedBy: `${WORKER}-health`, lockedAt: new Date() });
-    const h = await loadJobHealth({ eventId });
-    expect(h.summary.types.map((t) => t.type)).toEqual([type]);
-    expect(h.summary.total).toMatchObject({ running: 1, succeededLastHour: 1, p50Ms: 3000 });
-    expect(h.eta).toBe(0); // nothing due
-    expect(h.live).toBe(h.workers.filter((w) => w.live).length);
+  it("computes overall p50/p95 over recent successes of every type in scope", async () => {
+    const eventId = `${EVENT}-durations`;
+    const now = new Date();
+    const ok = (type: string, durationMs: number) =>
+      make({ type, eventId, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 1000 - durationMs), finishedAt: new Date(now.getTime() - 1000) });
+    await Promise.all([ok(`${T}_A`, 100), ok(`${T}_A`, 200), ok(`${T}_B`, 300), ok(`${T}_B`, 400), ok(`${T}_B`, 1000)]);
+    expect(await loadDurations(now, { eventId })).toEqual({ p50Ms: 300, p95Ms: 1000 });
+    expect(await loadDurations(now, { eventId: `${eventId}-none` })).toEqual({ p50Ms: null, p95Ms: null });
   });
 
-  it("loads heartbeats and the lock holders of RUNNING jobs", async () => {
-    await prisma.workerHeartbeat.create({ data: { workerId: WORKER, version: "t", hostname: "h" } });
-    const { beats, busyIds } = await loadWorkers();
-    expect(beats.find((b) => b.workerId === WORKER)).toMatchObject({ version: "t", hostname: "h" });
-    expect(busyIds).toContain(WORKER); // the RUNNING job from the first test
+  it("loadJobHealth composes the event's summary, live workers and an ETA from the database clock", async () => {
+    const type = `${T}_HEALTH`;
+    const eventId = `${EVENT}-health`;
+    const now = new Date(Date.now() + 2 * HOUR); // the rows scheduled an hour ahead are due from here
+    const seen = (workerId: string, secondsAgo: number) => prisma.workerHeartbeat.create({ data: { workerId, lastSeenAt: new Date(now.getTime() - secondsAgo * 1000), version: "t", hostname: "h" } });
+    await Promise.all([
+      make({ type, eventId, status: "SUCCEEDED", lockedAt: new Date(now.getTime() - 4000), finishedAt: new Date(now.getTime() - 1000) }), // 3 s
+      make({ type, eventId }), make({ type, eventId }), make({ type, eventId }), // 3 due from `now`
+      seen(`${WORKER}-live`, 5),
+      seen(`${WORKER}-silent`, 600),
+    ]);
+    const h = await loadJobHealth({ eventId }, now);
+    expect(h.summary.types.map((t) => t.type)).toEqual([type]);
+    expect(h.summary.total).toMatchObject({ queued: 3, succeededLastHour: 1, p50Ms: 3000 });
+    expect(h.workers.find((w) => w.workerId === `${WORKER}-live`)!.live).toBe(true);
+    expect(h.workers.find((w) => w.workerId === `${WORKER}-silent`)!.live).toBe(false);
+    expect(h.live).toBeGreaterThanOrEqual(1);
+    expect(h.eta).toBe(Math.ceil((3 * 3000) / 1000 / h.live));
+  });
+
+  it("loadWorkers returns heartbeats only; a RUNNING lock says nothing about liveness", async () => {
+    await prisma.workerHeartbeat.create({ data: { workerId: `${WORKER}-hb`, version: "t", hostname: "h" } });
+    await make({ status: "RUNNING", lockedBy: `${WORKER}-hb-crashed`, lockedAt: new Date() });
+    const beats = await loadWorkers();
+    expect(beats.find((b) => b.workerId === `${WORKER}-hb`)).toMatchObject({ version: "t", hostname: "h" });
+    expect(beats.some((b) => b.workerId === `${WORKER}-hb-crashed`)).toBe(false);
+  });
+
+  it("recentJobs returns the newest first, limited, and only the event's own jobs when scoped", async () => {
+    const type = `${T}_RECENT`;
+    const eventId = `${EVENT}-recent`;
+    const mine = [await make({ type, eventId }), await make({ type, eventId }), await make({ type, eventId })]; // sequential: ids must follow creation order
+    await make({ type, eventId: OTHER_EVENT });
+    const rows = await recentJobs({ eventId }, 2);
+    expect(rows.map((r) => r.id)).toEqual([mine[2]!.id, mine[1]!.id]);
+    const unscoped = await recentJobs({}, 50);
+    expect(unscoped.some((r) => (r.payload as { eventId?: string }).eventId === OTHER_EVENT)).toBe(true);
   });
 });

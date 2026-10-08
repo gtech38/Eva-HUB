@@ -1,34 +1,25 @@
 "use server";
-// tdd-exempt: thin server-action wiring (authorize + one lib/jobQueries call + audit); cancel/retry logic is tested in src/lib/jobQueries.test.ts and src/lib/jobs.test.ts
+// tdd-exempt: thin server-action wiring (form parsing, session, revalidate); authorisation, rules and audit are in src/lib/jobActions.ts, tested by jobActions.test.ts
 
 import { revalidatePath } from "next/cache";
 import { act, str, type ActionState } from "@/lib/action";
-import { authorize, requireSignedIn } from "@/lib/auth";
-import { audit } from "@/lib/audit";
-import { cancelJob, retryDeadOfType } from "@/lib/jobQueries";
+import { requireSignedIn } from "@/lib/auth";
+import { cancelJobAs, retryDeadJobsAs } from "@/lib/jobActions";
 
 export async function cancelJobAction(_p: ActionState, fd: FormData): Promise<ActionState> {
   return act(async () => {
     const p = await requireSignedIn();
-    authorize(p, "platform.admin", { studioId: "" });
-    const id = BigInt(str(fd, "id"));
-    const r = await cancelJob(id);
-    if (!r.ok) return r;
-    await audit({ actorUserId: p.userId, action: "job.cancel", target: String(id), data: { type: r.type } });
-    revalidatePath("/platform/jobs");
-    return { ok: true, message: "Cancelled" };
+    const r = await cancelJobAs(p, { id: BigInt(str(fd, "id")) });
+    if (r.ok) revalidatePath("/platform/jobs");
+    return r;
   });
 }
 
 export async function retryDeadJobs(_p: ActionState, fd: FormData): Promise<ActionState> {
   return act(async () => {
     const p = await requireSignedIn();
-    authorize(p, "platform.admin", { studioId: "" });
-    const type = str(fd, "type");
-    if (!type) return { ok: false, error: "Job type is required" };
-    const count = await retryDeadOfType(type);
-    await audit({ actorUserId: p.userId, action: "job.retry.all", target: type, data: { type, count } });
-    revalidatePath("/platform/jobs");
-    return { ok: true, message: `Re-queued ${count} dead ${type} job(s)` };
+    const r = await retryDeadJobsAs(p, str(fd, "type"));
+    if (r.ok) revalidatePath("/platform/jobs");
+    return r;
   });
 }

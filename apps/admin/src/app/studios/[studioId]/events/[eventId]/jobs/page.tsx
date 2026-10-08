@@ -1,5 +1,4 @@
 import { notFound } from "next/navigation";
-import { prisma } from "@hub/db";
 import { can } from "@hub/shared";
 import { getEvent } from "@/lib/data";
 import { requireAdmin } from "@/lib/auth";
@@ -7,7 +6,8 @@ import { Card, Table, StatusBadge } from "@/components/ui";
 import { ActionButton } from "@/components/forms";
 import { JobHealth } from "@/components/JobHealth";
 import { fmtDateTime } from "@/lib/format";
-import { loadJobHealth } from "@/lib/jobQueries";
+import { publicError } from "@/lib/jobs";
+import { loadJobHealth, recentJobs } from "@/lib/jobQueries";
 import { cancelEventJob } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -20,10 +20,7 @@ export default async function EventJobsPage({ params }: { params: Promise<{ stud
   await getEvent(studioId, eventId); // 404 unless the event is in this studio; scopes the payload filter below
   const canCancel = can(p, "studio.manage", res);
 
-  const [health, jobs] = await Promise.all([
-    loadJobHealth({ eventId }),
-    prisma.job.findMany({ where: { payload: { path: ["eventId"], equals: eventId } }, orderBy: { createdAt: "desc" }, take: 50 }),
-  ]);
+  const [health, jobs] = await Promise.all([loadJobHealth({ eventId }), recentJobs({ eventId })]);
 
   return (
     <>
@@ -40,7 +37,7 @@ export default async function EventJobsPage({ params }: { params: Promise<{ stud
               <td><StatusBadge status={j.status} /></td>
               <td className="tabular-nums">{j.attempts}/{j.maxAttempts}</td>
               <td className="whitespace-nowrap text-xs text-neutral-600">{fmtDateTime(j.runAt)}</td>
-              <td className="max-w-[320px] text-xs text-red-700">{j.lastError && <span className="line-clamp-2" title={j.lastError}>{j.lastError}</span>}</td>
+              <td className="max-w-[320px] text-xs text-red-700">{j.lastError && <span className="line-clamp-2">{publicError(j.lastError)}</span>}</td>
               <td>
                 {canCancel && j.status === "QUEUED" && (
                   <ActionButton action={cancelEventJob} fields={{ studioId, eventId, id: String(j.id) }} confirm={`Cancel job #${String(j.id)} (${j.type})?`}>Cancel</ActionButton>

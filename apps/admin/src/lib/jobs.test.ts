@@ -1,43 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { cancelRefusal, etaSeconds, failureRate, fmtAge, fmtMs, percentile, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
+import { cancelRefusal, etaSeconds, failureRate, fmtAge, fmtMs, publicError, queueHealth, summarizeJobs, workerStatuses, type Heartbeat, type JobBucket, type TypeSummary } from "./jobs";
 
 const NOW = new Date("2026-10-08T12:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
 
 /** A bucket with every count at zero; override what the case needs. */
 function bucket(over: Partial<JobBucket> & Pick<JobBucket, "type" | "status">): JobBucket {
-  return { due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, durationsMs: [], ...over };
+  return { due: false, retrying: false, count: 0, oldestRunAt: null, finishedRecent: 0, priorFailuresRecent: 0, p50Ms: null, p95Ms: null, ...over };
 }
-
-describe("percentile (nearest rank)", () => {
-  it("returns null for no samples", () => {
-    expect(percentile([], 50)).toBeNull();
-  });
-
-  it("picks the nearest-rank value regardless of input order", () => {
-    const xs = Array.from({ length: 100 }, (_, i) => 100 - i); // 100..1
-    expect(percentile(xs, 50)).toBe(50);
-    expect(percentile(xs, 95)).toBe(95);
-    expect(percentile([7], 95)).toBe(7);
-    expect(percentile([1, 2, 3, 4], 50)).toBe(2);
-  });
-});
 
 describe("summarizeJobs", () => {
   const rows: JobBucket[] = [
-    // PROCESS_PHOTO: 3 due (oldest 120 s ago), of which 1 retrying; 2 scheduled; 1 running; 4 succeeded recently
+    // PROCESS_PHOTO: 3 due (oldest 120 s ago), of which 1 retrying; 2 scheduled; 1 running;
+    // 4 succeeded recently, 2 of them only after earlier failed attempts (2 failures in total)
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, count: 2, oldestRunAt: ago(120) }),
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: true, retrying: true, count: 1, oldestRunAt: ago(30), finishedRecent: 1 }),
     bucket({ type: "PROCESS_PHOTO", status: "QUEUED", due: false, count: 2, oldestRunAt: new Date(NOW.getTime() + 60_000) }),
     bucket({ type: "PROCESS_PHOTO", status: "RUNNING", count: 1, oldestRunAt: ago(5) }),
-    bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 10, finishedRecent: 4, durationsMs: [400, 100, 300, 200] }),
-    // INDEX_FACES: 1 retrying but not yet due, 2 dead (1 died within the hour), 1 succeeded long ago
+    bucket({ type: "PROCESS_PHOTO", status: "SUCCEEDED", count: 10, finishedRecent: 4, priorFailuresRecent: 2, p50Ms: 200, p95Ms: 400 }),
+    // INDEX_FACES: 1 retrying but not yet due, 2 dead (1 died within the hour), 1 succeeded recently
     bucket({ type: "INDEX_FACES", status: "QUEUED", due: false, retrying: true, count: 1, oldestRunAt: new Date(NOW.getTime() + 5_000) }),
     bucket({ type: "INDEX_FACES", status: "DEAD", retrying: true, count: 2, finishedRecent: 1 }),
-    bucket({ type: "INDEX_FACES", status: "SUCCEEDED", count: 1, finishedRecent: 1, durationsMs: [1000] }),
+    bucket({ type: "INDEX_FACES", status: "SUCCEEDED", count: 1, finishedRecent: 1, p50Ms: 1000, p95Ms: 1000 }),
   ];
 
-  const s = summarizeJobs(rows, NOW);
+  // Percentiles come from Postgres (percentile_disc) per bucket; the overall pair spans all types.
+  const s = summarizeJobs(rows, NOW, { p50Ms: 300, p95Ms: 1000 });
   const photo = s.types.find((t) => t.type === "PROCESS_PHOTO")!;
   const faces = s.types.find((t) => t.type === "INDEX_FACES")!;
 
@@ -63,20 +51,22 @@ describe("summarizeJobs", () => {
     expect(s.total.retrying).toBe(2);
   });
 
-  it("counts dead rows and recent outcomes (failed = retrying or dead, finished within the window)", () => {
+  it("counts dead rows and recent outcomes (failed = retrying or dead in the window, plus failed attempts before a success)", () => {
     expect(faces.dead).toBe(2);
     expect(photo.succeededLastHour).toBe(4);
-    expect(photo.failedLastHour).toBe(1);
+    // mark_succeeded clears lastError, so a job that failed twice and then succeeded would otherwise count as zero failures
+    expect(photo.failedLastHour).toBe(1 + 2);
     expect(faces.failedLastHour).toBe(1);
     expect(s.total.succeededLastHour).toBe(5);
-    expect(s.total.failedLastHour).toBe(2);
+    expect(s.total.failedLastHour).toBe(4);
+    expect(failureRate(s.total)).toBe(44); // 4 failed of 9 attempts
   });
 
-  it("computes p50/p95 duration from recent successes, per type and overall", () => {
+  it("passes the database's p50/p95 through, per type and overall", () => {
     expect(photo.p50Ms).toBe(200);
     expect(photo.p95Ms).toBe(400);
     expect(faces.p50Ms).toBe(1000);
-    expect(s.total.p50Ms).toBe(300); // [100,200,300,400,1000]
+    expect(s.total.p50Ms).toBe(300);
     expect(s.total.p95Ms).toBe(1000);
   });
 
@@ -96,17 +86,20 @@ describe("workerStatuses", () => {
   const beat = (workerId: string, secondsAgo: number): Heartbeat => ({ workerId, lastSeenAt: ago(secondsAgo), version: "0.1.0", hostname: "h" });
 
   it("a worker seen within 30 s is live; one silent for 30 s or more is not", () => {
-    const ws = workerStatuses([beat("a:1", 29), beat("b:2", 30), beat("c:3", 600)], [], NOW);
+    const ws = workerStatuses([beat("a:1", 29), beat("b:2", 30), beat("c:3", 600)], NOW);
     expect(ws.map((w) => [w.workerId, w.live])).toEqual([["a:1", true], ["b:2", false], ["c:3", false]]);
   });
 
-  it("a silent worker still holding a RUNNING job counts as live and busy (long handlers skip beats)", () => {
-    const [w] = workerStatuses([beat("zip:9", 300)], ["zip:9"], NOW);
-    expect(w).toMatchObject({ live: true, busy: true });
+  it("liveness is the heartbeat alone: a worker that went silent 10 minutes ago is not live (it may have crashed mid-job)", () => {
+    // The heartbeat comes from its own thread, so a worker inside a long handler keeps beating; silence
+    // means the process is gone, whatever RUNNING locks it left behind.
+    const [w] = workerStatuses([beat("zip:9", 600)], NOW);
+    expect(w!.live).toBe(false);
+    expect(Object.keys(w!)).not.toContain("busy");
   });
 
   it("lists live workers first, most recently seen first", () => {
-    const ws = workerStatuses([beat("old:1", 900), beat("b:2", 10), beat("a:1", 2)], [], NOW);
+    const ws = workerStatuses([beat("old:1", 900), beat("b:2", 10), beat("a:1", 2)], NOW);
     expect(ws.map((w) => w.workerId)).toEqual(["a:1", "b:2", "old:1"]);
   });
 });
@@ -147,6 +140,30 @@ describe("formatting", () => {
   it("failureRate is failed / (succeeded + failed) as a percentage, null with no outcomes", () => {
     expect(failureRate({ succeededLastHour: 3, failedLastHour: 1 })).toBe(25);
     expect(failureRate({ succeededLastHour: 0, failedLastHour: 0 })).toBeNull();
+  });
+});
+
+describe("publicError (what studio staff may see of a job's lastError)", () => {
+  it("keeps only the first line: no traceback, no file paths from the stack", () => {
+    const err = 'RuntimeError: kaboom\nTraceback (most recent call last):\n  File "/srv/hub_worker/jobs.py", line 3, in run_once\n    boom()';
+    expect(publicError(err)).toBe("RuntimeError: kaboom");
+  });
+
+  it("strips the worker identity suffix of a released stale lock", () => {
+    expect(publicError("stale lock released (worker mac-mini.local:4242)")).toBe("stale lock released");
+    expect(publicError("stale lock released (worker ?)")).toBe("stale lock released");
+  });
+
+  it("skips leading blank lines and caps the length", () => {
+    expect(publicError("\n\n  ValueError: bad\nmore")).toBe("ValueError: bad");
+    const long = publicError("x".repeat(500))!;
+    expect(long.length).toBe(160);
+    expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("passes null and empty through as null", () => {
+    expect(publicError(null)).toBeNull();
+    expect(publicError("  \n ")).toBeNull();
   });
 });
 

@@ -1,20 +1,16 @@
-import { prisma } from "@hub/db";
 import { PageHeader, Card, Table, StatusBadge, Stat } from "@/components/ui";
 import { ActionButton } from "@/components/forms";
 import { JobHealth } from "@/components/JobHealth";
 import { fmtDateTime } from "@/lib/format";
 import { JOB_STATUSES } from "@/lib/jobs";
-import { loadJobHealth } from "@/lib/jobQueries";
+import { loadJobHealth, recentJobs } from "@/lib/jobQueries";
 import { retryJob } from "../actions";
 import { cancelJobAction, retryDeadJobs } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function JobsPage() {
-  const [health, jobs] = await Promise.all([
-    loadJobHealth(),
-    prisma.job.findMany({ orderBy: { createdAt: "desc" }, take: 50 }),
-  ]);
+  const [health, jobs] = await Promise.all([loadJobHealth(), recentJobs()]);
   const { byStatus } = health.summary;
 
   return (
@@ -23,7 +19,7 @@ export default async function JobsPage() {
       <JobHealth
         health={health}
         typeActions={(type, dead) => dead > 0 && (
-          <ActionButton action={retryDeadJobs} fields={{ type }} confirm={`Re-queue all ${dead} dead ${type} job(s)?`}>Retry dead</ActionButton>
+          <ActionButton action={retryDeadJobs} fields={{ type }} confirm={`Re-queue all ${dead} dead ${type} job(s)? This also revives jobs a studio owner cancelled.`}>Retry dead</ActionButton>
         )}
       />
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
