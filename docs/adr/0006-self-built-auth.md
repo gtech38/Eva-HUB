@@ -16,7 +16,7 @@ For the POC, auth is a small module we own, not Better Auth. The `hub_session` c
 
 - The invite-link scope and linking rules sit in our code and tests (`policy.test.ts`) rather than being bent around a library's session model.
 - We own the security surface: rate limiting and lockout (SHR-003), OTP sign-in (SHR-002), duplicate-user merge (SHR-004) and expiry of stale `Session` rows are our work.
-- Revisit and consider Better Auth (or Auth.js) when any of these holds: passkeys or other providers are wanted beyond what WEB-008 builds on `@simplewebauthn/server`, the code header's own trigger; the maintenance cost of SHR-002 to SHR-004 exceeds the cost of adapting the invite-link model to a library; or a security review prefers a maintained implementation. A switch must preserve the `INVITE_LINK` rules and cookie behaviour in `docs/02`.
+- Revisit and consider Better Auth (or Auth.js) when any of these holds. (1) Passkeys are wanted: this is the trigger in the `auth.ts` header, but WEB-008 plans them on `@simplewebauthn/server` without a switch, so that ticket confirms or flips this criterion. (2) The maintenance cost of SHR-002 to SHR-004 exceeds the cost of adapting the invite-link model to a library. (3) A security review prefers a maintained implementation. A switch must preserve the `INVITE_LINK` rules and cookie behaviour in `docs/02`.
 - docs/01 section 9 and docs/04 still recommend Better Auth; DOC-012 updates them.
 
 ## Alternatives

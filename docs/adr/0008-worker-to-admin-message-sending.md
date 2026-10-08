@@ -16,7 +16,7 @@ Proposed, to be accepted when SHR-005 merges. The `SEND_MESSAGE` handler POSTs `
 
 - Templates, locales and adapters exist once, in `packages/shared`; the worker gains no Node or SMS code.
 - The worker depends on the admin app being up, and the admin gains a machine-facing route that needs the token guard and tests. This is why the endpoint is in admin (ADR-0007), which is always deployed, rather than in a per-host web app.
-- Follow-ups: real providers and delivery webhooks (SHR-011, SHR-012), template content and preview (SHR-013); docs/01 section 7 and the worker README document the internal call.
+- Follow-ups: real providers and delivery webhooks (SHR-011, SHR-012), template content and preview (SHR-013); SHR-005 itself updates docs/01 section 7 and the worker README to document the internal call.
 - If the decision changes before the ticket merges, edit this ADR; afterwards supersede it.
 
 ## Alternatives

@@ -17,6 +17,7 @@ Keys are derived from the row alone and always start with the tenant: `s/{studio
 ## Consequences
 
 - Switching provider is an environment change plus bucket setup; no caller changes.
+- Presigned URL lifetimes are set in `storage.ts`: uploads 15 minutes, original downloads 5 minutes, derivative URLs 24 hours (until the CDN prefix of SHR-008).
 - Tenant prefix makes per-studio lifecycle rules, export and deletion a prefix operation.
 - Provider quirks must be handled generically: the local server has no CORS, so uploads fall back to the admin `/api/upload` proxy (SHR-007 adds CORS and multipart helpers).
 - Public CDN in front of derivatives is a separate decision (SHR-008); regional placement is INF-020.

@@ -18,7 +18,7 @@ Two Next.js 15 apps share code only through packages. `apps/web` (port 3000) ser
 - There are three deployable services (web, admin, worker), not two as docs/01 says; DOC-012 updates the docs, and INF-015 and INF-018 build and run all three.
 - Duplicated app plumbing (session cookie helpers, `authorize()`, layout) is accepted; anything genuinely shared must be lifted into `packages/shared`.
 - The admin is always deployed and not tied to an event host, which is why the worker-to-admin internal endpoint in ADR-0008 lives there.
-- A signed-in user must sign in on each origin unless the cookie domain is shared (`cookieDomain()` returns a `.ROOT_DOMAIN` cookie in production, host-only on localhost).
+- A signed-in user must sign in on each origin unless the cookie domain is shared: `cookieDomain()` returns `.ROOT_DOMAIN` for any `ROOT_DOMAIN` other than `localhost`, and no domain (host-only) when it is `localhost`.
 
 ## Alternatives
 

@@ -17,7 +17,7 @@ ADR-0002 requires only the S3 API, and the local stack needs an S3-compatible se
 - Local development works with one `pnpm infra:up`. RustFS has no CORS configuration locally, so browser uploads use the admin `/api/upload` proxy; SHR-007 adds CORS configuration and multipart helpers tested against both RustFS and R2.
 - Behavioural differences (presign edge cases, multipart limits, listing order) can hide until run against R2; storage tests should not assume RustFS specifics.
 - The image tag is `latest`, so a breaking upstream change can surface on the next pull; pin a digest if that happens.
-- docs/01, docs/04 and parts of the README still say MinIO; DOC-012 refreshes them.
+- docs/01 and docs/04 still name MinIO as the local server; the README and `.env.example` only keep `minio` / `minio12345` as the credentials. DOC-012 refreshes the docs.
 
 ## Alternatives
 
