@@ -1,7 +1,10 @@
 import { z } from "zod";
 
-const schema = z.object({
+// One key per line: scripts/env-docs.mjs reads this object (key, `.default(...)`, `.optional()`) to
+// generate docs/deploy/env.md and .env.example. Add the key's metadata in scripts/env-meta.mjs.
+const base = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  APP_ENV: z.enum(["development", "test", "production"]).optional(),
   ROOT_DOMAIN: z.string().default("localhost"),
   WEB_PORT: z.coerce.number().default(3000),
   ADMIN_PORT: z.coerce.number().default(3001),
@@ -31,6 +34,48 @@ const schema = z.object({
 
   WORKER_INTERNAL_URL: z.string().default("http://localhost:8010"),
   FACE_MATCH_THRESHOLD: z.coerce.number().default(0.363),
+});
+
+/** APP_ENV wins over NODE_ENV, so `next start` can be smoke-tested locally with APP_ENV=development. */
+export function isProduction(e: { NODE_ENV?: string; APP_ENV?: string }): boolean {
+  return (e.APP_ENV ?? e.NODE_ENV) === "production";
+}
+
+const MIN_SECRET_BYTES = 32;
+const PLACEHOLDER = /change-?me|dev-only|ci-only|placeholder/i;
+
+/** Random bytes a secret carries: hex and base64(url) are decoded; anything else counts its UTF-8 bytes. */
+export function secretBytes(secret: string): number {
+  if (/^[0-9a-f]+$/i.test(secret) && secret.length % 2 === 0) return secret.length / 2;
+  if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(secret)) return Math.floor((secret.replace(/=+$/, "").length * 6) / 8);
+  return new TextEncoder().encode(secret).length;
+}
+
+type ProductionIssue = { key: keyof z.infer<typeof base>; message: string };
+
+/** Settings that have safe local defaults but must be set deliberately in production. Messages never include values. */
+export function productionIssues(e: z.infer<typeof base>): ProductionIssue[] {
+  const issues: ProductionIssue[] = [];
+  if (PLACEHOLDER.test(e.AUTH_SECRET) || secretBytes(e.AUTH_SECRET) < MIN_SECRET_BYTES) {
+    issues.push({
+      key: "AUTH_SECRET",
+      message: `must be at least ${MIN_SECRET_BYTES} random bytes in production, not a dev placeholder (generate with \`openssl rand -base64 32\`)`,
+    });
+  }
+  if (!e.S3_PUBLIC_ENDPOINT) {
+    issues.push({ key: "S3_PUBLIC_ENDPOINT", message: "is required in production (browser-facing bucket URL)" });
+  }
+  if (e.EMAIL_PROVIDER === "console") {
+    issues.push({ key: "EMAIL_PROVIDER", message: "must not be 'console' in production (guests would never get their links)" });
+  }
+  return issues;
+}
+
+const schema = base.superRefine((e, ctx) => {
+  if (!isProduction(e)) return;
+  for (const { key, message } of productionIssues(e)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message });
+  }
 });
 
 export type Env = z.infer<typeof schema>;
