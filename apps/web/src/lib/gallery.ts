@@ -5,7 +5,7 @@
 import { prisma, type AlbumVisibility, type Photo, type Prisma } from "@hub/db";
 import { storage } from "@hub/shared";
 import { t, type Locale } from "@hub/shared/i18n";
-import type { KeysetCursor } from "./galleryCursor";
+import type { KeysetCursor, ScoreCursor } from "./galleryCursor";
 import type { Viewer } from "./site";
 
 export type Derivatives = { thumb?: string; web?: string; webWm?: string };
@@ -87,6 +87,46 @@ async function sortKeyPage(eventId: string, viewer: Viewer, extra: Prisma.PhotoW
 
 export function listAlbumPage(eventId: string, viewer: Viewer, albumId: string, opts: PageOptions<KeysetCursor> = {}) {
   return sortKeyPage(eventId, viewer, { albumId }, opts);
+}
+
+/** The viewer's own hearts across the event. */
+export function listFavoritesPage(eventId: string, viewer: Viewer, opts: PageOptions<KeysetCursor> = {}) {
+  return sortKeyPage(eventId, viewer, { favorites: { some: { userId: viewer.principal.userId } } }, opts);
+}
+
+/** Whose face matches to list: the signed-in user's own, or a child guest they search for as guardian. */
+export type MatchSubject = { userId: string } | { guestId: string };
+
+/** Rows strictly after `(score, photoId)` in `score DESC, photoId ASC` order. */
+function afterScore(c: ScoreCursor | undefined): Prisma.PhotoMatchWhereInput {
+  if (!c) return {};
+  return { OR: [{ score: { lt: c.score } }, { score: c.score, photoId: { gt: c.id } }] };
+}
+
+/** "My photos": previously matched photos, best match first. The score order is the keyset. */
+export async function listMatchPage(eventId: string, viewer: Viewer, subject: MatchSubject, opts: PageOptions<ScoreCursor> = {}): Promise<Page<ScoreCursor>> {
+  const limit = clampLimit(opts.limit);
+  const rows = await prisma.photoMatch.findMany({
+    where: {
+      ...("userId" in subject ? { userId: subject.userId } : { subjectGuestId: subject.guestId }),
+      photo: visiblePhotoWhere(eventId, viewer),
+      AND: [afterScore(opts.cursor)],
+    },
+    orderBy: [{ score: "desc" }, { photoId: "asc" }],
+    take: limit + 1,
+    include: { photo: true },
+  });
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  const entitled = await isEntitledFullRes(eventId, viewer.principal.userId);
+  return {
+    photos: await toPhotoDTOs(
+      page.map((m) => m.photo),
+      viewer,
+      { entitled, scores: new Map(page.map((m) => [m.photoId, m.score])) },
+    ),
+    nextCursor: rows.length > limit && last ? { score: last.score, id: last.photoId } : null,
+  };
 }
 
 /** Photos in the album this viewer may list (the header total; pages are fetched separately). */

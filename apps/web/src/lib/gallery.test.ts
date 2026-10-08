@@ -2,10 +2,10 @@
  * Postgres-backed tests for the gallery feeds (keyset pagination) and the visibility and
  * entitlement rules they sit on. Needs the local stack; skipped with a reason when Postgres is down.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
 import { VISIBLE_IN_MAIN, createGalleryFixture, dbReachable, fakeViewer } from "../../test/galleryFixture";
-import { countAlbumPhotos, listAlbumPage, MAX_PAGE_SIZE, PAGE_SIZE, type PhotoDTO } from "./gallery";
+import { countAlbumPhotos, listAlbumPage, listFavoritesPage, listMatchPage, MAX_PAGE_SIZE, PAGE_SIZE, type PhotoDTO } from "./gallery";
 import type { KeysetCursor } from "./galleryCursor";
 
 const dbUp = await dbReachable();
@@ -25,9 +25,9 @@ afterAll(async () => {
 });
 
 /** Walk every page of a feed, returning the pages (so tests can assert sizes and boundaries). */
-async function walk(fetchPage: (cursor?: KeysetCursor) => Promise<{ photos: PhotoDTO[]; nextCursor: KeysetCursor | null }>) {
+async function walk<C>(fetchPage: (cursor?: C) => Promise<{ photos: PhotoDTO[]; nextCursor: C | null }>) {
   const pages: PhotoDTO[][] = [];
-  let cursor: KeysetCursor | undefined;
+  let cursor: C | undefined;
   for (let guard = 0; guard < 500; guard++) {
     const page = await fetchPage(cursor);
     pages.push(page.photos);
@@ -107,6 +107,103 @@ describe.skipIf(!dbUp)(suite, () => {
       expect(await countAlbumPhotos(fx.eventA.id, fakeViewer(fx.users.viewer.id), fx.albums.main.id)).toBe(VISIBLE_IN_MAIN);
       expect(await countAlbumPhotos(fx.eventA.id, fakeViewer(fx.users.viewer.id), fx.albums.hostsOnly.id)).toBe(0);
       expect(await countAlbumPhotos(fx.eventA.id, fakeViewer(fx.users.viewer.id, { canHostsOnlyAlbums: true }), fx.albums.hostsOnly.id)).toBe(4);
+    });
+  });
+
+  describe("listFavoritesPage", () => {
+    it("pages the viewer's favorites in sortKey order and skips hidden, hosts-only, other-user and other-event photos", async () => {
+      const mine = fx.expectedMainOrder.slice(0, 70);
+      const hiddenId = `${fx.run}-h000`;
+      const strays = [hiddenId, fx.hostsOnlyIds[0], fx.otherEventIds[0]];
+      await prisma.favorite.createMany({
+        data: [...mine, ...strays].map((photoId) => ({ userId: fx.users.viewer.id, photoId })).concat(
+          [{ userId: fx.users.other.id, photoId: fx.expectedMainOrder[100] }],
+        ),
+      });
+      const viewer = fakeViewer(fx.users.viewer.id);
+      const pages = await walk((cursor) => listFavoritesPage(fx.eventA.id, viewer, { cursor, limit: 60 }));
+      expect(pages.map((p) => p.length)).toEqual([60, 10]);
+      expect(pages.flat().map((p) => p.id)).toEqual(mine);
+      expect(pages.flat().every((p) => p.favorited)).toBe(true);
+    });
+  });
+
+  describe("listMatchPage", () => {
+    const scoreFor = (i: number) => 1 - Math.floor(i / 5) / 100; // five-way score ties exercise the id tiebreak
+
+    it("pages the viewer's matches by score desc then photo id, with no gaps or duplicates", async () => {
+      const mine = fx.expectedMainOrder.slice(0, 70);
+      const hiddenId = `${fx.run}-h001`;
+      const strays = [hiddenId, fx.hostsOnlyIds[1], fx.otherEventIds[1]];
+      await prisma.photoMatch.createMany({
+        data: [
+          ...mine.map((photoId, i) => ({ photoId, userId: fx.users.viewer.id, source: "SELFIE" as const, score: scoreFor(i) })),
+          ...strays.map((photoId) => ({ photoId, userId: fx.users.viewer.id, source: "SELFIE" as const, score: 0.999 })),
+          { photoId: fx.expectedMainOrder[80], userId: fx.users.other.id, source: "SELFIE" as const, score: 0.99 },
+          { photoId: fx.expectedMainOrder[81], subjectGuestId: `${fx.run}-g1`, source: "GUARDIAN" as const, score: 0.98 },
+        ],
+      });
+      const expected = [...mine.map((id, i) => ({ id, score: scoreFor(i) }))]
+        .sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1))
+        .map((m) => m.id);
+
+      const viewer = fakeViewer(fx.users.viewer.id);
+      const pages = await walk((cursor) => listMatchPage(fx.eventA.id, viewer, { userId: fx.users.viewer.id }, { cursor, limit: 60 }));
+      expect(pages.map((p) => p.length)).toEqual([60, 10]);
+      expect(pages.flat().map((p) => p.id)).toEqual(expected);
+      expect(pages.flat()[0].score).toBe(1);
+
+      const family = await listMatchPage(fx.eventA.id, viewer, { guestId: `${fx.run}-g1` });
+      expect(family.photos.map((p) => p.id)).toEqual([fx.expectedMainOrder[81]]);
+    });
+
+    it("returns a guardian subject's matches only for photos in this event and visible to the viewer", async () => {
+      await prisma.photoMatch.createMany({
+        data: [fx.expectedMainOrder[0], fx.hostsOnlyIds[2], fx.otherEventIds[2]].map((photoId, i) => ({
+          photoId,
+          subjectGuestId: `${fx.run}-g2`,
+          source: "GUARDIAN" as const,
+          score: 0.9 - i / 100,
+        })),
+      });
+      const page = await listMatchPage(fx.eventA.id, fakeViewer(fx.users.viewer.id), { guestId: `${fx.run}-g2` });
+      expect(page.photos.map((p) => p.id)).toEqual([fx.expectedMainOrder[0]]);
+      expect(page.nextCursor).toBeNull();
+    });
+  });
+
+  describe("entitlements decide clean vs watermarked renditions", () => {
+    const first = async (viewerId: string) =>
+      (await listAlbumPage(fx.eventA.id, fakeViewer(viewerId), fx.albums.main.id, { limit: 1 })).photos[0];
+    const grant = (data: { userId?: string | null; eventId?: string; revokedAt?: Date }) =>
+      prisma.entitlement.create({ data: { eventId: fx.eventA.id, scope: "GALLERY_FULLRES", ...data } });
+    afterEach(async () => {
+      await prisma.entitlement.deleteMany({ where: { eventId: { in: [fx.eventA.id, fx.eventB.id] } } });
+    });
+
+    it("serves the watermarked rendition and no download without an entitlement", async () => {
+      const p = await first(fx.users.viewer.id);
+      expect(p.canDownload).toBe(false);
+      expect(p.webUrl).toContain(`${p.id}-wm.jpg`);
+    });
+
+    it("serves the clean rendition and download for an event-wide entitlement", async () => {
+      await grant({ userId: null });
+      const p = await first(fx.users.viewer.id);
+      expect(p.canDownload).toBe(true);
+      expect(p.webUrl).toContain(`${p.id}-w.jpg`);
+    });
+
+    it("honours a per-user entitlement for that user only", async () => {
+      await grant({ userId: fx.users.viewer.id });
+      expect((await first(fx.users.viewer.id)).canDownload).toBe(true);
+      expect((await first(fx.users.other.id)).canDownload).toBe(false);
+    });
+
+    it("ignores revoked entitlements and entitlements granted for another event", async () => {
+      await grant({ userId: null, revokedAt: new Date() });
+      await grant({ userId: null, eventId: fx.eventB.id });
+      expect((await first(fx.users.viewer.id)).canDownload).toBe(false);
     });
   });
 });
