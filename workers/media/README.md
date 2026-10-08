@@ -9,7 +9,7 @@ What it does:
 | Job type           | Payload              | Effect |
 |--------------------|----------------------|--------|
 | `PROCESS_PHOTO`    | `{photoId}`          | orient original, read EXIF capture time, write `thumb` (400 px, q80), `web` (2048 px, q85), `webWm` (web + tiled diagonal watermark from `Studio.brandJson.credit`, else "PROOF"); `Photo.status=READY`, `derivatives={thumb,web,webWm}`; enqueues `INDEX_FACES` |
-| `INDEX_FACES`      | `{photoId}`          | YuNet detect + SFace embed on the `web` derivative; replaces `Face` rows; `Photo.facesIndexedAt`; enqueues `CLUSTER_FACES` (dedupe `cluster:{eventId}`, +20 s) |
+| `INDEX_FACES`      | `{photoId, eventId, studioId}` (handler reads only `photoId`; the ids let per-event views scope the job) | YuNet detect + SFace embed on the `web` derivative; replaces `Face` rows; `Photo.facesIndexedAt`; enqueues `CLUSTER_FACES` (dedupe `cluster:{eventId}`, +20 s) |
 | `CLUSTER_FACES`    | `{eventId}`          | agglomerative clustering -> `FaceCluster` (ids/labels/`suppressed` preserved), `Face.clusterId`; `PhotoMatch(PROFILE_AUTO)` for opted-in guests; `AuditLog faceindex.cluster` |
 | `PURGE_FACE_INDEX` | `{eventId}`          | deletes `Face`/`FaceCluster`, sets `Event.faceIndexPurgedAt`, clears `Photo.facesIndexedAt`; `AuditLog faceindex.purge` |
 | `BUILD_ZIP`        | `{zipExportId}`      | streams originals (READY, not hidden, album GUESTS/none) into zip64 parts <= 2 GB at `s/{studio}/e/{event}/zip/{zipId}-{n}.zip`; updates `ZipExport` |
@@ -65,15 +65,26 @@ package), so no symlink is needed and the cwd does not matter. Real environment 
   The row never rests in `FAILED` because the claim query only looks at `QUEUED`; "failed, retrying"
   is `status='QUEUED' AND "lastError" IS NOT NULL`.
 - `RUNNING` rows locked for more than 60 min (crashed worker) are released once a minute.
-- `finishedAt` is stamped on success and on every failure (retry, `DEAD`, stale-lock release); a `Requeue`
-  return does not stamp it. The admin Jobs dashboard reads it for "succeeded/failed in the last hour" and
-  p50/p95 duration (`finishedAt - lockedAt`, successes only; failures clear `lockedAt`).
-- Heartbeat: `consume_forever` upserts `WorkerHeartbeat(workerId = WORKER_ID or host:pid)` on its first loop
-  iteration and then at most every 15 s (between jobs, so a long handler skips beats; the dashboard also
-  counts a worker holding a `RUNNING` lock as live). Rows silent for 24 h are pruned in the minutely housekeeping.
-  `consume_forever(worker_id=, only_types=)` lets a process (or a test) serve a subset of types under its own id.
-- Cancelled jobs (admin "Cancel", only while `QUEUED`) become `DEAD` with `lastError = 'cancelled …'`; Retry or a
-  dedupe re-enqueue brings them back.
+- `finishedAt` is the end of the **latest** attempt: stamped on success and on every failure (retry, `DEAD`,
+  stale-lock release); a `Requeue` return does not stamp it (it is not a failure, and its `lastError` starts
+  with `requeued:`, which the dashboard does not count as "retrying"). It is reset to `NULL` when a job starts a
+  fresh run: a dedupe re-enqueue (`jobs.enqueue`, TS `enqueue()`), admin Retry and "Retry dead". The admin Jobs
+  dashboard reads it for "succeeded/failed in the last hour" and p50/p95 duration (`finishedAt - lockedAt`,
+  successes only; failures clear `lockedAt`). Earlier failed attempts of a job that later succeeded are counted
+  from `attempts - 1`.
+- Heartbeat: `consume_forever` starts a `HeartbeatThread` with its own connection that upserts
+  `WorkerHeartbeat(workerId = WORKER_ID or host:pid)` immediately and then every 10 s (the dashboard calls a
+  worker live when seen < 30 s ago). It is a thread so a worker inside a long handler keeps beating and a
+  crashed one (OOM kill) goes silent; the dashboard judges liveness from the heartbeat alone. A failed write is
+  logged and retried next interval. Rows silent for 24 h are pruned in the minutely housekeeping (best effort).
+  **Apply the Prisma migration `job_finished_at_worker_heartbeat` before starting a worker built from this
+  code**: without the table the heartbeat only logs warnings, but the `finishedAt` writes in `mark_succeeded` /
+  `mark_failed` fail and every job would retry.
+  Give each process a distinct `WORKER_ID` (the default `host:pid` is unique): two processes sharing one id share
+  one heartbeat row, so one of them dying is masked by the other. `consume_forever(worker_id=, only_types=,
+  heartbeat_interval_s=)` lets a process (or a test) serve a subset of types under its own id.
+- Cancelled jobs (admin "Cancel", only while `QUEUED`) become `DEAD` with `lastError = 'cancelled …'`; Retry,
+  "Retry dead" (which revives them too) or a dedupe re-enqueue brings them back.
 - `dedupeKey` enqueue (`jobs.enqueue`): insert, or on conflict refresh a `QUEUED` row (payload, later
   `runAt`), reset a `SUCCEEDED`/`DEAD`/`FAILED` row to `QUEUED`, and leave a `RUNNING` row alone.
   If the web app wants the same re-run semantics it should use the same `ON CONFLICT ... DO UPDATE ... WHERE status <> 'RUNNING'`

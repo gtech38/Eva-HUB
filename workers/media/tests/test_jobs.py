@@ -15,11 +15,13 @@ yet, stayed QUEUED, and the next test's single claim picked it up instead of its
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 import uuid
 from datetime import timedelta
 
+import psycopg
 import pytest
 
 from hub_worker import jobs
@@ -125,6 +127,35 @@ def test_dedupe_key_semantics(queue, conn):
     assert queue.row(a)["payload"] == {"v": 3}
 
 
+def test_dedupe_rerun_clears_finished_at(queue, conn):
+    """ADM-022: a re-run starts a fresh attempt history, so the dashboard must not count the old finish."""
+    key = f"test:{queue.type}"
+    first = queue.enqueue({"v": 1}, dedupe_key=key)
+    queue.run_job({queue.type: lambda c, j: None}, first)
+    assert queue.row(first)["finishedAt"] is not None
+
+    assert queue.enqueue({"v": 2}, dedupe_key=key) == first
+    row = queue.row(first)
+    assert row["status"] == "QUEUED" and row["finishedAt"] is None
+
+    # also when the row is a QUEUED retry that still carries its last failure time
+    with conn.cursor() as cur:
+        cur.execute('UPDATE "Job" SET "lastError" = \'boom\', "finishedAt" = now() WHERE id = %s', (first,))
+    assert queue.enqueue({"v": 3}, dedupe_key=key) == first
+    row = queue.row(first)
+    assert row["lastError"] is None and row["finishedAt"] is None
+
+
+def test_requeue_is_not_a_failure_and_stamps_no_finished_at(queue):
+    """ADM-022: a handler's Requeue (more photos arrived, try later) is neither success nor failure."""
+    handlers = {queue.type: lambda c, j: jobs.Requeue(60, "more photos arrived")}
+    job_id = queue.enqueue()
+    queue.run_job(handlers, job_id)
+    row = queue.row(job_id)
+    assert row["status"] == "QUEUED" and row["finishedAt"] is None
+    assert row["lastError"].startswith("requeued:")  # the dashboard excludes this prefix from "retrying"
+
+
 def test_stale_lock_release(queue, conn):
     # requeue_stale() has no type filter (WRK-016): lock 10 years back and only release locks
     # older than 9 years, so no real job is touched; serialise parallel copies of this test so one
@@ -143,6 +174,7 @@ def test_stale_lock_release(queue, conn):
         assert jobs.requeue_stale(conn, older_than_s=NINE_YEARS_S) >= 1
         row = queue.row(job_id)
         assert row["status"] == "QUEUED" and row["lockedBy"] is None and "stale" in row["lastError"]
+        assert row["finishedAt"] is not None  # a released stale lock is a failed attempt
     finally:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_unlock(hashtext('test_stale_lock_release'))")
@@ -215,47 +247,121 @@ def worker_id(conn):
         cur.execute('DELETE FROM "WorkerHeartbeat" WHERE "workerId" = %s', (wid,))
 
 
-def test_heartbeat_written_within_5s_of_consumer_start(queue, conn, worker_id):
+def _wait_for(predicate, what, timeout_s=5.0):
+    """Bounded poll: the first truthy value of `predicate()`, or fail after `timeout_s`."""
+    deadline = time.monotonic() + timeout_s
+    while not (value := predicate()):
+        assert time.monotonic() < deadline, f"timed out waiting for {what}"
+        time.sleep(0.01)
+    return value
+
+
+@contextlib.contextmanager
+def running_consumer(queue, worker_id, handlers=None, **kwargs):
+    """`consume_forever` on a thread, limited to the test's private job type; stopped and joined on exit."""
     stop = threading.Event()
     t = threading.Thread(
         target=jobs.consume_forever,
-        kwargs=dict(handlers={queue.type: lambda c, j: None}, stop=stop, poll_interval_s=0.05,
-                    worker_id=worker_id, only_types=[queue.type]),
+        kwargs=dict(handlers=handlers or {queue.type: lambda c, j: None}, stop=stop, poll_interval_s=0.01,
+                    worker_id=worker_id, only_types=[queue.type], **kwargs),
         daemon=True,
     )
-    t0 = time.monotonic()
     t.start()
     try:
-        while (row := _heartbeat(conn, worker_id)) is None:
-            assert time.monotonic() - t0 < 5, "no heartbeat within 5 s of consumer start"
-            time.sleep(0.02)
+        yield t
     finally:
         stop.set()
-        t.join(timeout=5)
-    assert not t.is_alive()
-    assert row["hostname"] and row["version"]
-    with conn.cursor() as cur:
-        cur.execute('SELECT now() - "lastSeenAt" < interval \'10 seconds\' AS fresh FROM "WorkerHeartbeat" WHERE "workerId" = %s', (worker_id,))
-        assert cur.fetchone()["fresh"]
+        t.join(timeout=10)
+        assert not t.is_alive(), "consumer did not stop"
 
 
-def test_heartbeat_is_throttled_to_one_write_per_interval(conn, worker_id):
-    """No write amplification: the poll loop runs every ~1 s but beats once per interval."""
-    clock = [1000.0]
-    hb = jobs.Heartbeat(worker_id, interval_s=15, clock=lambda: clock[0])
-    assert hb.beat_if_due(conn) is True
-    first = _heartbeat(conn, worker_id)["lastSeenAt"]
-    clock[0] += 14.9
-    assert hb.beat_if_due(conn) is False
+def _beat_threads(worker_id):
+    return [t for t in threading.enumerate() if t.name == f"heartbeat:{worker_id}"]
+
+
+def test_heartbeat_written_within_5s_of_consumer_start(queue, conn, worker_id):
+    with running_consumer(queue, worker_id):
+        row = _wait_for(lambda: _heartbeat(conn, worker_id), "the first heartbeat (5 s)")
+        assert row["hostname"] and row["version"]
+        with conn.cursor() as cur:
+            cur.execute('SELECT now() - "lastSeenAt" < interval \'5 seconds\' AS fresh FROM "WorkerHeartbeat" WHERE "workerId" = %s', (worker_id,))
+            assert cur.fetchone()["fresh"]
+    assert _beat_threads(worker_id) == [], "the heartbeat thread must stop with the consumer"
+
+
+def test_heartbeat_continues_while_a_handler_is_running(queue, conn, worker_id):
+    """A worker inside a long handler (a big BUILD_ZIP) must still look alive; silence means the process died."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow(c, j):
+        started.set()
+        release.wait(10)
+
+    job_id = queue.enqueue()
+    with running_consumer(queue, worker_id, handlers={queue.type: slow}, heartbeat_interval_s=0.05):
+        assert started.wait(5), "handler never started"
+        first = _wait_for(lambda: (r := _heartbeat(conn, worker_id)) and r["lastSeenAt"], "the first heartbeat")
+        _wait_for(lambda: (r := _heartbeat(conn, worker_id)) and r["lastSeenAt"] > first, "a heartbeat while the handler is still running")
+        assert queue.row(job_id)["status"] == "RUNNING"  # still inside the handler
+        release.set()
+
+
+def test_heartbeat_is_one_write_per_interval_not_one_per_poll(queue, conn, worker_id, monkeypatch):
+    """No write amplification: dozens of poll iterations inside the (default) interval write once."""
+    writes = []
+    real = jobs.upsert_heartbeat
+    monkeypatch.setattr(jobs, "upsert_heartbeat", lambda *a, **k: (writes.append(1), real(*a, **k))[1])
+    n, seen, done = 30, [], threading.Event()
+
+    def handler(c, j):
+        seen.append(j["id"])
+        if len(seen) == n:
+            done.set()
+
+    with running_consumer(queue, worker_id, handlers={queue.type: handler}):
+        first = _wait_for(lambda: (r := _heartbeat(conn, worker_id)) and r["lastSeenAt"], "the first heartbeat")
+        for _ in range(n):
+            queue.enqueue()
+        assert done.wait(10), f"only {len(seen)} of {n} jobs ran"
+    assert len(writes) == 1
     assert _heartbeat(conn, worker_id)["lastSeenAt"] == first
-    clock[0] += 0.1
-    time.sleep(0.005)  # timestamp(3): make the second write observably later
-    assert hb.beat_if_due(conn) is True
-    assert _heartbeat(conn, worker_id)["lastSeenAt"] > first
+
+
+def test_heartbeat_survives_a_failed_write_and_recovers(queue, conn, worker_id, monkeypatch):
+    """e.g. the migration is not applied yet: log, drop the connection, try again next interval."""
+    real = jobs.upsert_heartbeat
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise psycopg.errors.UndefinedTable('relation "WorkerHeartbeat" does not exist')
+        return real(*a, **k)
+
+    monkeypatch.setattr(jobs, "upsert_heartbeat", flaky)
+    with running_consumer(queue, worker_id, heartbeat_interval_s=0.05):
+        _wait_for(lambda: _heartbeat(conn, worker_id), "a heartbeat after the failed first write")
+    assert len(calls) >= 2
+
+
+def test_heartbeat_interval_keeps_a_3x_margin_under_the_dashboards_30s_window():
+    assert jobs.HEARTBEAT_INTERVAL_S * 3 <= 30  # apps/admin/src/lib/jobs.ts LIVE_WINDOW_MS
+
+
+def test_consumer_survives_a_failing_heartbeat_prune(queue, conn, worker_id, monkeypatch):
+    """A consumer started before the migration must keep processing jobs (prune raises UndefinedTable)."""
+    def broken(*a, **k):
+        raise psycopg.errors.UndefinedTable('relation "WorkerHeartbeat" does not exist')
+
+    monkeypatch.setattr(jobs, "prune_heartbeats", broken)
+    job_id = queue.enqueue()
+    with running_consumer(queue, worker_id) as t:
+        _wait_for(lambda: queue.row(job_id)["status"] == "SUCCEEDED", "the job after a failed prune")
+        assert t.is_alive()
 
 
 def test_prune_heartbeats_removes_only_long_silent_workers(conn, worker_id):
-    jobs.Heartbeat(worker_id).beat_if_due(conn)
+    jobs.upsert_heartbeat(conn, worker_id, "t", "h")
     gone = f"{worker_id}-gone"
     with conn.cursor() as cur:
         cur.execute(

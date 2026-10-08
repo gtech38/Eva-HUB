@@ -109,6 +109,7 @@ def enqueue(
                                        ELSE EXCLUDED."runAt" END,
                     attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
                     "lastError" = NULL,
+                    "finishedAt" = NULL,
                     "lockedBy"  = NULL,
                     "lockedAt"  = NULL
                 WHERE "Job".status <> 'RUNNING'::"JobStatus"
@@ -215,7 +216,7 @@ def requeue_stale(conn: psycopg.Connection, older_than_s: float = STALE_LOCK_S) 
 
 # ── heartbeat ─────────────────────────────────────────────────────────
 
-HEARTBEAT_INTERVAL_S = 15.0          # admin counts a worker live when seen < 30 s ago
+HEARTBEAT_INTERVAL_S = 10.0          # admin counts a worker live when seen < 30 s ago (apps/admin lib/jobs.ts): a 3x margin
 HEARTBEAT_RETENTION_S = 24 * 3600    # rows of workers silent this long are pruned
 
 
@@ -230,40 +231,65 @@ def worker_version() -> str:
         return "dev"
 
 
-class Heartbeat:
-    """Upserts this consumer's `WorkerHeartbeat` row, at most once per `interval_s`.
+def upsert_heartbeat(conn: psycopg.Connection, worker_id: str, version: str, hostname: str) -> None:
+    """One single-row upsert; `lastSeenAt` is the database clock (the dashboard compares against it too)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            '''INSERT INTO "WorkerHeartbeat"("workerId", "lastSeenAt", version, hostname)
+               VALUES (%s, now(), %s, %s)
+               ON CONFLICT ("workerId") DO UPDATE
+                  SET "lastSeenAt" = now(), version = EXCLUDED.version, hostname = EXCLUDED.hostname''',
+            (worker_id, version, hostname),
+        )
 
-    Called on every poll-loop iteration; the throttle keeps it to one single-row UPDATE per
-    interval per worker (no index on lastSeenAt, so the update stays HOT).
+
+def _close_quietly(conn: psycopg.Connection | None) -> None:
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 - nothing useful to do with a failed close
+            pass
+
+
+class HeartbeatThread(threading.Thread):
+    """Upserts this consumer's `WorkerHeartbeat` row every `interval_s`, from its own thread and connection.
+
+    Why a thread: the poll loop is blocked for as long as a handler runs (a big BUILD_ZIP), so beating
+    from it would make a busy worker look dead. With its own thread, silence means the process is gone
+    (crash, OOM kill), which is exactly what the dashboard's "No live workers" must detect. The interval
+    is the throttle: one single-row UPDATE per worker per interval, whatever the poll rate (no index on
+    lastSeenAt, so the update can stay HOT).
+
+    A failed write (database restart, migration not applied yet) is logged, the connection dropped, and
+    the next interval retries; it never affects job processing.
     """
 
-    def __init__(
-        self,
-        worker_id: str,
-        interval_s: float = HEARTBEAT_INTERVAL_S,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
+    def __init__(self, worker_id: str, interval_s: float = HEARTBEAT_INTERVAL_S) -> None:
+        super().__init__(name=f"heartbeat:{worker_id}", daemon=True)
         self.worker_id = worker_id
         self.interval_s = interval_s
-        self._clock = clock
-        self._last: float | None = None
+        self._halt = threading.Event()
         self._version = worker_version()
         self._hostname = socket.gethostname()
 
-    def beat_if_due(self, conn: psycopg.Connection) -> bool:
-        now = self._clock()
-        if self._last is not None and now - self._last < self.interval_s:
-            return False
-        with conn.cursor() as cur:
-            cur.execute(
-                '''INSERT INTO "WorkerHeartbeat"("workerId", "lastSeenAt", version, hostname)
-                   VALUES (%s, now(), %s, %s)
-                   ON CONFLICT ("workerId") DO UPDATE
-                      SET "lastSeenAt" = now(), version = EXCLUDED.version, hostname = EXCLUDED.hostname''',
-                (self.worker_id, self._version, self._hostname),
-            )
-        self._last = now
-        return True
+    def stop(self) -> None:
+        self._halt.set()
+
+    def run(self) -> None:
+        conn: psycopg.Connection | None = None
+        try:
+            while not self._halt.is_set():
+                try:
+                    if conn is None or conn.closed:
+                        conn = connect(autocommit=True)
+                    upsert_heartbeat(conn, self.worker_id, self._version, self._hostname)
+                except psycopg.Error as exc:
+                    log.warning("heartbeat write failed (retrying in %.0f s): %s", self.interval_s, exc)
+                    _close_quietly(conn)
+                    conn = None
+                self._halt.wait(self.interval_s)
+        finally:
+            _close_quietly(conn)
 
 
 def prune_heartbeats(conn: psycopg.Connection, older_than_s: float = HEARTBEAT_RETENTION_S) -> int:
@@ -333,14 +359,18 @@ def run_once(
     return job
 
 
-def _beat(heartbeat: Heartbeat, conn: psycopg.Connection) -> None:
-    """A heartbeat failure must not stop job processing; connection loss still goes to the reconnect path."""
+def _housekeeping(conn: psycopg.Connection) -> None:
+    """Minutely upkeep. Pruning heartbeats is best effort: a consumer started before the WorkerHeartbeat
+    migration was applied must keep processing jobs, so non-connection errors are only logged."""
+    n = requeue_stale(conn)
+    if n:
+        log.warning("released %d stale RUNNING job(s)", n)
     try:
-        heartbeat.beat_if_due(conn)
+        prune_heartbeats(conn)
     except psycopg.OperationalError:
-        raise
+        raise  # connection trouble: the caller reconnects
     except psycopg.Error as exc:
-        log.warning("heartbeat write failed: %s", exc)
+        log.warning("could not prune worker heartbeats (is the WorkerHeartbeat migration applied?): %s", exc)
 
 
 def consume_forever(
@@ -349,30 +379,44 @@ def consume_forever(
     poll_interval_s: float | None = None,
     worker_id: str | None = None,
     only_types: list[str] | None = None,
+    heartbeat_interval_s: float | None = None,
 ) -> None:
     """Poll loop: claim+run until the queue is empty, then sleep ~1 s with jitter.
 
-    Beats `WorkerHeartbeat` on the first iteration and then at most every HEARTBEAT_INTERVAL_S.
+    A `HeartbeatThread` (own connection) keeps `WorkerHeartbeat` fresh for as long as this runs, even
+    while a handler blocks the loop, and is stopped on every way out of it.
     """
     handlers = handlers or default_handlers()
     stop = stop or threading.Event()
     poll = poll_interval_s if poll_interval_s is not None else settings.poll_interval_s
     worker_id = worker_id or settings.worker_id
-    heartbeat = Heartbeat(worker_id)
-    conn = connect(autocommit=True)
-    last_housekeeping = 0.0
+    heartbeat = HeartbeatThread(worker_id, heartbeat_interval_s if heartbeat_interval_s is not None else HEARTBEAT_INTERVAL_S)
     log.info("consumer %s started; handlers: %s", worker_id, ", ".join(sorted(handlers)))
+    heartbeat.start()
+    try:
+        _poll_loop(handlers, stop, poll, worker_id, only_types)
+    finally:
+        heartbeat.stop()
+        heartbeat.join(timeout=5)
+    log.info("consumer stopped")
+
+
+def _poll_loop(
+    handlers: Mapping[str, Handler],
+    stop: threading.Event,
+    poll: float,
+    worker_id: str,
+    only_types: list[str] | None,
+) -> None:
+    conn = connect(autocommit=True)
+    last_housekeeping = float("-inf")  # run once on the first iteration
     while not stop.is_set():
         try:
             if conn.closed:
                 conn = connect(autocommit=True)
-            _beat(heartbeat, conn)
             now = time.monotonic()
             if now - last_housekeeping > 60:
-                n = requeue_stale(conn)
-                if n:
-                    log.warning("released %d stale RUNNING job(s)", n)
-                prune_heartbeats(conn)
+                _housekeeping(conn)
                 last_housekeeping = now
             ran = run_once(conn, handlers, worker_id=worker_id, only_types=only_types)
             if ran is not None:
@@ -387,4 +431,3 @@ def consume_forever(
             continue
         stop.wait(poll * random.uniform(0.7, 1.3))
     conn.close()
-    log.info("consumer stopped")
