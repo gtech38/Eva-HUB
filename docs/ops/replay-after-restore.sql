@@ -41,7 +41,7 @@ WHERE j.status = 'QUEUED'::"JobStatus"
 
 -- 3. Purge again every event purged, or asked to be purged, after T. Same upsert as the worker's
 --    jobs.enqueue: RUNNING rows are left alone; QUEUED rows keep attempts and the later runAt;
---    finished/dead rows are reset; payload refreshed; stale lock and error cleared.
+--    finished/dead rows are reset; payload refreshed; stale lock, error and finishedAt cleared.
 INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
 SELECT 'PURGE_FACE_INDEX', jsonb_build_object('eventId', r."eventId"), 'QUEUED'::"JobStatus", now(), 5,
        'purge-face:' || r."eventId" || ':replay'
@@ -57,6 +57,7 @@ ON CONFLICT ("dedupeKey") DO UPDATE SET
                      THEN GREATEST("Job"."runAt", EXCLUDED."runAt") ELSE EXCLUDED."runAt" END,
   attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
   "lastError" = NULL,
+  "finishedAt" = NULL,
   "lockedBy"  = NULL,
   "lockedAt"  = NULL
 WHERE "Job".status <> 'RUNNING'::"JobStatus";

@@ -136,7 +136,7 @@ you review before committing.
 
 ### 6c. Biometric purges that are due
 
-- [ ] **Event face-index purges that are due** (`faceIndexPurgeAt` passed, but no purge recorded in the restored DB). This SQL is the worker's `jobs.enqueue` upsert (`workers/media/hub_worker/jobs.py`) in bulk: a `RUNNING` row is never touched, finished or dead rows are reset to `QUEUED` with attempts 0 and no stale lock or error, and the payload is refreshed. The job writes `faceindex.purge` when the worker runs in step 7:
+- [ ] **Event face-index purges that are due** (`faceIndexPurgeAt` passed, but no purge recorded in the restored DB). This SQL is the worker's `jobs.enqueue` upsert (`workers/media/hub_worker/jobs.py`) in bulk: a `RUNNING` row is never touched, finished or dead rows are reset to `QUEUED` with attempts 0 and no stale lock, error or `finishedAt`, and the payload is refreshed. If `jobs.enqueue` changes, change this copy and `replay-after-restore.sql` with it; `scripts/tests` runs both against the three branches. The job writes `faceindex.purge` when the worker runs in step 7:
 
   ```sql
   INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
@@ -151,6 +151,7 @@ you review before committing.
                        THEN GREATEST("Job"."runAt", EXCLUDED."runAt") ELSE EXCLUDED."runAt" END,
     attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
     "lastError" = NULL,
+    "finishedAt" = NULL,
     "lockedBy"  = NULL,
     "lockedAt"  = NULL
   WHERE "Job".status <> 'RUNNING'::"JobStatus";

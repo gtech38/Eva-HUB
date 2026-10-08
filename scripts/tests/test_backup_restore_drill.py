@@ -693,12 +693,18 @@ def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue() -> None:
             # RUNNING, DEAD, and QUEUED-in-the-future with a stale payload: the three branches of jobs.enqueue
             for eid, status, run_at in zip(events, ("RUNNING", "DEAD", "QUEUED"), ("now()", "now()", "now() + interval '1 day'")):
                 conn.execute(
-                    'INSERT INTO "Job"(type, payload, status, attempts, "lockedBy", "lockedAt", "lastError", "runAt", "dedupeKey")'
-                    f" VALUES ('PURGE_FACE_INDEX', %s::jsonb, %s::\"JobStatus\", 3, 'w1', now(), 'boom', {run_at}, %s)",
+                    'INSERT INTO "Job"(type, payload, status, attempts, "lockedBy", "lockedAt", "lastError", "finishedAt", "runAt", "dedupeKey")'
+                    f" VALUES ('PURGE_FACE_INDEX', %s::jsonb, %s::\"JobStatus\", 3, 'w1', now(), 'boom', now(), {run_at}, %s)",
                     (f'{{"eventId": "{eid}", "stale": true}}', status, f"purge-face:{eid}:restore"),
                 )
             conn.execute(purge)
             rows = _jobs(conn, "PURGE_FACE_INDEX", "eventId", events)
+            finished = dict(conn.execute(
+                'SELECT payload->>\'eventId\', "finishedAt" IS NULL FROM "Job" WHERE type = \'PURGE_FACE_INDEX\' AND payload->>\'eventId\' = ANY(%s)',
+                (events,),
+            ).fetchall())
+            # jobs.enqueue clears finishedAt on every re-queue (ADM-022); RUNNING is untouched
+            assert finished == {events[0]: False, events[1]: True, events[2]: True}
             fresh = {"eventId": events[2]}
             # RUNNING rows belong to a live worker: untouched (same rule as jobs.enqueue)
             assert rows[events[0]][:4] == ("RUNNING", 3, "w1", "boom")
@@ -753,6 +759,9 @@ def test_replay_re_applies_purges_and_face_search_toggles_from_the_old_audit_log
             purges = _jobs(conn, "PURGE_FACE_INDEX", "eventId", ev)
             assert set(purges) == {purged, requested}  # once each, even with two audit rows for `purged`
             assert all(v[0] == "QUEUED" for v in purges.values())
+            # the replay's upsert must be the worker's, character for character in effect
+            replay_text = REPLAY_SQL.read_text()
+            assert '"finishedAt" = NULL' in replay_text
             cluster = conn.execute(
                 "SELECT status::text FROM \"Job\" WHERE \"dedupeKey\" = %s", (f"cluster:{purged}",)
             ).fetchone()
