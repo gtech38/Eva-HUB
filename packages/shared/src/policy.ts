@@ -63,6 +63,10 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     if (ageH > REAUTH_HOURS) return false;
   }
 
+  // A claim says "I bought this": only a real guest of the event may make it, platform admins included
+  // (docs/02 section 4). Decided before the platform-admin bypass below.
+  if (action === "registry.claim") return !!r.eventId && p.guestOf.has(r.eventId);
+
   if (p.isPlatformAdmin) return true;
 
   const studioRole = p.studioRoles[r.studioId];
@@ -88,7 +92,7 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     case "rsvp.report.names": return isOwner || assignedStaff || hostish || has("PLANNER");
     case "rsvp.respond": return isGuest || hostish;
     case "registry.manage": return isOwner || hostish;
-    case "registry.claim": return isGuest;
+    case "registry.claim": return false; // handled above, before the platform-admin bypass
     case "photos.upload": return isOwner || assignedStaff;
     case "albums.manage": return isOwner || assignedStaff;
     case "photos.hide": return isOwner || assignedStaff || hostish;

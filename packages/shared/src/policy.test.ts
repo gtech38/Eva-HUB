@@ -61,6 +61,14 @@ describe("can()", () => {
     expect(can(base({ eventRoles: { e1: ["VENDOR"] } }), "registry.claim", r)).toBe(false);
   });
 
+  it("registry.claim: a platform admin who is not a guest of the event is refused (docs/02 section 4: guests only)", () => {
+    expect(can(base({ isPlatformAdmin: true }), "registry.claim", r)).toBe(false);
+    expect(can(base({ isPlatformAdmin: true, guestOf: new Set(["e2"]) }), "registry.claim", r)).toBe(false);
+    expect(can(base({ isPlatformAdmin: true, guestOf: new Set(["e1"]) }), "registry.claim", r)).toBe(true);
+    // No event in scope: nothing to claim against.
+    expect(can(base({ isPlatformAdmin: true, guestOf: new Set(["e1"]) }), "registry.claim", { studioId: "s1" })).toBe(false);
+  });
+
   it("tenant isolation: roles in another studio grant nothing", () => {
     const other = base({ studioRoles: { s2: "OWNER" }, eventRoles: { e2: ["HOST"] } });
     expect(can(other, "site.view", r)).toBe(false);
