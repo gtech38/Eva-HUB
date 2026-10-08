@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from hub_worker import jobs
+from hub_worker.handlers import cluster_faces
 from hub_worker.db import utcnow
 
 TEN_YEARS_AGO = "now() - interval '10 years'"
@@ -181,3 +182,32 @@ def test_backoff_grows_and_caps():
     assert 7 <= jobs.backoff_seconds(1) <= 13
     assert 15 <= jobs.backoff_seconds(2) <= 25
     assert jobs.backoff_seconds(50) <= jobs.BACKOFF_MAX_S * 1.25
+
+
+def test_cluster_faces_job_inserts_face_cluster_with_timestamps(queue, conn, tenant):
+    """DB-001: a FaceCluster created through the CLUSTER_FACES handler has createdAt/updatedAt.
+
+    Prisma's @updatedAt has no column default, so the worker's raw INSERT must set it.
+    """
+    a = [1.0] + [0.0] * 127
+    b = [0.99, 0.1] + [0.0] * 126  # cosine ~0.995 to `a`: one cluster
+    for emb in (a, b):
+        tenant.add_face(tenant.add_photo(), emb)
+
+    job_id = queue.enqueue({"eventId": tenant.event_id})
+    queue.run_job({queue.type: cluster_faces.handle}, job_id)
+
+    row = queue.row(job_id)
+    assert row["status"] == "SUCCEEDED", row["lastError"]
+    with conn.cursor() as cur:
+        cur.execute(
+            '''SELECT "createdAt", "updatedAt", now() AT TIME ZONE 'UTC' AS db_now
+                 FROM "FaceCluster" WHERE "eventId" = %s''',
+            (tenant.event_id,),
+        )
+        clusters = cur.fetchall()
+    assert len(clusters) == 1
+    c = clusters[0]
+    assert c["updatedAt"] is not None and c["createdAt"] is not None
+    assert c["createdAt"] == c["updatedAt"]
+    assert abs(c["updatedAt"] - c["db_now"]) < timedelta(minutes=1)

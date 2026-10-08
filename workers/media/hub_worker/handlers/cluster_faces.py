@@ -138,8 +138,10 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> Requeue | None:
     with conn.transaction():
         with conn.cursor() as cur:
             if new_rows:
+                # Prisma's @updatedAt is client-side only: raw inserts must stamp both columns.
                 cur.executemany(
-                    'INSERT INTO "FaceCluster"(id, "eventId", suppressed) VALUES (%s, %s, %s)',
+                    '''INSERT INTO "FaceCluster"(id, "eventId", suppressed, "createdAt", "updatedAt")
+                       VALUES (%s, %s, %s, now(), now())''',
                     [(cid, event_id, sup) for cid, _, sup in new_rows],
                 )
             if face_assignments:
