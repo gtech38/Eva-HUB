@@ -10,7 +10,7 @@ export type ClaimResult =
   | { ok: false; reason: "not_found" | "invalid_quantity" | "sold_out" }
   | { ok: false; reason: "exceeds_remaining"; remaining: number };
 
-export type ClaimInput = { eventId: string; itemId: string; userId: string; guestName: string | null; quantity: number };
+export type ClaimInput = { eventId: string; studioId: string; itemId: string; userId: string; guestName: string | null; quantity: number };
 
 /**
  * Create a claim unless it would take the item past its quantity. The item row is locked
@@ -18,7 +18,7 @@ export type ClaimInput = { eventId: string; itemId: string; userId: string; gues
  * instead of both reading the same remaining count.
  */
 export async function claimRegistryItem(input: ClaimInput): Promise<ClaimResult> {
-  const { eventId, itemId, userId, guestName, quantity } = input;
+  const { eventId, studioId, itemId, userId, guestName, quantity } = input;
   return prisma.$transaction(async (tx): Promise<ClaimResult> => {
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "RegistryItem" WHERE "id" = ${itemId} AND "eventId" = ${eventId} FOR UPDATE`;
@@ -31,25 +31,36 @@ export async function claimRegistryItem(input: ClaimInput): Promise<ClaimResult>
     if (!check.ok) return check;
 
     const created = await tx.registryClaim.create({ data: { itemId, userId, guestName, quantity: check.quantity }, select: { id: true } });
+    await tx.auditLog.create({
+      data: { studioId, eventId, actorUserId: userId, action: "registry.claim", target: itemId, data: { claimId: created.id, quantity: check.quantity } },
+    });
     return { ok: true, claimId: created.id, remaining: remainingQuantity(item, [...item.claims, { quantity: check.quantity }]) };
   });
 }
 
 /**
  * Delete the caller's own claim within the undo window. One conditional delete, so the
- * ownership, window and tenant checks cannot race with the write.
+ * ownership, window and tenant checks cannot race with the write; the audit row is only
+ * written (in the same transaction) when a row was actually deleted.
  */
-export async function undoRegistryClaim(input: { eventId: string; claimId: string; userId: string; now?: Date }): Promise<{ ok: boolean }> {
-  const { eventId, claimId, userId, now = new Date() } = input;
-  const { count } = await prisma.registryClaim.deleteMany({
-    where: {
-      id: claimId,
-      userId,
-      claimedAt: { gte: new Date(now.getTime() - UNDO_WINDOW_MS) },
-      item: { eventId },
-    },
+export async function undoRegistryClaim(input: { eventId: string; studioId: string; claimId: string; userId: string; now?: Date }): Promise<{ ok: boolean }> {
+  const { eventId, studioId, claimId, userId, now = new Date() } = input;
+  return prisma.$transaction(async (tx) => {
+    const itemRow = await tx.registryClaim.findFirst({ where: { id: claimId, userId, item: { eventId } }, select: { itemId: true } });
+    const { count } = await tx.registryClaim.deleteMany({
+      where: {
+        id: claimId,
+        userId,
+        claimedAt: { gte: new Date(now.getTime() - UNDO_WINDOW_MS) },
+        item: { eventId },
+      },
+    });
+    if (count !== 1) return { ok: false };
+    await tx.auditLog.create({
+      data: { studioId, eventId, actorUserId: userId, action: "registry.unclaim", target: itemRow?.itemId ?? null, data: { claimId } },
+    });
+    return { ok: true };
   });
-  return { ok: count === 1 };
 }
 
 /** Everything the /registry page renders, scoped to one event. */
