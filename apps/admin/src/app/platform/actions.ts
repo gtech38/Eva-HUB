@@ -6,6 +6,7 @@ import { prisma } from "@hub/db";
 import { act, EmailSchema, str, type ActionState } from "@/lib/action";
 import { authorize, requireSignedIn } from "@/lib/auth";
 import { audit } from "@/lib/audit";
+import { retryJobAs } from "@/lib/jobActions";
 import { userForEmail } from "@/lib/users";
 
 const CreateStudio = z.object({
@@ -39,14 +40,8 @@ export async function createStudio(_p: ActionState, fd: FormData): Promise<Actio
 export async function retryJob(_p: ActionState, fd: FormData): Promise<ActionState> {
   return act(async () => {
     const p = await requireSignedIn();
-    authorize(p, "platform.admin", { studioId: "" });
-    const id = BigInt(str(fd, "id"));
-    const job = await prisma.job.findUnique({ where: { id } });
-    if (!job) return { ok: false, error: "Job not found" };
-    if (job.status !== "FAILED" && job.status !== "DEAD") return { ok: false, error: `Job is ${job.status}; only FAILED/DEAD jobs can be retried.` };
-    await prisma.job.update({ where: { id }, data: { status: "QUEUED", attempts: 0, lockedAt: null, lockedBy: null, runAt: new Date() } });
-    await audit({ actorUserId: p.userId, action: "job.retry", target: String(id), data: { type: job.type } });
-    revalidatePath("/platform/jobs");
-    return { ok: true, message: "Re-queued" };
+    const r = await retryJobAs(p, BigInt(str(fd, "id"))); // authorises platform.admin, audits job.retry
+    if (r.ok) revalidatePath("/platform/jobs");
+    return r;
   });
 }

@@ -760,18 +760,19 @@ enum JobStatus {
 }
 
 model Job {
-  id        BigInt    @id @default(autoincrement())
-  type      String    // PROCESS_PHOTO | INDEX_FACES | CLUSTER_FACES | BUILD_ZIP | SEND_MESSAGE | FIRE_REMINDER | PURGE_FACE_INDEX | PRINT_SUBMIT
-  payload   Json
-  status    JobStatus @default(QUEUED)
-  runAt     DateTime  @default(now())
-  attempts  Int       @default(0)
-  maxAttempts Int     @default(5)
-  lockedBy  String?
-  lockedAt  DateTime?
-  lastError String?
-  dedupeKey String?   @unique
-  createdAt DateTime  @default(now())
+  id          BigInt    @id @default(autoincrement())
+  type        String // PROCESS_PHOTO | INDEX_FACES | CLUSTER_FACES | BUILD_ZIP | SEND_MESSAGE | FIRE_REMINDER | PURGE_FACE_INDEX | PRINT_SUBMIT
+  payload     Json
+  status      JobStatus @default(QUEUED)
+  runAt       DateTime  @default(now())
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lockedBy    String?
+  lockedAt    DateTime?
+  lastError   String?
+  dedupeKey   String?   @unique
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime? // end of the latest attempt: stamped on success and on every failure (retry, DEAD, stale release), not on Requeue; cleared when the job is re-queued for a fresh run (ADM-022)
 
   @@index([status, runAt])
 }
@@ -787,4 +788,14 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([studioId, createdAt])
+}
+
+/// One row per job consumer process (workers/media consume_forever), upserted every 10 s by a dedicated
+/// heartbeat thread. Live = lastSeenAt within 30 s, nothing else (a RUNNING lock proves nothing: a crashed
+/// worker leaves one). Rows silent for a day are pruned by the worker.
+model WorkerHeartbeat {
+  workerId   String   @id // settings.worker_id, "host:pid"; equals Job.lockedBy
+  lastSeenAt DateTime @default(now())
+  version    String?
+  hostname   String?
 }

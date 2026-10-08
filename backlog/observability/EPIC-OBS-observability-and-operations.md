@@ -15,6 +15,7 @@ Logging is `console.*` in TS and `logging.basicConfig` text in Python; nothing c
 - INF-012 OpenTelemetry traces for Next apps and the worker
 - DOC-003 Postgres backups, PITR, bucket versioning and a restore drill script
 - ADM-023 Audit log retention and export
+- INF-022 Expose queue.oldestDueSec and workers.live in the admin health endpoint
 - INF-023 Production backup schedule, least-privilege backup credentials, quarterly real-size drill
 
 ## Definition of Done
