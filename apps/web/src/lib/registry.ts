@@ -5,6 +5,9 @@
 
 export const UNDO_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** A repeat claim by the same user on the same item within this window is a double submit, not a new claim. */
+export const CLAIM_DEDUPE_WINDOW_MS = 10_000;
+
 export type ClaimLike = { id: string; quantity: number; userId: string | null; claimedAt: Date };
 export type ItemLike = { quantity: number };
 
@@ -55,7 +58,7 @@ export function registryItemView(item: ItemLike, claims: ReadonlyArray<ClaimLike
   };
 }
 
-export type ClaimRefusal = "invalid_quantity" | "sold_out" | "exceeds_remaining" | "not_found" | "forbidden";
+export type ClaimRefusal = "invalid_quantity" | "sold_out" | "exceeds_remaining" | "not_found" | "forbidden" | "unavailable" | "failed";
 
 /** UI string (packages/shared i18n UI key) shown for each way a claim can be refused. */
 export function claimMessageKey(reason: ClaimRefusal): "claimSoldOut" | "claimTooMany" | "claimFailed" {
@@ -64,7 +67,9 @@ export function claimMessageKey(reason: ClaimRefusal): "claimSoldOut" | "claimTo
     case "exceeds_remaining":
     case "invalid_quantity": return "claimTooMany";
     case "not_found":
-    case "forbidden": return "claimFailed";
+    case "forbidden":
+    case "unavailable":
+    case "failed": return "claimFailed";
   }
 }
 

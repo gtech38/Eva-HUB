@@ -1,41 +1,67 @@
 /**
  * DB-backed registry operations. Every query is scoped by eventId (RegistryItem has no studioId;
  * the event is the tenant boundary). The rules themselves live in registry.ts.
+ *
+ * Database errors (lock timeouts, P2028 transaction-start timeouts, connection loss) are caught
+ * here and reported as a refusal, so a server action never surfaces an unhandled exception.
  */
 import { prisma } from "@hub/db";
-import { UNDO_WINDOW_MS, checkClaim, remainingQuantity } from "./registry.ts";
+import { CLAIM_DEDUPE_WINDOW_MS, UNDO_WINDOW_MS, checkClaim, remainingQuantity } from "./registry.ts";
 
 export type ClaimResult =
   | { ok: true; claimId: string; remaining: number }
-  | { ok: false; reason: "not_found" | "invalid_quantity" | "sold_out" }
+  | { ok: false; reason: "not_found" | "invalid_quantity" | "sold_out" | "failed" }
   | { ok: false; reason: "exceeds_remaining"; remaining: number };
 
-export type ClaimInput = { eventId: string; studioId: string; itemId: string; userId: string; guestName: string | null; quantity: number };
+export type ClaimInput = {
+  eventId: string;
+  studioId: string;
+  itemId: string;
+  userId: string;
+  guestName: string | null;
+  quantity: number;
+  /** Injectable clock for tests. */
+  now?: Date;
+};
 
 /**
  * Create a claim unless it would take the item past its quantity. The item row is locked
  * (SELECT ... FOR UPDATE) for the transaction so two guests claiming the last unit serialize
- * instead of both reading the same remaining count.
+ * instead of both reading the same remaining count. The same lock makes a double submit safe:
+ * a second claim by the same user on the same item within CLAIM_DEDUPE_WINDOW_MS returns the
+ * first claim (idempotent success) instead of creating another.
  */
 export async function claimRegistryItem(input: ClaimInput): Promise<ClaimResult> {
-  const { eventId, studioId, itemId, userId, guestName, quantity } = input;
-  return prisma.$transaction(async (tx): Promise<ClaimResult> => {
-    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+  const { eventId, studioId, itemId, userId, guestName, quantity, now = new Date() } = input;
+  try {
+    return await prisma.$transaction(async (tx): Promise<ClaimResult> => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "RegistryItem" WHERE "id" = ${itemId} AND "eventId" = ${eventId} FOR UPDATE`;
-    if (locked.length === 0) return { ok: false, reason: "not_found" };
+      if (locked.length === 0) return { ok: false, reason: "not_found" };
 
-    const item = await tx.registryItem.findFirst({ where: { id: itemId, eventId }, select: { quantity: true, claims: { select: { quantity: true } } } });
-    if (!item) return { ok: false, reason: "not_found" };
+      const item = await tx.registryItem.findFirst({
+        where: { id: itemId, eventId },
+        select: { quantity: true, claims: { select: { id: true, quantity: true, userId: true, claimedAt: true } } },
+      });
+      if (!item) return { ok: false, reason: "not_found" };
 
-    const check = checkClaim(item, item.claims, quantity);
-    if (!check.ok) return check;
+      const since = now.getTime() - CLAIM_DEDUPE_WINDOW_MS;
+      const duplicate = item.claims.find((c) => c.userId === userId && c.claimedAt.getTime() >= since);
+      if (duplicate) return { ok: true, claimId: duplicate.id, remaining: remainingQuantity(item, item.claims) };
 
-    const created = await tx.registryClaim.create({ data: { itemId, userId, guestName, quantity: check.quantity }, select: { id: true } });
-    await tx.auditLog.create({
-      data: { studioId, eventId, actorUserId: userId, action: "registry.claim", target: itemId, data: { claimId: created.id, quantity: check.quantity } },
+      const check = checkClaim(item, item.claims, quantity);
+      if (!check.ok) return check;
+
+      const created = await tx.registryClaim.create({ data: { itemId, userId, guestName, quantity: check.quantity }, select: { id: true } });
+      await tx.auditLog.create({
+        data: { studioId, eventId, actorUserId: userId, action: "registry.claim", target: itemId, data: { claimId: created.id, quantity: check.quantity } },
+      });
+      return { ok: true, claimId: created.id, remaining: remainingQuantity(item, [...item.claims, { quantity: check.quantity }]) };
     });
-    return { ok: true, claimId: created.id, remaining: remainingQuantity(item, [...item.claims, { quantity: check.quantity }]) };
-  });
+  } catch (err) {
+    console.error("registry.claim failed", { eventId, itemId, err });
+    return { ok: false, reason: "failed" };
+  }
 }
 
 /**
@@ -45,22 +71,27 @@ export async function claimRegistryItem(input: ClaimInput): Promise<ClaimResult>
  */
 export async function undoRegistryClaim(input: { eventId: string; studioId: string; claimId: string; userId: string; now?: Date }): Promise<{ ok: boolean }> {
   const { eventId, studioId, claimId, userId, now = new Date() } = input;
-  return prisma.$transaction(async (tx) => {
-    const itemRow = await tx.registryClaim.findFirst({ where: { id: claimId, userId, item: { eventId } }, select: { itemId: true } });
-    const { count } = await tx.registryClaim.deleteMany({
-      where: {
-        id: claimId,
-        userId,
-        claimedAt: { gte: new Date(now.getTime() - UNDO_WINDOW_MS) },
-        item: { eventId },
-      },
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const itemRow = await tx.registryClaim.findFirst({ where: { id: claimId, userId, item: { eventId } }, select: { itemId: true } });
+      const { count } = await tx.registryClaim.deleteMany({
+        where: {
+          id: claimId,
+          userId,
+          claimedAt: { gte: new Date(now.getTime() - UNDO_WINDOW_MS) },
+          item: { eventId },
+        },
+      });
+      if (count !== 1) return { ok: false };
+      await tx.auditLog.create({
+        data: { studioId, eventId, actorUserId: userId, action: "registry.unclaim", target: itemRow?.itemId ?? null, data: { claimId } },
+      });
+      return { ok: true };
     });
-    if (count !== 1) return { ok: false };
-    await tx.auditLog.create({
-      data: { studioId, eventId, actorUserId: userId, action: "registry.unclaim", target: itemRow?.itemId ?? null, data: { claimId } },
-    });
-    return { ok: true };
-  });
+  } catch (err) {
+    console.error("registry.unclaim failed", { eventId, claimId, err });
+    return { ok: false };
+  }
 }
 
 /** Everything the /registry page renders, scoped to one event. */
