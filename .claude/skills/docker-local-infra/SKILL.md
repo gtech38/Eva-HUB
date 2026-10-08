@@ -75,7 +75,7 @@ cd packages/db && pnpm exec prisma studio
 Remember camelCase identifiers need double quotes.
 
 ### Add a compose service (e.g. `stripe listen`)
-1. Test first: a shell check in your PR notes (`curl` the new port) and, if an app depends on it, a node:test for the client wrapper with the endpoint injected.
+1. Test first: a shell check in your PR notes (`curl` the new port) and, if an app depends on it, a vitest test for the client wrapper with the endpoint injected.
 2. Add the service with explicit `ports`, env from literals (compose does not read the root `.env` unless you add `env_file`), and a healthcheck if others depend on it.
 3. Add the matching vars to `.env.example` and `packages/shared/src/env.ts` (Zod) so misconfiguration fails fast.
 4. `pnpm infra:up` (recreates only changed services) and document the service in the table above and in `CLAUDE.md` Layout.

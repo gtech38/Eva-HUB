@@ -32,7 +32,7 @@ description: Use when adding or wiring packages, changing root/package scripts, 
 - **Workspace deps are `workspace:*`** (`"@hub/db": "workspace:*"` in both apps and in `@hub/shared`).
 - **Env is loaded once at the root.** Next configs call `dotenv.config({ path: ../../.env })`; the worker's `config.py` resolves `../../../.env` by path. Do not add per-package `.env` files; add a symlink if a tool insists (that is why `packages/db/.env -> ../../.env` exists for `prisma`).
 - Shared versions: `typescript ^5.6.3`, `zod ^3.23.8`, `@prisma/client ^6.1.0`, `next ^15.1.0` (lockfile resolves 15.5.x), `react ^19`.
-- Tests: only `packages/shared` has a `test` script today (`node --import tsx --test src/*.test.ts`). `pnpm test` = `pnpm -r test`, so packages without a `test` script are silently skipped.
+- Tests: **vitest** is the only TypeScript runner. Every package has `"test": "vitest run"`, `vitest` in its own `devDependencies` (the post-edit hook refuses to run a package's tests without it), and a `vitest.config.ts` (`.mts` in the Next apps, which are not `"type": "module"`) that imports the shared `include`/`exclude` globs from the root `vitest.shared.mts`. The root `vitest.config.mts` lists every package in `test.projects`. `pnpm test` = `pnpm -r test`, so a package without a `test` script is silently skipped.
 
 ## Root scripts
 
@@ -41,7 +41,7 @@ description: Use when adding or wiring packages, changing root/package scripts, 
 | `pnpm dev` | `pnpm -r --parallel --filter ./apps/* dev` (web :3000 + admin :3001) |
 | `pnpm dev:web` / `pnpm dev:admin` | one app |
 | `pnpm typecheck` | `tsc --noEmit` in every package |
-| `pnpm test` | `pnpm -r test` (currently: shared policy tests) |
+| `pnpm test` | `pnpm -r test` (`vitest run` in shared, db, web, admin) |
 | `pnpm verify` | `typecheck && test && cd workers/media && make test` -- run before any PR |
 | `pnpm db:generate|migrate|seed|reset` | delegates to `@hub/db` (`prisma generate`, `prisma migrate dev`, `tsx prisma/seed.ts`, `prisma migrate reset --force`) |
 | `pnpm infra:up|down|nuke` | `docker compose -f infra/docker-compose.yml up -d|down|down -v` |
@@ -50,10 +50,11 @@ description: Use when adding or wiring packages, changing root/package scripts, 
 ## Common tasks
 
 ### Add a new workspace package (e.g. `packages/adapters`)
-1. Test first: create `packages/adapters/src/index.test.ts` using `node:test` + `node:assert/strict` that imports from `./index.ts` and asserts the first exported function. It will fail to resolve until step 2.
-2. `mkdir -p packages/adapters/src`; copy `packages/shared/package.json` and `tsconfig.json` as templates. Set `"name": "@hub/adapters"`, `"type": "module"`, `exports` to `./src/*.ts`, scripts `typecheck` and `test` identical to shared.
-3. Add consumers: in `apps/web/package.json` add `"@hub/adapters": "workspace:*"`, and add `"@hub/adapters"` to `transpilePackages` in both `next.config.ts` files.
-4. `pnpm install` (updates `pnpm-lock.yaml`), then `pnpm --filter @hub/adapters test && pnpm typecheck`.
+1. Test first: create `packages/adapters/src/index.test.ts` with `import { describe, it, expect } from "vitest"` that imports from `./index.ts` and asserts the first exported function. It will fail to resolve until step 2.
+2. `mkdir -p packages/adapters/src`; copy `packages/shared/package.json`, `tsconfig.json` and `vitest.config.ts` as templates. Set `"name": "@hub/adapters"`, `"type": "module"`, `exports` to `./src/*.ts`, scripts `"typecheck": "tsc --noEmit"` and `"test": "vitest run"`, `vitest` in `devDependencies` (`pnpm --filter @hub/adapters add -D vitest`), and `test.name: "@hub/adapters"` in its `vitest.config.ts`.
+3. Add `"packages/adapters"` to `test.projects` in the root `vitest.config.mts`.
+4. Add consumers: in `apps/web/package.json` add `"@hub/adapters": "workspace:*"`, and add `"@hub/adapters"` to `transpilePackages` in both `next.config.ts` files.
+5. `pnpm install` (updates `pnpm-lock.yaml`), then `pnpm --filter @hub/adapters test && pnpm typecheck`.
 
 ### Add a dependency to one package
 ```bash
@@ -62,10 +63,10 @@ pnpm --filter @hub/web add -D some-types        # dev
 ```
 If it is a native/Node-only module used in server code, also add it to `serverExternalPackages` in both Next configs. Test: `pnpm --filter @hub/web typecheck` and `pnpm --filter @hub/web build`.
 
-### Add a test runner to an app (first test in apps/web or apps/admin)
-1. Write `apps/web/src/lib/gallery.test.ts` (pure functions only: `visibleVisibilities`, etc.) with `node:test`.
-2. Add `"test": "node --import tsx --test 'src/**/*.test.ts'"` and `-D tsx` to that app's `package.json` (mirror `packages/shared`). Note: files that import `next/headers` cannot run under plain node; keep tested logic in `lib/` modules without Next imports.
-3. `pnpm --filter @hub/web test`, then `pnpm test`.
+### Add a test to an app (apps/web or apps/admin)
+Both apps already run vitest (`apps/*/vitest.config.mts`: node environment, `@/` -> `src/`, `server-only` stubbed, `test/setup.ts` loads the root `.env`).
+1. Write `apps/web/src/lib/gallery.test.ts` (pure functions only: `visibleVisibilities`, etc.) with `describe/it/expect` from `vitest`. Files that import `next/headers` or `next/navigation` need a request context; keep tested logic in `lib/` modules without Next imports.
+2. `cd apps/web && pnpm exec vitest run src/lib/gallery.test.ts`, then `pnpm --filter @hub/web test` and `pnpm test`.
 
 ### Add a root script
 Edit root `package.json`; follow the delegate pattern (`pnpm --filter @hub/db <script>`). Test by running it and by `pnpm verify` still passing.

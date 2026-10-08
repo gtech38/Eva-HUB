@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PostToolUse (Edit|Write|MultiEdit): fast feedback after every source edit.
 
-  * TypeScript: incremental `tsc --noEmit` for the package + run the sibling test file.
+  * TypeScript: incremental `tsc --noEmit` for the package + run the sibling test file with vitest
+                (a package that does not list vitest is reported as a problem).
   * Python:     `pytest` on the sibling test file (plus the edited file if it is itself a test).
   * SOLID heuristics on the edited file (size, long functions, fan-in of imports, god classes).
   * Records the edited path in `.claude/.touched/<session_id>` so the Stop hook only re-verifies
@@ -91,11 +92,17 @@ if pkg and not not_ready:
             deps = {**pj.get("dependencies", {}), **pj.get("devDependencies", {})}
             if "vitest" in deps:
                 cmd = ["pnpm", "exec", "vitest", "run", str(test_file), "--reporter=dot"]
+                code, out = run(cmd, cwd=pkg, timeout=deadline, env=env)
+                if code != 0:
+                    problems.append(f"Tests failed ({rel(test_file)}):\n{tail(out, 40)}")
             else:
-                cmd = ["node", "--import", "tsx", "--test", str(test_file)]
-            code, out = run(cmd, cwd=pkg, timeout=deadline, env=env)
-            if code != 0:
-                problems.append(f"Tests failed ({rel(test_file)}):\n{tail(out, 40)}")
+                # vitest is the only TypeScript runner; never fall back to another one silently.
+                name = pj.get("name") or rel(pkg)
+                problems.append(
+                    f"{rel(pkg)} does not list `vitest` in devDependencies, so {rel(test_file)} cannot run. "
+                    f"Add it: `pnpm --filter {name} add -D vitest`, a vitest.config.ts, `\"test\": \"vitest run\"`, "
+                    "and the package in the root vitest.config.mts `test.projects` (see the tdd-workflow skill)."
+                )
     elif path.suffix in PY_EXT:
         test_file = path if is_test(path) else existing_test(path)
         if test_file:

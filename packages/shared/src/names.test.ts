@@ -1,30 +1,31 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
+import { describe, expect, it } from "vitest";
 import { splitCoupleNames, monogramFor } from "./names.ts";
 
-test("splits on ampersand, plus and the word 'and' as a separate word", () => {
-  assert.deepEqual(splitCoupleNames("Priya & Arjun"), ["Priya", "Arjun"]);
-  assert.deepEqual(splitCoupleNames("Sandra and Tom"), ["Sandra", "Tom"]);
-  assert.deepEqual(splitCoupleNames("Brandon + Amanda"), ["Brandon", "Amanda"]);
-  assert.deepEqual(splitCoupleNames("Emma  &  Liam"), ["Emma", "Liam"]);
-});
+describe("names", () => {
+  it("splits on ampersand, plus and the word 'and' as a separate word", () => {
+    expect(splitCoupleNames("Priya & Arjun")).toStrictEqual(["Priya", "Arjun"]);
+    expect(splitCoupleNames("Sandra and Tom")).toStrictEqual(["Sandra", "Tom"]);
+    expect(splitCoupleNames("Brandon + Amanda")).toStrictEqual(["Brandon", "Amanda"]);
+    expect(splitCoupleNames("Emma  &  Liam")).toStrictEqual(["Emma", "Liam"]);
+  });
 
-test("never splits inside a name that contains 'and'", () => {
-  assert.deepEqual(splitCoupleNames("Anand & Priya"), ["Anand", "Priya"]);
-  assert.deepEqual(splitCoupleNames("Chandra and Nandini"), ["Chandra", "Nandini"]);
-  assert.equal(splitCoupleNames("Anand"), null);
-  assert.equal(splitCoupleNames("Brandon"), null);
-});
+  it("never splits inside a name that contains 'and'", () => {
+    expect(splitCoupleNames("Anand & Priya")).toStrictEqual(["Anand", "Priya"]);
+    expect(splitCoupleNames("Chandra and Nandini")).toStrictEqual(["Chandra", "Nandini"]);
+    expect(splitCoupleNames("Anand")).toBe(null);
+    expect(splitCoupleNames("Brandon")).toBe(null);
+  });
 
-test("returns null for single-subject titles and Indic titles without a separator", () => {
-  assert.equal(splitCoupleNames("Ravi at Fifty"), null);
-  assert.equal(splitCoupleNames("Gruhapravesam · The Reddy Home"), null);
-  assert.deepEqual(splitCoupleNames("ప్రియ & అర్జున్"), ["ప్రియ", "అర్జున్"]);
-});
+  it("returns null for single-subject titles and Indic titles without a separator", () => {
+    expect(splitCoupleNames("Ravi at Fifty")).toBe(null);
+    expect(splitCoupleNames("Gruhapravesam · The Reddy Home")).toBe(null);
+    expect(splitCoupleNames("ప్రియ & అర్జున్")).toStrictEqual(["ప్రియ", "అర్జున్"]);
+  });
 
-test("monogram takes the first letter of each side, or the first letter of the title", () => {
-  assert.equal(monogramFor("Sandra and Tom"), "S&T");
-  assert.equal(monogramFor("Anand & Priya"), "A&P");
-  assert.equal(monogramFor("Ravi at Fifty"), "R");
-  assert.equal(monogramFor(""), "");
+  it("monogram takes the first letter of each side, or the first letter of the title", () => {
+    expect(monogramFor("Sandra and Tom")).toBe("S&T");
+    expect(monogramFor("Anand & Priya")).toBe("A&P");
+    expect(monogramFor("Ravi at Fifty")).toBe("R");
+    expect(monogramFor("")).toBe("");
+  });
 });

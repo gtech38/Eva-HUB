@@ -40,14 +40,14 @@ Known action names: `album.delete`, `album.visibility`, `auth.invite_link`, `aut
 ## Common tasks
 
 ### Add an audit row for a new mutation
-1. Test first: if the mutation has a pure core, a node:test on it; otherwise write the smoke check you will run (SQL below) into the PR.
+1. Test first: if the mutation has a pure core, a vitest test on it; otherwise write the smoke check you will run (SQL below) into the PR.
 2. Admin: `await audit({ studioId, eventId, actorUserId: p.userId, action: "registry.item.claim", target: itemId, data: { quantity } })` after the write (or inside the `$transaction` with `tx.auditLog.create` when atomicity matters).
 3. Web: `tx.auditLog.create({ data: { ... } })` inside the transaction (see `rsvp/actions.ts`).
 4. Worker: `INSERT INTO "AuditLog"("studioId","eventId",action,target,data) VALUES (...)` with `jsonb()`.
 5. Add the name to the list above and, if it is a new noun, to the schema comment on `AuditLog.action`.
 
 ### Add a dependency check to `/api/health`
-1. Test first: node:test for a pure `summarize(checks)` -> `{ ok, checks }`.
+1. Test first: a vitest test for a pure `summarize(checks)` -> `{ ok, checks }`.
 2. In `apps/web/src/app/api/health/route.ts`: `await prisma.$queryRaw\`SELECT 1\`` with a timeout; `fetch(env().WORKER_INTERNAL_URL + "/health")`; return 503 when a required check fails. Keep the response small; it will be polled.
 
 ### Debug a missing effect

@@ -37,7 +37,7 @@ description: Use when adding pages, layouts, server actions, route handlers or m
 ## Common tasks
 
 ### Add a guest-site page (e.g. `/party`)
-1. Test first: `apps/web/src/lib/party.test.ts` (node:test) asserting a pure helper, e.g. `partyMembers(parsePage("WEDDING_PARTY", content), locale)` returns localized `role` strings. Add a `test` script to `apps/web/package.json` if missing (see `pnpm-monorepo`).
+1. Test first: `apps/web/src/lib/party.test.ts` (vitest: `describe/it/expect` from `vitest`) asserting a pure helper, e.g. `partyMembers(parsePage("WEDDING_PARTY", content), locale)` returns localized `role` strings. Run it with `cd apps/web && pnpm exec vitest run src/lib/party.test.ts` or `pnpm --filter @hub/web test`.
 2. Create `apps/web/src/app/sites/[slug]/party/page.tsx`: `export const dynamic = "force-dynamic"`; `const site = await requireViewer(); if (!site) return null;` read content with `parsePage("WEDDING_PARTY", page(site, "WEDDING_PARTY")?.content)`; render with `PageHeader` and `t()`.
 3. The nav already lists `WEDDING_PARTY` when an enabled `EventPage` row exists (`buildNav` in `sites/[slug]/layout.tsx`); `PAGE_PATHS.WEDDING_PARTY` is `/party`.
 4. Verify: `curl -sI -b "hub_session=<cookie>" http://priya-arjun.localhost:3000/party` -> 200 and `Cache-Control: private, no-store`.

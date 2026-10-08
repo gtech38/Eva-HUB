@@ -56,7 +56,7 @@ Test cards: `4242 4242 4242 4242`, any future date, any CVC.
 ## Common tasks
 
 ### Implement the Stripe webhook (first real integration step)
-1. Test first: `apps/web/src/lib/payments/apply-event.test.ts` -- a pure `applyStripeEvent(event, db)` with an in-memory fake db: `checkout.session.completed` with `metadata.orderId` yields `Order PAID` + one `GALLERY_FULLRES` entitlement; a second delivery of the same event is idempotent (check `Entitlement.orderId` exists); `charge.refunded` revokes. Run with node:test (add the app `test` script per `pnpm-monorepo`).
+1. Test first: `apps/web/src/lib/payments/apply-event.test.ts` -- a pure `applyStripeEvent(event, db)` with an in-memory fake db: `checkout.session.completed` with `metadata.orderId` yields `Order PAID` + one `GALLERY_FULLRES` entitlement; a second delivery of the same event is idempotent (check `Entitlement.orderId` exists); `charge.refunded` revokes. Run with `pnpm --filter @hub/web test` (vitest; `describe/it/expect` from `vitest`).
 2. Implement `applyStripeEvent` with Prisma; the route only verifies the signature and calls it.
 3. Add `stripe` dependency to `apps/web` (`pnpm --filter @hub/web add stripe`) and to `serverExternalPackages`.
 4. Verify with `stripe trigger` above, then check `/platform/audit` for `order.paid`.

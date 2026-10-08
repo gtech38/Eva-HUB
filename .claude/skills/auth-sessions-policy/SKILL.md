@@ -16,7 +16,7 @@ description: Use when working on sign-in, sessions, invitation links, magic link
 |---|---|
 | `packages/shared/src/auth.ts` | `SESSION_COOKIE = "hub_session"`, `newToken()`, `hashToken()`, `encodeCookie()/decodeCookie()` (HMAC-SHA256 with `AUTH_SECRET`), `createSession()`, `destroySession()`, `normalizeContact()`, `principalFromCookie()`, `resolveUserForVerifiedContact()`, `linkGuestsForContact()` |
 | `packages/shared/src/policy.ts` | `Principal`, `Action` union, `Resource`, `ELEVATED` set, `REAUTH_HOURS = 12`, `can()` |
-| `packages/shared/src/policy.test.ts` | node:test suite; `pnpm --filter @hub/shared test` |
+| `packages/shared/src/policy.test.ts` | vitest suite; `pnpm --filter @hub/shared test` |
 | `packages/shared/src/env.ts` | `AUTH_SECRET` (min 16 chars), `SESSION_TTL_DAYS` (30), `INVITE_SESSION_TTL_DAYS` (90), `cookieDomain()` |
 | `apps/web/src/app/sites/[slug]/auth/actions.ts` | `requestSignIn` server action (guest-site magic link, email or SMS) |
 | `apps/web/src/app/sites/[slug]/auth/callback/route.ts` | magic-link landing: burn token, resolve user, link guests, `createSession(EMAIL_LINK|SMS_OTP)` |

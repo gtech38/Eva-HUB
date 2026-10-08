@@ -6,7 +6,7 @@ milestone: Phase 0 — Foundations
 ---
 
 ## Context
-Today the only automated tests are `packages/shared/src/policy.test.ts` (node:test) and 21 pytest cases in `workers/media/tests`. Neither Next app has a test runner, there is no CI, no ESLint config (`next lint` has never been configured; `apps/admin/next.config.ts` sets `eslint.ignoreDuringBuilds`), and `pnpm verify` runs only typecheck + unit + pytest. docs/04-plan.md Phase 0 calls for CI with typecheck, lint, unit, migrate and Python tests. Every later ticket in this backlog names a failing test to write first, so this epic unblocks all of them.
+When this epic was written, the only automated tests were `packages/shared/src/policy.test.ts` (then on node:test; INF-001 moved every TS package to vitest) and 21 pytest cases in `workers/media/tests`. Neither Next app has a test runner, there is no CI, no ESLint config (`next lint` has never been configured; `apps/admin/next.config.ts` sets `eslint.ignoreDuringBuilds`), and `pnpm verify` runs only typecheck + unit + pytest. docs/04-plan.md Phase 0 calls for CI with typecheck, lint, unit, migrate and Python tests. Every later ticket in this backlog names a failing test to write first, so this epic unblocks all of them.
 
 ## Children
 - INF-001 Vitest workspace for shared, db, web and admin

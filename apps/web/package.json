@@ -8,7 +8,7 @@
     "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "lint": "next lint",
-    "test": "node --import tsx --test src/lib/*.test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",
@@ -30,6 +30,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.11"
   }
 }

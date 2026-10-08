@@ -57,7 +57,7 @@ Logs go to stdout of that terminal; look for `job <id> <TYPE> succeeded in N ms`
 
 ### Add a job type (e.g. `DELETE_PHOTO_OBJECTS`)
 1. Test first (Python): `tests/test_delete_photo_objects.py` -- monkeypatch `hub_worker.storage.delete`/`client` with a fake, call `handlers.delete_photo_objects.handle(conn, {"payload": {...}, "id": 1, "attempts": 1, "maxAttempts": 5})`, assert the keys deleted. Use the `conn` fixture pattern from `test_jobs.py` (skip if DB down) only if the handler reads the DB.
-2. Test first (TS): extend `packages/shared`-style node:test for the enqueue call site, or at minimum type-level: adding the literal to `JobType` makes `enqueue("DELETE_PHOTO_OBJECTS", ...)` compile.
+2. Test first (TS): extend a vitest test (`packages/*/src/*.test.ts` style) for the enqueue call site, or at minimum type-level: adding the literal to `JobType` makes `enqueue("DELETE_PHOTO_OBJECTS", ...)` compile.
 3. Python: `hub_worker/handlers/delete_photo_objects.py` with `handle(conn, job)`; register in `default_handlers()` and `JOB_TYPES` in `jobs.py`.
 4. TS: add to `JobType` in `packages/db/src/index.ts`; update the `Job.type` comment in `schema.prisma`; enqueue from the action with a `dedupeKey` (`delobj:{photoId}`), inside the same transaction when possible (`enqueue(..., { tx })`).
 5. Document the row in `workers/media/README.md` job table.

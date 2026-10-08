@@ -1,6 +1,6 @@
 ---
 name: tdd-workflow
-description: How test-driven development is enforced and practised in this repo — the red→green→refactor loop, where tests live for each package, which runner to use (node:test, vitest, pytest, Playwright), how the .claude hooks gate source edits, and how to write acceptance-criteria-driven tests for a backlog ticket. Load before changing any code under apps/, packages/ or workers/.
+description: How test-driven development is enforced and practised in this repo — the red→green→refactor loop, where tests live for each package, which runner to use (vitest for all TypeScript, pytest, Playwright), how the .claude hooks gate source edits, and how to write acceptance-criteria-driven tests for a backlog ticket. Load before changing any code under apps/, packages/ or workers/.
 ---
 
 # TDD workflow
@@ -22,33 +22,35 @@ One failing test at a time. If you find yourself writing three tests before any 
 
 | Package | Runner | Test location | Run |
 |---|---|---|---|
-| `packages/shared` | `node:test` via tsx | `src/<name>.test.ts` (e.g. `src/policy.test.ts`) | `pnpm --filter @hub/shared test` or `node --import tsx --test src/policy.test.ts` |
-| `packages/db` | `node:test` via tsx (add) | `src/<name>.test.ts`; DB-backed tests hit local Postgres | `node --import tsx --test src/index.test.ts` |
-| `apps/web` | vitest (to be set up — see backlog EPIC-QUALITY) | `src/lib/<name>.test.ts`, `src/**/__tests__/` | `pnpm --filter @hub/web test` |
-| `apps/admin` | vitest (to be set up) | same pattern | `pnpm --filter @hub/admin test` |
+| `packages/shared` | vitest | `src/<name>.test.ts` (e.g. `src/policy.test.ts`) | `pnpm --filter @hub/shared test` or `cd packages/shared && pnpm exec vitest run src/policy.test.ts` |
+| `packages/db` | vitest | `src/<name>.test.ts`; DB-backed tests hit local Postgres | `cd packages/db && pnpm exec vitest run src/index.test.ts` |
+| `apps/web` | vitest | `src/lib/<name>.test.ts`, `src/**/__tests__/`; harness tests in `test/` | `pnpm --filter @hub/web test` |
+| `apps/admin` | vitest | same pattern | `pnpm --filter @hub/admin test` |
 | `workers/media` | pytest | `tests/test_<module>.py` | `cd workers/media && .venv/bin/pytest -q tests/test_jobs.py` |
 | e2e | Playwright (planned) | `apps/*/e2e/` | see `e2e-playwright` skill |
+
+One TypeScript runner: **vitest** (do not add `node:test` files; vitest reports them as "No test suite found"). Write `import { describe, it, expect } from "vitest"` explicitly (no globals). Each package has its own `vitest.config.ts` (`vitest.config.mts` in the Next apps, which are not `"type": "module"`) importing the shared collection globs from the root `vitest.shared.mts` (`src/`, `test/` and `tests/` x `*.{test,spec}.{ts,tsx}` -- every location the gate accepts), and lists `vitest` in its own `devDependencies`: the post-edit hook runs `pnpm exec vitest run <file>`, and reports a package without vitest as a problem instead of running anything. The root `vitest.config.mts` lists all four as `test.projects`, so `pnpm exec vitest run` at the root runs everything; `pnpm test` (`pnpm -r test`) runs `vitest run` per package. In the Next apps, `@/` resolves to `src/`, `server-only` is stubbed, and `test/setup.ts` loads the root `.env` so `env()` parses.
 
 The gate looks for: `<stem>.test.ts(x)`, `<stem>.spec.ts(x)`, `__tests__/<stem>.test.ts(x)` beside the source, or `<pkg>/tests/<path-under-src>/<stem>.test.ts(x)` (the test's directory must mirror the source's, so `tests/foo/index.test.ts` does not count for `src/index.ts`); for Python `tests/test_<stem>.py`, `tests/test_<dir>_<stem>.py` or `tests/<dir>/test_<stem>.py`. Name tests to match.
 
 ## What does NOT need its own unit test
-Route-file shells (`page.tsx`, `layout.tsx`, `loading.tsx`, `error.tsx`), `themes/**`, `components/**` (presentational; covered by Playwright/visual), `middleware.ts`, any `*.config.{ts,js,mjs}` (`next.config.ts`, `tailwind.config.ts`, `postcss.config.mjs`, `vitest.config.ts`, `playwright.config.ts`), migrations, `__init__.py`. Logic inside those must be lifted into `lib/` where it is testable. If a file is pure wiring, write `// tdd-exempt: <reason>` in it — the gate honours the marker (in the content being written, including `MultiEdit` payloads, or anywhere in the first 4 KB of the existing file, so later edits stay exempt) and leaves an auditable trail (`grep -r tdd-exempt`).
+Route-file shells (`page.tsx`, `layout.tsx`, `loading.tsx`, `error.tsx`), `themes/**`, `components/**` (presentational; covered by Playwright/visual), `middleware.ts`, any `*.config.{ts,mts,cts,js,mjs,cjs}` (`next.config.ts`, `tailwind.config.ts`, `postcss.config.mjs`, `vitest.config.ts`, `vitest.config.mts`, `playwright.config.ts`), migrations, `__init__.py`. Logic inside those must be lifted into `lib/` where it is testable. If a file is pure wiring, write `// tdd-exempt: <reason>` in it — the gate honours the marker (in the content being written, including `MultiEdit` payloads, or anywhere in the first 4 KB of the existing file, so later edits stay exempt) and leaves an auditable trail (`grep -r tdd-exempt`).
 
 ## Reality on main
-Most existing modules have **no test yet** (at the time of writing: `packages/shared/src/policy.test.ts` and `packages/db/src/index.test.ts` are the only TS tests; the worker has `tests/test_jobs.py` and `tests/test_face_synthetic.py`). Several modules cannot be unit-tested without infrastructure: anything touching Prisma needs Postgres (`pnpm infra:up`), storage adapters need S3/RustFS, the face pipeline needs the ONNX models (`make models`).
+Most existing modules have **no test yet**. At the time of writing the TS tests are `packages/shared/src/{policy,names}.test.ts`, `packages/db/src/index.test.ts`, `apps/web/src/lib/eventCopy.test.ts`, `apps/admin/src/lib/eventSchemas.test.ts` and the harness tests in `apps/*/test/`; the worker has `tests/test_jobs.py` and `tests/test_face_synthetic.py`. Several modules cannot be unit-tested without infrastructure: anything touching Prisma needs Postgres (`pnpm infra:up`), storage adapters need S3/RustFS, the face pipeline needs the ONNX models (`make models`).
 
 The gate applies to **edits**, not to history, so the first edit to an untested module is where its test gets written -- even for a one-line fix. Expect that cost; it is the point. In practice:
 
 - Pure logic (`lib/`, `policy.ts`, mappers, parsers): add `src/<name>.test.ts` next to it and test the seam directly. This is the common case and takes minutes.
-- Modules that need Postgres: follow `packages/db/src/index.test.ts` -- probe the DB at the top and `skip` with a message when it is unreachable, use `TEST_*` job types / unique prefixes, clean up in `after()`. The Stop hook already skips these when :5433 is closed.
-- Modules that need S3/ONNX or a real browser: the harness is tracked under EPIC-QUALITY -- #83 (test infrastructure epic), #84 (Vitest workspace for shared/db/web/admin), #86 (Playwright against the local stack), #88 (first unit tests for auth helpers and gallery rules), #109 (tenant isolation suite). Until those land, lift the logic you are changing into a pure function and test that; leave the adapter call as thin wiring.
+- Modules that need Postgres: follow `packages/db/src/index.test.ts` -- probe the DB at the top (top-level `await`), wrap the suite in `describe.skipIf(!dbUp)` and log why when it is unreachable, use `TEST_*` job types / unique prefixes, clean up in `afterAll()`. The Stop hook already skips these when :5433 is closed.
+- Modules that need S3/ONNX or a real browser: the harness is tracked under EPIC-QUALITY -- #83 (test infrastructure epic), #84 (Vitest workspace for shared/db/web/admin; done), #86 (Playwright against the local stack), #88 (first unit tests for auth helpers and gallery rules), #109 (tenant isolation suite). Until those land, lift the logic you are changing into a pure function and test that; leave the adapter call as thin wiring.
 - Genuinely untestable wiring (route shells, adapter registration, config glue): mark it `// tdd-exempt: <why>` (`# tdd-exempt:` in Python). The marker is the convention; `grep -r tdd-exempt` is the audit.
 
 ## Writing tests from a ticket
 Each ticket's **Acceptance criteria** checkbox becomes at least one test. Name the test with the criterion text:
 
 ```ts
-test("invite-link session can RSVP but cannot manage guests", () => { ... });
+it("invite-link session can RSVP but cannot manage guests", () => { ... });
 ```
 
 ```python
@@ -81,7 +83,8 @@ Agents usually work in a linked worktree (`git worktree add <scratch>/wt-<id> -b
 ```bash
 pnpm verify                          # everything the Stop hook runs, plus pytest
 pnpm --filter @hub/shared test
-node --import tsx --test packages/shared/src/policy.test.ts
+pnpm exec vitest run                 # all four TS packages from the root (test.projects)
+cd packages/shared && pnpm exec vitest run src/policy.test.ts
 cd workers/media && .venv/bin/pytest -q -x tests/test_jobs.py -k backoff
 HOOK_FAST=1                          # env: skip tsc in the post-edit hook (tests still run)
 TDD_GATE=off                         # env: disable the gate for a session; never commit with it on

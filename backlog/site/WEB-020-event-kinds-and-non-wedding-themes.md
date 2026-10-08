@@ -32,7 +32,7 @@ The product is for events, not only weddings, but every theme hard-coded wedding
 
 ## Verification
 ```bash
-cd apps/web && node --import tsx --test src/lib/eventCopy.test.ts
+cd apps/web && pnpm exec vitest run src/lib/eventCopy.test.ts
 pnpm typecheck && pnpm db:seed
 # open http://{baby-reddy,reddy-gruhapravesam,ravi-50,sofia-james,emma-liam,priya-arjun}.localhost:3000 and sign in as admin@localhost
 ```
