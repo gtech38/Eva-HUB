@@ -91,6 +91,7 @@ describe("requestMagicLink rate limit (SHR-003)", () => {
     for (let i = 0; i < 7; i++) await request("admin@localhost");
     expect(limits.audits).toMatchObject([{ action: "auth.rate_limited", studioId: null, eventId: null, data: { policy: "adminMagicLinkAddressIp" } }]);
     expect(JSON.stringify(limits.audits)).not.toContain("admin@");
+    expect(JSON.stringify(limits.audits), "nor the client IP").not.toContain("203.0.113.9");
   });
 
   it("a stranger on another network cannot burn the admin's attempts; IP rotation is capped at 20", async () => {

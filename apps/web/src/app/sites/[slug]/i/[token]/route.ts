@@ -7,6 +7,7 @@ import { fullName } from "@/lib/format";
 import { inviteUsable } from "@/lib/inviteLink";
 import { INVITE_EXPIRED_PATH } from "@/lib/inviteNotice";
 import { rateLimits } from "@hub/shared/ratePolicies";
+import type { LimitResult } from "@hub/shared/ratelimit";
 import { clientIp } from "@hub/shared/clientIp";
 import { ui } from "@hub/shared/i18n";
 
@@ -25,14 +26,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ token: stri
   const { token } = await ctx.params;
 
   // Token-guessing guard (SHR-003): counted before the lookup, so the answer cannot depend on the token.
-  const ip = clientIp(req.headers);
-  const limited = await rateLimits.check("inviteIp", ip, { studioId: site.event.studioId, eventId: site.event.id });
-  if (!limited.ok) {
-    return new NextResponse(ui("tooManyRequests", site.locale), {
-      status: 429,
-      headers: { "Retry-After": String(limited.retryAfterSec), "Cache-Control": "private, no-store", "Content-Type": "text/plain; charset=utf-8" },
-    });
+  // If the limiter itself fails, refuse (503) rather than let unlimited guesses through.
+  const plain = (status: number, text: string, extra: Record<string, string> = {}) =>
+    new NextResponse(text, { status, headers: { "Cache-Control": "private, no-store", "Content-Type": "text/plain; charset=utf-8", ...extra } });
+  let limited: LimitResult;
+  try {
+    limited = await rateLimits.check("inviteIp", clientIp(req.headers), { studioId: site.event.studioId, eventId: site.event.id });
+  } catch (err) {
+    console.error("[invite-link] rate limiter unavailable", (err as Error).message);
+    return plain(503, ui("temporarilyUnavailable", site.locale), { "Retry-After": "60" });
   }
+  if (!limited.ok) return plain(429, ui("tooManyRequests", site.locale), { "Retry-After": String(limited.retryAfterSec) });
 
   const invite = await prisma.inviteToken.findUnique({ where: { tokenHash: hashToken(token) }, include: { guest: true } });
   const now = new Date();

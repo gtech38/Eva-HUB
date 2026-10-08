@@ -45,6 +45,7 @@ vi.mock("@hub/shared/ratePolicies", async (importActual) => {
 const { rateLimiter } = await import("@hub/shared/ratePolicies");
 const { memoryRateLimitStore } = await import("@hub/shared/ratelimit");
 const { ui } = await import("@hub/shared/i18n");
+const { env } = await import("@hub/shared/env");
 
 const { GET } = await import("./route.ts");
 
@@ -99,12 +100,35 @@ describe("GET /i/[token] rate limit (SHR-003)", () => {
   });
 
   it("without a proxy header in production all such requests share one bucket", async () => {
+    env(); // parse the dev env once, so the production stub below only changes clientIp's mode
     vi.stubEnv("NODE_ENV", "production");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       for (let i = 0; i < 200; i++) await hit(`guess-${i}`, null);
       expect((await hit("guess-200", null)).status).toBe(429);
     } finally {
       vi.unstubAllEnvs();
+      vi.restoreAllMocks();
     }
+  });
+
+  it("a limiter failure answers a localized 503 with no-store, without a token lookup", async () => {
+    limits.current = { check: async () => Promise.reject(new Error("db down")), acquire: async () => Promise.reject(new Error("db down")) };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await hit("guess-x");
+      expect(res.status).toBe(503);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect(await res.text()).toBe(ui("temporarilyUnavailable", "hi"));
+      expect(db.lookups).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("the 429 is no-store too", async () => {
+    for (let i = 0; i < 200; i++) await hit(`guess-${i}`);
+    expect((await hit("guess-200")).headers.get("cache-control")).toBe("private, no-store");
   });
 });

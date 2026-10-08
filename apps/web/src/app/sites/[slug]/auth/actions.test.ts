@@ -165,6 +165,7 @@ describe("requestSignIn rate limits (SHR-003)", () => {
     expect(limits.audits).toHaveLength(1);
     expect(limits.audits[0]).toMatchObject({ action: "auth.rate_limited", studioId: "studio-1", eventId: "event-1", data: { policy: "signInAddressIp" } });
     expect(JSON.stringify(limits.audits)).not.toContain("priya");
+    expect(JSON.stringify(limits.audits), "nor the client IP").not.toContain("203.0.113.9");
   });
 
   it("if the limiter fails, nothing is sent and the reply is unchanged", async () => {
