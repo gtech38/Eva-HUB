@@ -73,7 +73,7 @@ describe.skipIf(!dbUp)(suite, () => {
     const done = await make({ type, status: "SUCCEEDED", finishedAt });
     expect(await retryDeadOfType(type)).toBe(2);
     const rows = await prisma.job.findMany({ where: { type }, orderBy: { id: "asc" } });
-    expect(rows.filter((r) => dead.some((d) => d.id === r.id)).map((r) => [r.status, r.attempts, r.finishedAt])).toEqual([["QUEUED", 0, null], ["QUEUED", 0, null]]);
+    expect(rows.filter((r) => dead.some((d) => d.id === r.id)).map((r) => [r.status, r.attempts, r.finishedAt, r.lastError])).toEqual([["QUEUED", 0, null, null], ["QUEUED", 0, null, null]]);
     expect(rows.find((r) => r.id === done.id)).toMatchObject({ status: "SUCCEEDED", finishedAt });
     // park them again so no consumer can pick them up before afterAll
     await prisma.job.updateMany({ where: { type }, data: { runAt: new Date(Date.now() + HOUR) } });

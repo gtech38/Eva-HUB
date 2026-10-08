@@ -156,7 +156,8 @@ describe.skipIf(!dbUp)(SUITE, () => {
 
       expect(await retryJobAs(platformAdmin(), job.id)).toEqual({ ok: true, message: "Re-queued" });
       const after = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
-      expect(after).toMatchObject({ status: "QUEUED", attempts: 0, lockedBy: null, lockedAt: null, finishedAt: null });
+      // a fresh run: no stale error (it would count as "retrying"), no lock, no finish time
+      expect(after).toMatchObject({ status: "QUEUED", attempts: 0, lockedBy: null, lockedAt: null, finishedAt: null, lastError: null });
       expect(after.runAt.getTime()).toBeLessThanOrEqual(Date.now());
       const [row] = await auditRows("job.retry", String(job.id));
       expect(row!.data).toEqual({ type: T });

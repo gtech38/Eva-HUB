@@ -159,7 +159,7 @@ export async function cancelJob(id: bigint, scope: JobScope = {}): Promise<Cance
 export async function retryDeadOfType(type: string): Promise<number> {
   const { count } = await prisma.job.updateMany({
     where: { type, status: "DEAD" },
-    data: { status: "QUEUED", attempts: 0, lockedAt: null, lockedBy: null, finishedAt: null, runAt: new Date() },
+    data: { status: "QUEUED", attempts: 0, lastError: null, lockedAt: null, lockedBy: null, finishedAt: null, runAt: new Date() },
   });
   return count;
 }

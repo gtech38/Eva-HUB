@@ -34,9 +34,9 @@ export async function cancelJobAs(p: Principal, input: { id: bigint; scope?: { s
 }
 
 /**
- * Platform admin only: re-queue one FAILED/DEAD job now with a fresh attempt budget. `finishedAt` is
- * cleared with the rest of the previous run (as `enqueue` does on a dedupe re-run) so the dashboard
- * does not count a revived job as a failure of the last hour.
+ * Platform admin only: re-queue one FAILED/DEAD job now with a fresh attempt budget. `lastError` and
+ * `finishedAt` are cleared with the rest of the previous run (as `enqueue` does on a dedupe re-run), so
+ * the dashboard neither shows the revived job as "retrying" nor counts it as a failure of the last hour.
  */
 export async function retryJobAs(p: Principal, id: bigint): Promise<JobActionResult> {
   authorize(p, "platform.admin", { studioId: "" });
@@ -45,7 +45,7 @@ export async function retryJobAs(p: Principal, id: bigint): Promise<JobActionRes
   if (job.status !== "FAILED" && job.status !== "DEAD") return { ok: false, error: `Job is ${job.status}; only FAILED/DEAD jobs can be retried.` };
   const { count } = await prisma.job.updateMany({
     where: { id, status: { in: ["FAILED", "DEAD"] } },
-    data: { status: "QUEUED", attempts: 0, lockedAt: null, lockedBy: null, finishedAt: null, runAt: new Date() },
+    data: { status: "QUEUED", attempts: 0, lastError: null, lockedAt: null, lockedBy: null, finishedAt: null, runAt: new Date() },
   });
   if (count === 0) return { ok: false, error: "Job changed state; reload and try again." };
   await audit({ actorUserId: p.userId, action: "job.retry", target: String(id), data: { type: job.type } });
