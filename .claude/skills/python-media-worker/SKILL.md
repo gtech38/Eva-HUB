@@ -20,6 +20,7 @@ description: Use when working in workers/media (Python 3.13 job consumer + FastA
 | `hub_worker/config.py` | `settings` dataclass from root `.env` (resolved by path `../../../.env`, real env wins); `MODEL_VERSION`, model file names; `FACE_MODEL_DIR` relative to `workers/media` |
 | `hub_worker/db.py` | `connect(autocommit)`, `transaction(conn)`, `new_id()` (cuid-shaped), `utcnow()`, `jsonb()`, `vec_literal()`, `parse_vec()`, `l2_normalize()`, `cosine_sim()` |
 | `hub_worker/jobs.py` | `enqueue()`, `claim()`, `mark_succeeded/requeued/failed()`, `requeue_stale()`, `Requeue`, `default_handlers()`, `run_once()`, `consume_forever()` |
+| `hub_worker/handlers/process_photo.py` `sort_key()` | `Photo.sortKey` = capture time (else `createdAt`) as naive fixed-width ISO with milliseconds (`2026-03-04T05:06:07.089`); the web gallery pages by `sortKey ASC NULLS LAST, id ASC` and `build_zip.py` uses the same order (docs/03 "Photo.sortKey contract"; pinned by `tests/test_process_photo.py`, which also compares against Postgres `to_char`) |
 | `hub_worker/handlers/*.py` | one `handle(conn, job)` per type: `process_photo`, `index_faces`, `cluster_faces`, `purge_face_index`, `build_zip`, `send_message` (stub), `fire_reminder` (stub: stamps `firedAt`), `print_submit` (stub) |
 | `hub_worker/imaging.py` | `open_oriented`, `captured_at`, `fit_long_edge`, `to_jpeg`, `watermark`, `make_variants` (thumb 400/q80, web 2048/q85, webWm) |
 | `hub_worker/storage.py`, `face.py`, `api.py` | see `s3-object-storage`, `face-recognition-pipeline` |

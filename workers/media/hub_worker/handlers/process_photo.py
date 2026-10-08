@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Any, Mapping
 
 import psycopg
@@ -28,6 +29,15 @@ def _credit(brand: Mapping[str, Any] | None) -> str:
             if isinstance(v, str) and v.strip():
                 return v.strip()
     return "PROOF"
+
+
+def sort_key(shot_at: datetime | None, created_at: datetime) -> str:
+    """`Photo.sortKey`: capture time (else upload time) as naive ISO-8601 with milliseconds.
+
+    Fixed width, so keys compare correctly as strings. The backfill migration and the web gallery's
+    keyset order (`sortKey ASC NULLS LAST, id ASC`) depend on this exact format (docs/03-data-model.md).
+    """
+    return (shot_at or created_at).replace(tzinfo=None).isoformat(timespec="milliseconds")
 
 
 def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
@@ -62,8 +72,7 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
             storage.put_bytes(key, payload, "image/jpeg")
             derivatives[variant] = key
 
-        sort_dt = shot_at or photo["createdAt"]
-        sort_key = sort_dt.replace(tzinfo=None).isoformat(timespec="milliseconds")
+        photo_sort_key = sort_key(shot_at, photo["createdAt"])
 
         with conn.transaction():
             with conn.cursor() as cur:
@@ -72,7 +81,7 @@ def handle(conn: psycopg.Connection, job: Mapping[str, Any]) -> None:
                           SET width = %s, height = %s, "capturedAt" = %s, derivatives = %s,
                               "sortKey" = %s, status = 'READY'::"PhotoStatus"
                         WHERE id = %s''',
-                    (width, height, shot_at, jsonb(derivatives), sort_key, photo_id),
+                    (width, height, shot_at, jsonb(derivatives), photo_sort_key, photo_id),
                 )
             enqueue(conn, "INDEX_FACES", {"photoId": photo_id}, dedupe_key=f"faces:{photo_id}")
     except Exception:
