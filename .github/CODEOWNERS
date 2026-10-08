@@ -1,0 +1,10 @@
+# Review routing. One owner today; split by area as the team grows.
+*                               @gtech38
+/packages/db/prisma/            @gtech38
+/packages/shared/src/policy.ts  @gtech38
+/packages/shared/src/auth.ts    @gtech38
+/workers/media/hub_worker/face.py          @gtech38
+/workers/media/hub_worker/handlers/index_faces.py   @gtech38
+/docs/                          @gtech38
+/.github/                       @gtech38
+/.githooks/                     @gtech38
