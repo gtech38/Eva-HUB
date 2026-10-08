@@ -86,6 +86,10 @@ def enqueue(
     * existing row SUCCEEDED / DEAD / FAILED -> reset to QUEUED (re-run)
     * existing row RUNNING                 -> left alone (returns None); the handler
                                               is expected to detect late arrivals and Requeue itself
+
+    Restore contract (DOC-003): the ON CONFLICT clause below is copied verbatim into
+    docs/ops/replay-after-restore.sql and docs/ops/runbook-restore.md;
+    scripts/tests/test_restore_contracts.py fails until all copies match.
     """
     if run_at is None:
         run_at = utcnow() + timedelta(seconds=delay_s)

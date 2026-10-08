@@ -82,6 +82,8 @@ export async function enqueue(
     //   * RUNNING           -> untouched (returned as-is; the worker returns None)
     //   * always on update  -> lastError/finishedAt/lockedBy/lockedAt cleared; `type` is NOT changed
     // Unlike the worker this is read-then-write, not a single upsert; pass `tx` when that matters.
+    // The same semantics are copied as SQL into docs/ops/replay-after-restore.sql and
+    // docs/ops/runbook-restore.md (restore contract, DOC-003); change them together.
     const runAt = opts.runAt ?? new Date();
     const existing = await db.job.findUnique({ where: { dedupeKey: opts.dedupeKey } });
     if (!existing) {

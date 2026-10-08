@@ -64,7 +64,7 @@ Keep a timestamped log of every step in the incident note. The timings go into
 - [ ] **Migrations line up with the code you're going to run:**
 
   ```bash
-  cd packages/db && DATABASE_URL="$NEW_URL" pnpm exec prisma migrate status
+  (cd packages/db && DATABASE_URL="$NEW_URL" pnpm exec prisma migrate status)   # subshell: you stay at the repo root
   ```
 
   If *T* is before a migration that the deployed code needs, either run `prisma migrate deploy`, or deploy the app version that matches *T*. Never run `migrate dev` or `reset` against it.
@@ -72,6 +72,7 @@ Keep a timestamped log of every step in the incident note. The timings go into
   - Path B: take a manifest of the new instance and compare it with the dump's manifest. No difference is allowed.
 
     ```bash
+    umask 077; mkdir -p ./restore
     DATABASE_URL="$NEW_URL" ./scripts/backup-db.sh ./restore/verify.dump
     diff <(sort ./restore/hub.dump.manifest) <(sort ./restore/verify.dump.manifest) && echo IDENTICAL
     ```
@@ -91,7 +92,7 @@ Keep a timestamped log of every step in the incident note. The timings go into
   - `psql "$NEW_URL" -c 'SELECT count(*) FROM "Event"'` returns the count you saw in step 3;
   - a page that reads the database loads: open an event site and the admin events list.
 - [ ] When INF-014 (#79) lands, `/api/health` on web and admin also reports DB and S3 reachability; use it and expect `db: ok`. The worker's `/health` (port 8010) reports its models, not the database, and the worker is not running yet anyway.
-- [ ] Admin: the jobs page loads and shows the parked jobs from step 6.
+- [ ] Admin: the jobs page loads. (Jobs are parked and reviewed later, in step 7.)
 - [ ] **Smoke e2e.** When the Playwright suites exist (WEB-001 #89, ADM-001 #81 on the harness from #86), run them against the restored environment. Until then, check by hand:
   1. Sign in to admin with a magic link.
   2. Open an event in admin.
@@ -132,11 +133,11 @@ you review before committing.
 ### 6b. Consent and opt-outs
 
 - [ ] **SMS opt-outs** (`ContactPoint.smsOptOut`) recorded after *T* are lost. Re-apply them from the SMS provider's opt-out (STOP) list, which the provider keeps independently of our database. Until that's done, do not start the worker: sending to an opted-out number is a compliance violation (10DLC / TCPA).
-- [ ] **Per-person face-search opt-outs and consent revokes after *T*** (`Guest.faceSearchOptOut`, `FaceCluster.suppressed`, `BiometricConsent.revokedAt`, deleted `FaceProfile` rows) are rolled back too. Today no code path writes an audit row for them that the replay in 6c can use (the controls arrive with WEB-006 / WEB-021), so they can only be re-applied from a record outside this database. That record doesn't exist yet (LEG-008). Until it does, list them from confirmation emails or tickets, and re-apply each by hand following `docs/compliance/runbook-biometric-deletion.md` (LEG-005). This is the gap that makes the post-restore biometric bound best effort (backups.md §7).
+- [ ] **Per-person face-search opt-outs and consent revokes after *T*** (`Guest.faceSearchOptOut`, `FaceCluster.suppressed`, `BiometricConsent.revokedAt`, deleted `FaceProfile` rows) are rolled back too. Today no code path writes an audit row for them that the replay in 6c can use (the controls arrive with WEB-006 / WEB-021; photo deletions, by contrast, *are* replayed in 6c), so they can only be re-applied from a record outside this database. That record doesn't exist yet (LEG-008). Until it does, list them from confirmation emails or tickets, and re-apply each by hand following `docs/compliance/runbook-biometric-deletion.md` (LEG-005). This is the gap that makes the post-restore biometric bound best effort (backups.md §7).
 
 ### 6c. Biometric purges that are due
 
-- [ ] **Event face-index purges that are due** (`faceIndexPurgeAt` passed, but no purge recorded in the restored DB). This SQL is the worker's `jobs.enqueue` upsert (`workers/media/hub_worker/jobs.py`) in bulk: a `RUNNING` row is never touched, finished or dead rows are reset to `QUEUED` with attempts 0 and no stale lock, error or `finishedAt`, and the payload is refreshed. If `jobs.enqueue` changes, change this copy and `replay-after-restore.sql` with it; `scripts/tests` runs both against the three branches. The job writes `faceindex.purge` when the worker runs in step 7:
+- [ ] **Event face-index purges that are due** (`faceIndexPurgeAt` passed, but no purge recorded in the restored DB). This SQL is the worker's `jobs.enqueue` upsert (`workers/media/hub_worker/jobs.py`) in bulk: a `RUNNING` row is never touched, finished or dead rows are reset to `QUEUED` with attempts 0 and no stale lock, error or `finishedAt`, and the payload is refreshed. If `jobs.enqueue` changes, change this copy and `replay-after-restore.sql` with it: `scripts/tests/test_restore_contracts.py` fails until the three are identical, and `test_restore_sql.py` runs this block and the replay against the RUNNING, DEAD and QUEUED branches. The job writes `faceindex.purge` when the worker runs in step 7:
 
   ```sql
   INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
@@ -157,24 +158,44 @@ you review before committing.
   WHERE "Job".status <> 'RUNNING'::"JobStatus";
   ```
 
-- [ ] **Purges and face-search switches made after *T* (replay from the old instance).** The SQL above only finds purges that are due by date. A "Purge now" from the admin, a purge the worker ran after *T*, and "face search off" on an event are all rolled back by the restore, and the restored database has no trace of them. The **old instance's** `AuditLog` still does (`faceindex.purge`, `faceindex.purge.request`, `event.facesearch.disable` / `enable`). That is why step 1 keeps it. Export those rows from `OLD_URL`, load them next to the restored data in one transaction, and run [`replay-after-restore.sql`](replay-after-restore.sql). It sets `faceSearchEnabled` to the last value toggled after *T*, parks face-indexing jobs that were queued for events purged after *T*, and re-queues their purges with the same upsert as above.
+- [ ] **Purges, face-search switches and photo deletions made after *T* (replay from the old instance).** The SQL above only finds purges that are due by date. These are all rolled back by the restore, and the restored database has no trace of them:
+  - a "Purge now" from the admin;
+  - a purge the worker ran after *T*;
+  - "face search off" on an event;
+  - a deleted photo, whose cascade had removed its `Face` and `PhotoMatch` rows.
+
+  The **old instance's** `AuditLog` still has them (`faceindex.purge`, `faceindex.purge.request`, `event.facesearch.disable` / `enable`, `photo.delete`). That is why step 1 keeps it. [`replay-export.sql`](replay-export.sql) exports those rows from `OLD_URL` in a read-only session. [`replay-after-restore.sql`](replay-after-restore.sql) then re-applies them on `NEW_URL`:
+  - sets `faceSearchEnabled` to the last value toggled after *T*;
+  - deletes the photos again;
+  - parks queued **and** running face-indexing jobs for events purged after *T*;
+  - re-queues those purges with the same upsert as above.
+
+  Run the replay once as a dry run that rolls back, review what it would change, then run it again to commit. Both runs are idempotent.
 
   ```bash
-  umask 077
-  T='2026-10-08T12:00:00Z'   # the restore point from step 0, UTC
-  psql "$OLD_URL" -X -v ON_ERROR_STOP=1 -c "\copy (SELECT action, \"eventId\", \"createdAt\" FROM \"AuditLog\" WHERE \"createdAt\" > '$T' AND action IN ('faceindex.purge', 'faceindex.purge.request', 'event.facesearch.disable', 'event.facesearch.enable') ORDER BY \"createdAt\") TO './restore/replay-audit.csv' CSV"
+  umask 077; mkdir -p ./restore
+  T='2026-10-08T12:00:00Z'   # the restore point from step 0; an offset (+05:30) is fine, no offset means UTC
+  PGOPTIONS='-c default_transaction_read_only=on' \
+    psql "$OLD_URL" -X -q -v ON_ERROR_STOP=1 -v T="$T" -f docs/ops/replay-export.sql > ./restore/replay-audit.csv
   wc -l ./restore/replay-audit.csv           # note the count in the incident log
-  psql "$NEW_URL" -X -v ON_ERROR_STOP=1 <<'PSQL'
+  replay() {   # FINISH=ROLLBACK for the dry run, FINISH=COMMIT to apply
+    psql "$NEW_URL" -X -v ON_ERROR_STOP=1 -v FINISH="$1" <<'PSQL'
   BEGIN;
-  CREATE TEMP TABLE replay_audit (action text, "eventId" text, "createdAt" timestamptz) ON COMMIT DROP;
+  CREATE TEMP TABLE replay_audit (id bigint, action text, "eventId" text, target text, "createdAt" timestamp) ON COMMIT DROP;
   \copy replay_audit FROM './restore/replay-audit.csv' CSV
   \i docs/ops/replay-after-restore.sql
   SELECT id, "faceSearchEnabled" FROM "Event" WHERE id IN (SELECT "eventId" FROM replay_audit);
-  COMMIT;
+  SELECT type, status, "dedupeKey", "lastError" FROM "Job" WHERE "dedupeKey" LIKE 'purge-face:%:replay' OR "lastError" LIKE 'parked after restore%';
+  :FINISH;
   PSQL
+  }
+  replay ROLLBACK      # FINISH=ROLLBACK: read the output; nothing is changed
+  replay COMMIT        # FINISH=COMMIT: only after the dry run looks right
   ```
 
-  If the old instance is gone or its `AuditLog` is part of the damage, this replay cannot be done. Then the post-restore bound in backups.md §7 is **best effort**: list purges and switches from admin audit exports, studio emails and the incident note, and apply them by hand. LEG-008 removes this dependency on the old instance.
+  If the old instance is gone or its `AuditLog` is part of the damage, this replay cannot be done. Then the post-restore bound in backups.md §7 is **best effort**: list purges, switches and photo deletions from admin audit exports, studio emails and the incident note, and apply them by hand. LEG-008 removes this dependency on the old instance.
+
+- [ ] **Retention changes after *T*** (`event.retention.change`, `studio.retention.change` in the old `AuditLog`) are not replayed automatically: re-apply each one in the admin (that recomputes `faceIndexPurgeAt`), then re-run the due-purge SQL above.
 
 - [ ] **Face profiles past `purgeAfter`.** Delete them (or let the scheduled purge, WRK-012, do it), then check: `SELECT count(*) FROM "FaceProfile" WHERE "purgeAfter" <= now()` must be 0.
 
@@ -201,8 +222,26 @@ you review before committing.
 ## 7. Unfreeze
 
 - [ ] Everything in step 6 is ticked. In particular, 6b (opt-outs) is done before any message can be sent.
+- [ ] Review the jobs parked in 6c and 6d on the admin jobs page; requeue only what is truly pending.
 - [ ] **Start the worker.** It picks up the purge jobs from step 6c. Check `GET http://<worker-host>:8010/health`, and watch the admin jobs page until `PURGE_FACE_INDEX` has succeeded and wrote its `faceindex.purge` audit rows.
-- [ ] Verify the purge: `SELECT count(*) FROM "Face" f JOIN "Event" e ON e.id = f."eventId" WHERE e."faceIndexPurgedAt" IS NOT NULL` is 0.
+- [ ] **Verify the purges, once nothing can re-index those events.** `index_faces.py` does not check `faceIndexPurgedAt`, so a `PROCESS_PHOTO` (which enqueues `INDEX_FACES`) or an `INDEX_FACES` job still pending for a purged event can re-create `Face` rows after its purge. Wait until the first query returns no rows. Then the second must return no rows. If it doesn't, re-run the purge for those events (the 6c replay, or the due-purge SQL) and check again.
+
+  ```sql
+  -- 1. indexing still in flight for events purged since the worker started (must be empty before step 2)
+  SELECT j.id, j.type, j.status, p."eventId"
+  FROM "Job" j
+  JOIN "Photo" p ON p.id = j.payload->>'photoId'
+  JOIN "Event" e ON e.id = p."eventId"
+  WHERE j.type IN ('PROCESS_PHOTO', 'INDEX_FACES')
+    AND j.status IN ('QUEUED'::"JobStatus", 'RUNNING'::"JobStatus")
+    AND e."faceIndexPurgedAt" > now() - interval '6 hours';
+
+  -- 2. events purged since the worker started that still have Face rows (must be empty)
+  SELECT e.id, count(*) AS faces
+  FROM "Face" f JOIN "Event" e ON e.id = f."eventId"
+  WHERE e."faceIndexPurgedAt" > now() - interval '6 hours'
+  GROUP BY e.id;
+  ```
 - [ ] Send one test email and confirm it arrives (the step 5 smoke test that needs the worker).
 - [ ] Remove the maintenance page.
 - [ ] Watch errors and job failures for an hour.

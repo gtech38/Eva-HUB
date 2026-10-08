@@ -4,10 +4,11 @@ The drill script *is* the restore test; these tests prove it restores a real dum
 source row counts, never touches a database it did not create, and fails non-zero when the
 restored data differs from the source.
 
-They need Docker and the Postgres in infra/docker-compose.yml (or the CI service container).
-Source = $DATABASE_URL (else the repo .env). The source is only ever read. Restore targets are
-throwaway databases named ``<source-db>_restore_<random>`` (e.g. ``hub_t76_restore_ab12cd``) or
-a throwaway container.
+They need Docker and the Postgres in infra/docker-compose.yml (or the CI service container); see
+_drill_env.py. The source is only ever read. Restore targets are throwaway databases named
+``<source-db>_restore_<random>`` (e.g. ``hub_t76_restore_ab12cd``) or a throwaway container.
+The runbook / replay SQL tests live in test_restore_sql.py, the text-only drift checks in
+test_restore_contracts.py.
 
 Run:  python -m pytest -q scripts/tests      (any venv with pytest + psycopg)
 """
@@ -23,84 +24,28 @@ import subprocess
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+# importing _drill_env checks the stack (skip locally / fail under CI) before any test is collected
+from _drill_env import (  # noqa: F401 - make_source is a fixture used by name
+    ADMIN,
+    ROOT,
+    SOURCE,
+    SOURCE_DB,
+    docker_net_and_host,
+    env_file_value as _env_file_value,
+    make_source,
+    psycopg,
+    skip_or_fail as _skip_or_fail,
+    with_db,
+)
+
 BACKUP = ROOT / "scripts" / "backup-db.sh"
 DRILL = ROOT / "scripts" / "restore-drill.sh"
 DRILL_BUDGET_S = 300  # acceptance: the drill completes in under 5 minutes on the seeded DB
 KEY_TABLES = ("Event", "Guest", "Photo")
-
-
-def _env_file_value(name: str) -> str | None:
-    env_file = ROOT / ".env"
-    if not env_file.exists():
-        return None
-    for line in env_file.read_text().splitlines():
-        m = re.match(rf"^\s*{name}\s*=\s*(.*)$", line)
-        if m:
-            return m.group(1).split(" #")[0].strip().strip('"').strip("'")
-    return None
-
-
-def _unavailable(reason: str) -> None:
-    """Skip locally when the stack is down; fail under CI, where skipping would pass vacuously."""
-    if os.environ.get("CI"):
-        raise RuntimeError(f"restore-drill tests cannot run in CI: {reason}")
-    pytest.skip(reason, allow_module_level=True)
-
-
-def _skip_or_fail(reason: str) -> None:
-    """The same rule inside a single test: a CI run must not go green by skipping it."""
-    if os.environ.get("CI"):
-        pytest.fail(f"cannot run in CI: {reason}")
-    pytest.skip(reason)
-
-
-try:
-    import psycopg
-except ImportError:  # pragma: no cover - environment dependent
-    _unavailable("psycopg is not installed")
-
-
-def _source_url() -> str:
-    url = os.environ.get("DATABASE_URL") or _env_file_value("DATABASE_URL")
-    if not url:
-        _unavailable("DATABASE_URL is not set and there is no .env")
-    parts = urlsplit(url)
-    return urlunsplit(parts._replace(query=""))  # drop Prisma's ?schema=… for libpq
-
-
-def _with_db(url: str, db: str) -> str:
-    return urlunsplit(urlsplit(url)._replace(path=f"/{db}"))
-
-
-def _db_name(url: str) -> str:
-    return urlsplit(url).path.lstrip("/")
-
-
-SOURCE = _source_url()
-SOURCE_DB = _db_name(SOURCE)
-ADMIN = _with_db(SOURCE, "postgres")
-
-
-def _reachable() -> str | None:
-    if shutil.which("docker") is None:
-        return "docker is not installed"
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
-        return "docker daemon is not running"
-    try:
-        psycopg.connect(SOURCE, connect_timeout=3).close()
-    except Exception as exc:  # noqa: BLE001 - any connection failure means "skip"
-        return f"source database unreachable: {exc}"
-    return None
-
-
-SKIP_REASON = _reachable()
-if SKIP_REASON is not None:
-    _unavailable(SKIP_REASON)
 
 
 def _scratch_name() -> str:
@@ -278,7 +223,7 @@ def typed_source() -> Iterator[str]:
     name = f"{SOURCE_DB}_restore_src{secrets.token_hex(3)}"
     with psycopg.connect(ADMIN, autocommit=True) as conn:
         conn.execute(f'CREATE DATABASE "{name}"')
-    url = _with_db(SOURCE, name)
+    url = with_db(SOURCE, name)
     try:
         with psycopg.connect(url, autocommit=True) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -398,28 +343,6 @@ def _manifest_lines(dump: Path) -> list[str]:
     return Path(f"{dump}.manifest").read_text().splitlines()
 
 
-@pytest.fixture
-def make_source() -> Iterator[object]:
-    """Factory for scratch source databases: make_source(*statements) -> url. Dropped afterwards."""
-    created: list[str] = []
-
-    def _make(*statements: str) -> str:
-        name = f"{SOURCE_DB}_restore_src{secrets.token_hex(3)}"
-        with psycopg.connect(ADMIN, autocommit=True) as conn:
-            conn.execute(f'CREATE DATABASE "{name}"')
-        created.append(name)
-        url = _with_db(SOURCE, name)
-        with psycopg.connect(url, autocommit=True) as conn:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            for stmt in statements:
-                conn.execute(stmt)
-        return url
-
-    yield _make
-    with psycopg.connect(ADMIN, autocommit=True) as conn:
-        for name in created:
-            conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-
 
 def test_drill_refuses_a_database_name_with_an_embedded_newline(dump: Path) -> None:
     # a line-oriented grep would accept this: its first line is a perfectly good throwaway name
@@ -464,10 +387,7 @@ def test_drill_fails_on_a_truncated_dump(dump: Path, tmp_path: Path) -> None:
 def _pg_dump_without_rows_of(table: str, out: Path) -> None:
     """A dump of the source that silently lacks one table's rows: pg_restore will succeed on it."""
     parts = urlsplit(SOURCE)
-    host, net = parts.hostname or "localhost", ["--network", "host"]
-    if os.uname().sysname != "Linux":
-        net = []
-        host = "host.docker.internal" if host in {"localhost", "127.0.0.1"} else host
+    net, host = docker_net_and_host(parts.hostname or "localhost")
     with out.open("wb") as fh:
         proc = subprocess.run(
             ["docker", "run", "--rm", *net, "-e", "PGPASSWORD", "pgvector/pgvector:pg16",
@@ -653,128 +573,3 @@ def test_passwords_never_appear_on_a_command_line(tmp_path: Path) -> None:
     mounted = re.findall(r"-v (hub-restore-drill-\S+):/var/lib/postgresql/data", argv)
     assert len(mounted) == 1, argv
     assert f"volume rm -f {mounted[0]}" in argv, argv
-
-
-def _runbook_sql_blocks() -> list[str]:
-    text = (ROOT / "docs" / "ops" / "runbook-restore.md").read_text()
-    return re.findall(r"```sql\n(.*?)```", text, re.S)
-
-
-REPLAY_SQL = ROOT / "docs" / "ops" / "replay-after-restore.sql"
-SHARED_HUB_SKIP = pytest.mark.skipif(
-    SOURCE_DB == "hub",
-    reason="never run write-then-rollback SQL on a database named hub (CI uses hub_ci; locally use your own DB)",
-)
-
-
-def _jobs(conn, type_: str, key: str, ids: list[str]) -> dict[str, tuple]:  # type: ignore[no-untyped-def]
-    return {
-        r[0]: r[1:]
-        for r in conn.execute(
-            f"SELECT payload->>'{key}', status::text, attempts, \"lockedBy\", \"lastError\", payload, \"runAt\" > now() + interval '1 hour'"
-            ' FROM "Job" WHERE type = %s AND payload->>%s = ANY(%s)',
-            (type_, key, ids),
-        ).fetchall()
-    }
-
-
-@SHARED_HUB_SKIP
-def test_runbook_sql_executes_and_requeues_like_the_worker_enqueue() -> None:
-    blocks = _runbook_sql_blocks()
-    purge = next(b for b in blocks if "PURGE_FACE_INDEX" in b)
-    with psycopg.connect(SOURCE) as conn:
-        try:
-            events = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 3').fetchall()]
-            assert len(events) == 3
-            conn.execute(
-                'UPDATE "Event" SET "faceIndexPurgeAt" = now() - interval \'1 day\', "faceIndexPurgedAt" = NULL WHERE id = ANY(%s)',
-                (events,),
-            )
-            # RUNNING, DEAD, and QUEUED-in-the-future with a stale payload: the three branches of jobs.enqueue
-            for eid, status, run_at in zip(events, ("RUNNING", "DEAD", "QUEUED"), ("now()", "now()", "now() + interval '1 day'")):
-                conn.execute(
-                    'INSERT INTO "Job"(type, payload, status, attempts, "lockedBy", "lockedAt", "lastError", "finishedAt", "runAt", "dedupeKey")'
-                    f" VALUES ('PURGE_FACE_INDEX', %s::jsonb, %s::\"JobStatus\", 3, 'w1', now(), 'boom', now(), {run_at}, %s)",
-                    (f'{{"eventId": "{eid}", "stale": true}}', status, f"purge-face:{eid}:restore"),
-                )
-            conn.execute(purge)
-            rows = _jobs(conn, "PURGE_FACE_INDEX", "eventId", events)
-            finished = dict(conn.execute(
-                'SELECT payload->>\'eventId\', "finishedAt" IS NULL FROM "Job" WHERE type = \'PURGE_FACE_INDEX\' AND payload->>\'eventId\' = ANY(%s)',
-                (events,),
-            ).fetchall())
-            # jobs.enqueue clears finishedAt on every re-queue (ADM-022); RUNNING is untouched
-            assert finished == {events[0]: False, events[1]: True, events[2]: True}
-            fresh = {"eventId": events[2]}
-            # RUNNING rows belong to a live worker: untouched (same rule as jobs.enqueue)
-            assert rows[events[0]][:4] == ("RUNNING", 3, "w1", "boom")
-            # finished/dead rows are reset: requeued with attempts 0, no stale lock or error, fresh payload
-            assert rows[events[1]][:4] == ("QUEUED", 0, None, None)
-            assert rows[events[1]][4] == {"eventId": events[1]}
-            # QUEUED rows keep their attempts and the later runAt, get the fresh payload, lose the stale lock
-            assert rows[events[2]][:4] == ("QUEUED", 3, None, None)
-            assert rows[events[2]][4] == fresh
-            assert rows[events[2]][5] is True, "runAt = GREATEST(existing, new): the later time is kept"
-            for block in blocks:
-                if block is not purge:
-                    conn.execute(block)  # every other runbook SQL block is valid against the real schema
-        finally:
-            conn.rollback()
-
-
-@SHARED_HUB_SKIP
-def test_replay_re_applies_purges_and_face_search_toggles_from_the_old_audit_log() -> None:
-    with psycopg.connect(SOURCE) as conn:
-        try:
-            ev = [r[0] for r in conn.execute('SELECT id FROM "Event" ORDER BY id LIMIT 4').fetchall()]
-            assert len(ev) == 4
-            disabled, toggled_back, purged, requested = ev
-            conn.execute('UPDATE "Event" SET "faceSearchEnabled" = true WHERE id = ANY(%s)', (ev,))
-            conn.execute('UPDATE "Event" SET "faceSearchEnabled" = false WHERE id = %s', (toggled_back,))
-            # what the old instance's AuditLog recorded after the restore point T
-            conn.execute('CREATE TEMP TABLE replay_audit (action text, "eventId" text, "createdAt" timestamptz)')
-            conn.execute(
-                "INSERT INTO replay_audit VALUES"
-                " ('event.facesearch.disable', %s, now() - interval '3 hours'),"
-                " ('event.facesearch.disable', %s, now() - interval '3 hours'),"
-                " ('event.facesearch.enable',  %s, now() - interval '2 hours'),"
-                " ('faceindex.purge',          %s, now() - interval '2 hours'),"
-                " ('faceindex.purge.request',  %s, now() - interval '1 hour'),"
-                " ('faceindex.purge',          %s, now() - interval '1 hour')",
-                (disabled, toggled_back, toggled_back, purged, requested, purged),
-            )
-            # indexing work queued at T for a purged event must not run and re-create embeddings
-            conn.execute(
-                'INSERT INTO "Job"(type, payload, status, "dedupeKey") VALUES'
-                " ('CLUSTER_FACES', %s::jsonb, 'QUEUED'::\"JobStatus\", %s)",
-                (f'{{"eventId": "{purged}"}}', f"cluster:{purged}"),
-            )
-
-            conn.execute(REPLAY_SQL.read_text())
-
-            enabled = dict(conn.execute('SELECT id, "faceSearchEnabled" FROM "Event" WHERE id = ANY(%s)', (ev,)).fetchall())
-            assert enabled[disabled] is False  # disabled after T: stays disabled
-            assert enabled[toggled_back] is True  # last toggle after T wins
-            assert enabled[purged] is True and enabled[requested] is True  # untouched by the toggle replay
-            purges = _jobs(conn, "PURGE_FACE_INDEX", "eventId", ev)
-            assert set(purges) == {purged, requested}  # once each, even with two audit rows for `purged`
-            assert all(v[0] == "QUEUED" for v in purges.values())
-            # the replay's upsert must be the worker's, character for character in effect
-            replay_text = REPLAY_SQL.read_text()
-            assert '"finishedAt" = NULL' in replay_text
-            cluster = conn.execute(
-                "SELECT status::text FROM \"Job\" WHERE \"dedupeKey\" = %s", (f"cluster:{purged}",)
-            ).fetchone()
-            assert cluster == ("DEAD",)
-        finally:
-            conn.rollback()
-
-
-def test_runbook_explains_how_to_load_the_replay_and_that_it_needs_the_old_instance() -> None:
-    text = (ROOT / "docs" / "ops" / "runbook-restore.md").read_text()
-    assert "replay-after-restore.sql" in text
-    assert "replay_audit" in text and "\\copy" in text
-    assert "OLD_URL" in text
-    assert "LEG-008" in text
-    # dumps carry the whole face index now; re-indexing after a restore would undo replayed purges
-    assert "SELECT 'INDEX_FACES'" not in text, "no runbook step may re-queue face indexing"
