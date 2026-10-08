@@ -15,7 +15,7 @@ Restoring for real: [runbook-restore.md](runbook-restore.md).
 | Photo originals `s/{studioId}/e/{eventId}/orig/…` | Bucket | **No.** The studio's only delivered copy may be ours. | Bucket versioning, noncurrent versions kept 90 days |
 | Site assets `…/site/…` (hero images uploaded by hosts) | Bucket | **No** | Same as originals: noncurrent versions kept 90 days |
 | Derivatives `…/d/…`, zips `…/zip/…` | Bucket | Yes: `PROCESS_PHOTO` / `BUILD_ZIP` rebuild them from originals | Versioned like everything else; noncurrent versions of derived objects expire after 7 days (§5) |
-| Face index (`Face`, `FaceCluster`) | Postgres | Yes: `INDEX_FACES` + `CLUSTER_FACES` recompute it from originals | Included in the Postgres backups whether we like it or not; see §7 |
+| Face index (`Face`, `FaceCluster`) | Postgres | Yes: `INDEX_FACES` + `CLUSTER_FACES` recompute it from originals | Provider PITR carries it (we can't exclude tables there). **Logical dumps leave the rows out** (tables and manifest lines stay, empty); see §4 and §7 |
 | `FaceProfile` embeddings | Postgres | No (needs a fresh selfie) | Included in the Postgres backups; see §7 |
 | `Job` queue | Postgres | Mostly: jobs can be re-enqueued | Included; stale `RUNNING` rows are released by the worker after a restore |
 | Logs, traces, error reports | Logging backend (SHR-015, INF-012) | n/a | Out of scope here |
@@ -61,16 +61,18 @@ provider-side bug, so we keep a provider-independent `pg_dump` in our own bucket
 
 ```bash
 ./scripts/backup-db.sh /path/hub.dump            # dump + manifest locally
-./scripts/backup-db.sh /path/hub.dump --upload   # …and copy both to s3://$S3_BUCKET/backup/pg/<UTC date>.dump(.manifest)
+./scripts/backup-db.sh /path/hub.dump --upload   # …and copy both to s3://$S3_BUCKET/backup/pg/<UTC timestamp>.dump(.manifest)
 ```
 
 - **Format.** The dump is `pg_dump --format=custom` (compressed, restorable with `pg_restore`, any table can be restored on its own).
-- **Manifest.** `<dump>.manifest` has one line per table in `public`: `table<TAB>rows<TAB>md5`. The md5 is an order-independent checksum of every row's text form, computed with the session pinned to UTC, ISO dates and the C collation.
-- **Consistency.** The dump and the manifest come from **one exported snapshot**. A helper session holds a `REPEATABLE READ` transaction open, and `pg_dump --snapshot` and the manifest query both import its snapshot. So the manifest is exactly what a restore of this dump must reproduce, even while the app is writing.
+- **Manifest.** `<dump>.manifest` has one line per table: `table<TAB>rows<TAB>md5`. The md5 is an order-independent checksum of every row's text form, computed with the session pinned to UTC, ISO dates and the C collation. **Scope:** ordinary tables in schema `public` only. Views, sequence values, other schemas, large objects and extension-owned tables are not in it, so the drill proves rows and schema for what the app stores, not every object `pg_dump` can emit. The checksum is not memory-bounded: the server holds 32 bytes per row while aggregating, which is fine at this product's scale and worth revisiting for a table in the hundred-million-row range.
+- **Consistency.** The dump and the manifest come from **one exported snapshot**. A helper session holds a `REPEATABLE READ` transaction open, and `pg_dump --snapshot` and the manifest query both import its snapshot. So the manifest is exactly what a restore of this dump must reproduce, even while the app is writing. The cost: that transaction pins the vacuum horizon (xmin) for as long as the dump runs, so on a large, busy database schedule it off-peak.
+- **Gallery face index left out.** The rows of `Face` and `FaceCluster` are **not dumped** (`--exclude-table-data`); the tables are, and the manifest lists them as empty, which is what a correct restore of the dump contains. They're recomputed from the originals, and every dump that carried them would lengthen the biometric tail in §7. `FaceProfile` is not reproducible and **is** dumped. `BACKUP_EXCLUDE_DATA=""` dumps everything; `BACKUP_EXCLUDE_DATA="Face FaceCluster"` is the default. The drill therefore proves that **everything except the gallery face index** restores intact; the index itself is proven by re-running the pipeline (runbook step 6).
 - **Source.** The script reads `DATABASE_URL` from the environment, else from the repo `.env`. Prisma-only URL parameters like `?schema=` are stripped for libpq. The source is only read.
-- **Upload.** Upload settings come from the env, else the repo `.env`: `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY` and `S3_SECRET_KEY`. `BACKUP_S3_PREFIX` defaults to `backup/pg`. Override `S3_BUCKET` and the keys in the environment to write to a separate backup bucket with separate credentials, which you need on R2 (§6). Uses the `aws` CLI, or the `amazon/aws-cli` image when the CLI isn't installed.
+- **Secrets on disk and in `ps`.** Dump and manifest are created mode 600. Passwords in connection URLs are moved into `PGPASSWORD` in the child's environment and never appear on a command line; a test logs every `docker` invocation to prove it. `*.dump`, `*.dump.manifest` and `restore/` are gitignored.
+- **Upload.** Upload settings come from the env, else the repo `.env`: `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY` and `S3_SECRET_KEY`. `BACKUP_S3_PREFIX` defaults to `backup/pg`. Keys carry the time of day (`2026-10-08T031500Z.dump`), so two backups on one day don't overwrite each other, and the **manifest is uploaded last**: a `.manifest` in the bucket means the dump next to it is complete. Override `S3_BUCKET` and the keys in the environment to write to a separate backup bucket with separate credentials, which you need on R2 (§6). Uses the `aws` CLI, or the `amazon/aws-cli` image when the CLI isn't installed.
 - **Tools.** The script uses `psql` / `pg_dump` / `pg_restore` v16+ if they're on `PATH`, otherwise the `pgvector/pgvector:pg16` image (`PG_TOOLS=native|docker|auto`). A laptop needs only Docker.
-- **Schedule.** The script doesn't schedule itself. In production it runs daily from the deploy environment (a cron on the worker host, or a scheduled job with the production secrets). That job doesn't exist yet: INF-021.
+- **Schedule.** The script doesn't schedule itself. In production it runs daily from the deploy environment (a cron on the worker host, or a scheduled job with the production secrets). That job doesn't exist yet: INF-023.
 
 ## 5. Bucket versioning and lifecycle
 
@@ -80,7 +82,7 @@ or *tags*, and our layout puts the class of object in the middle of the key
 prefix. The rules below therefore work like this:
 
 - **Every object.** Noncurrent versions are kept 90 days. That gives originals a 90-day undelete/overwrite window.
-- **Derived objects.** Noncurrent versions are deleted after 7 days. Derived objects are identified by the object tag `hub-class=derived`, which the worker must set when it writes `d/` and `zip/` objects. `site/` objects are host uploads and are deliberately left untagged. **Writing that tag is a follow-up (WRK-017).** Until then the rule matches nothing, and derived noncurrent versions simply live 90 days. That costs storage but loses nothing.
+- **Derived objects.** Noncurrent versions are deleted after 7 days. Derived objects are identified by the object tag `hub-class=derived`, which the worker must set when it writes `d/` and `zip/` objects. `site/` objects are host uploads and are deliberately left untagged. **Writing that tag is a follow-up (WRK-018).** Until then the rule matches nothing, and derived noncurrent versions simply live 90 days. That costs storage but loses nothing.
 - **`backup/pg/` (a real top-level prefix).** Current objects expire after 35 days and noncurrent versions after 1 day, so a dump is fully gone about 36 days after it was written.
 - **Incomplete multipart uploads** are aborted after 7 days. Expired delete markers are removed.
 
@@ -194,8 +196,8 @@ keep the app's runtime token away from the dumps (§6).
 - Postgres at rest: provider-managed.
 - Postgres in transit: `sslmode=require`.
 - Bucket: encrypted at rest (SSE-S3 by default on S3; always on R2), and HTTPS endpoints only.
-- Logical dumps hold *everything*: names, emails, phone numbers, session and token hashes, `Face` and `FaceProfile` embeddings. They are only ever stored in the bucket or in a short-lived temp directory during a drill. They are never committed or attached to tickets, and CI doesn't upload them as artifacts.
-- Optional hardening for the production schedule (INF-021): client-side encryption of the dump before upload, with an offline recipient key such as `age`.
+- Logical dumps hold nearly everything: names, emails, phone numbers, session and token hashes, `FaceProfile` embeddings (not the gallery `Face` rows, §4). They are created mode 600, gitignored, and only ever stored in the bucket or in a short-lived temp directory during a drill. They are never committed or attached to tickets, and CI doesn't upload them as artifacts.
+- Optional hardening for the production schedule (INF-023): client-side encryption of the dump before upload, with an offline recipient key such as `age`.
 
 **Retention**
 
@@ -204,7 +206,7 @@ keep the app's runtime token away from the dumps (§6).
 | PITR (WAL + base backups) | 7–35 days (setting) | Provider |
 | Logical dumps `backup/pg/` | 35 days + 1 day noncurrent | Lifecycle (§5) |
 | Noncurrent originals | 90 days | Lifecycle (§5) |
-| Noncurrent derived objects | 7 days (90 until WRK-017) | Lifecycle (§5) |
+| Noncurrent derived objects | 7 days (90 until WRK-018) | Lifecycle (§5) |
 | Drill copies (throwaway container/database, local dump) | Minutes | `restore-drill.sh` tears down on exit, including on failure |
 | The old database after a real restore | ≤ 7 days, then deleted | [runbook-restore.md](runbook-restore.md) step 9 |
 
@@ -219,32 +221,45 @@ keep the app's runtime token away from the dumps (§6).
 
 ## 7. Biometric data in backups (CUBI destruction timeline)
 
-`Face` and `FaceCluster` (gallery face index), `FaceProfile` (opt-in "remember my face") and
-`BiometricConsent` all live in Postgres. That means **every backup holds the embeddings that
-existed at backup time, until that backup expires**. A purge removes them from the live database
-only:
+What lives in Postgres, and so in its backups:
+
+| Data | Biometric? | In provider PITR | In logical dumps (`backup/pg/`) |
+|---|---|---|---|
+| `Face` (embedding per detected face), `FaceCluster` | Yes | Yes, until the PITR window passes | **No.** Rows are left out (§4) |
+| `FaceProfile` (opt-in "remember my face" embedding) | Yes | Yes | Yes |
+| `BiometricConsent` | No (proof of consent) | Yes | Yes |
+| `PhotoMatch` (this person appears in this photo) | **No.** It contains no template, which is why it deliberately survives a face-index purge. It's still personal data linking a person to photos. | Yes | Yes |
+
+A purge removes rows from the live database only. These are the deletions that don't reach a backup:
 
 - `PURGE_FACE_INDEX` (event retention window, docs/01 §6);
 - a profile revoke, or the 3-year unused rule;
 - "remove me from face search";
-- a DSAR deletion.
+- a DSAR deletion (which also deletes `PhotoMatch` rows).
 
-So the backup retention is part of the destruction timeline:
+So **backup retention is part of the destruction timeline**: every backup holds what existed when it was taken, until that backup expires.
 
-> time until biometric data is gone everywhere = time until the purge runs on the live DB
-> + max(PITR window, logical-dump retention + noncurrent days) = purge + **at most 36 days** with the settings above.
+**The bounds, with the settings above:**
 
-- CUBI (Tex. Bus. & Com. Code §503.001) requires destruction within a reasonable time and no later than one year after the purpose expires. A bounded 36-day tail is the defensible position. An unbounded one ("we keep backups forever") is not. **Never** raise the PITR window or dump retention above 35 days without updating the compliance documents below.
+| Case | Biometric data is gone from every backup by | Why |
+|---|---|---|
+| Normal operation | purge + **38 days** | Longest copy is a logical dump: 35 days + 1 noncurrent day (§5), plus about 2 days of lifecycle / provider cleanup lag (S3 evaluates lifecycle rules about once a day and may act up to a day later; PITR segments are pruned on the provider's schedule). Gallery embeddings are only in PITR, so for them it is 35 + 2 = 37 days. |
+| After an incident restore (runbook) | purge + **73 days**, worst case | A restore to time *T* resurrects embeddings purged after *T*. Until runbook step 6 purges them again they sit in the restored instance, and its backups taken in that window live up to 38 days. The restore can happen up to 35 days after *T* (the PITR window). The old instance is kept for up to 7 days (step 9), which is inside both numbers. |
+
+> Never state "36 days": that's only the dump arithmetic, and it ignores lag and restores.
+
+- CUBI (Tex. Bus. & Com. Code §503.001) requires destruction within a reasonable time and no later than one year after the purpose expires. A bounded tail of about five weeks, and about ten weeks in the rare restore case, is the defensible position. An unbounded one ("we keep backups forever") is not. **Never** raise the PITR window or dump retention above 35 days without updating the compliance documents below.
+- **Decision (gallery face index out of the dumps).** The logical dumps leave the rows of `Face` and `FaceCluster` out. The face index is reproducible: `INDEX_FACES` and `CLUSTER_FACES` rebuild it from the originals, which are in the bucket. The dumps are the long-lived copy, so excluding the gallery embeddings from them removes the largest biometric population from the longest-lived backup. The restore drill still proves a full restore of everything else: the manifest records those tables as empty, the tables themselves come back with their constraints, and the drill checks that. What it costs: after a restore from a dump, face search is empty until the index is rebuilt (runbook step 6). PITR cannot exclude tables; its window (7–35 days) is the bound for gallery embeddings.
 - **Backups are not used to answer queries.** They are restored only to recover from an incident. The drill restores into throwaway targets and destroys them within minutes.
-- **Restoring brings deleted biometrics back.** A restore to time *T* brings back every embedding purged after *T*, and the `AuditLog` rows that recorded those purges. The restore runbook re-runs every purge that is due (step 6). Per-person deletions made after *T* (profile revokes, opt-outs, DSARs) can only be replayed from a record kept **outside** the database. That record doesn't exist yet: LEG-008.
-- The bucket holds no biometric data. Selfies are processed in memory and never stored; originals are photos, not templates.
+- **Restoring brings deleted data back.** A restore to time *T* brings back every embedding purged after *T*, and the `AuditLog` rows that recorded those purges are rolled back too. The restore runbook re-runs every purge that is due (step 6). Per-person deletions made after *T* (profile revokes, opt-outs, DSARs) can only be replayed from a record kept **outside** the database. That record doesn't exist yet: LEG-008.
+- **The bucket holds biometric data only inside the `backup/pg/` logical dumps** (`FaceProfile` embeddings; the gallery face index is excluded), and those expire per §5. Originals are photos, not templates, and selfies are never stored: they're processed in memory and discarded.
 
 This section feeds the compliance documents planned in:
 
 - LEG-005 (#63): `docs/compliance/biometrics.md` and `docs/compliance/runbook-biometric-deletion.md`, whose step (3) is "backups retain embeddings until expiry";
 - LEG-007 (#65): `docs/compliance/retention-matrix.md`, "backup overlap" column.
 
-Those documents should cite the 36-day figure from here rather than restate it.
+Those documents should cite the figures in the table above rather than restate them.
 
 ## 8. The restore drill: `scripts/restore-drill.sh`
 
@@ -252,11 +267,11 @@ The drill is the test that backups work. It:
 
 1. restores a dump into a **throwaway** target;
 2. runs `prisma migrate status` against it;
-3. compares **every table's row count and checksum** with the dump's manifest;
+3. compares **every table's row count and checksum** with the dump's manifest (the scope is in §4);
 4. prints timings;
-5. tears everything down.
+5. tears everything down: container, its named data volume, or the throwaway database.
 
-It exits non-zero on any difference.
+It exits non-zero on any difference, on a failed `pg_restore` (for example a truncated dump), on a failed `migrate status`, and when the manifest is empty or missing `_prisma_migrations`. It never reports a pass for a run that compared nothing.
 
 ```bash
 ./scripts/backup-db.sh /tmp/hub.dump && ./scripts/restore-drill.sh /tmp/hub.dump
@@ -264,12 +279,12 @@ It exits non-zero on any difference.
 
 | Target | How |
 |---|---|
-| Throwaway container (default) | A fresh `pgvector/pgvector:pg16` container on a random `127.0.0.1` port, labelled `hub.restore-drill=<db>`, removed on exit |
+| Throwaway container (default) | A fresh `pgvector/pgvector:pg16` container on a random `127.0.0.1` port, labelled `hub.restore-drill=<db>`, with a named data volume `hub-restore-drill-<db>`. Container and volume are removed on exit. |
 | Throwaway database on an existing server (e.g. the compose Postgres) | `RESTORE_SERVER_URL=postgresql://hub:hub@localhost:5433/postgres RESTORE_DB_NAME=hub_restore_mytest ./scripts/restore-drill.sh /tmp/hub.dump` |
 
 **Safety rules, enforced by the script and its tests:**
 
-- The target database name must look like `<name>_restore_<suffix>` (lowercase, at most 63 characters). `hub`, the source name and `postgres` are refused with exit code 2.
+- The target database name must look like `<name>_restore_<suffix>`: lowercase letters, digits and `_` only, the **whole** string, at most 63 characters. `hub`, the source name, `postgres` and anything containing a newline or quote are refused with exit code 2.
 - The script creates the database itself. If the name already exists it stops and **does not drop it**. It only ever drops a database it created.
 - It verifies against `<dump>.manifest`. It can also verify against a live database (`SOURCE_DATABASE_URL`), with the caveat that the live data may have changed since the dump. With neither, it refuses to run (exit 2) rather than "passing" without checking anything.
 - Set `DRILL_SKIP_PRISMA=1` only where there is no Node toolchain. The weekly CI drill doesn't skip it.
@@ -282,6 +297,7 @@ row counts and checksums (source = manifest, restored = hub_t76_restore_manual1)
   table                            source   restored  status
   Event                                 6          6  ok
   Guest                                44         44  ok
+  Face                                  0          0  ok   (rows not dumped, §4)
   Photo                                 0          0  ok
   …                                                           (42 tables)
   42 tables compared, 0 mismatched
@@ -291,8 +307,9 @@ restore drill: PASS
 
 **Where it runs**
 
-- **Locally, on demand.** Use the command above. The pytest suite `scripts/tests/test_backup_restore_drill.py` covers the drill end to end: container and server targets, tampered manifests failing, refused names, vector/jsonb/bytea fidelity, and upload to the local bucket. Run it with `python -m pytest -q scripts/tests` (any venv with `pytest` and `psycopg`).
-- **CI, weekly.** `.github/workflows/restore-drill.yml` runs Mondays at 06:23 UTC, and on PRs that touch the scripts or `packages/db/prisma/**`. It seeds a fresh Postgres, backs it up, drills into both kinds of target and runs the tests. It needs no secrets.
+- **Locally, on demand.** Use the command above. The pytest suite `scripts/tests/` covers the drill end to end: container and server targets; failures from the expected side (tampered manifest) **and** the restored side (truncated dump, a dump with another database's manifest, a manifest row removed, a failing `prisma migrate status`); refused names; vector/jsonb/bytea fidelity; the face-index exclusion; passwords never on a command line; file modes; upload to the local bucket; and the SQL and JSON in these docs. Run it with `python -m pytest -q scripts/tests` (any venv with `pytest` and `psycopg`). Under `CI` the suite fails instead of skipping when Docker or Postgres is missing.
+- **CI, weekly.** `.github/workflows/restore-drill.yml` runs Mondays at 06:23 UTC, and on PRs that touch the scripts or `packages/db/prisma/**`. It seeds a fresh Postgres, backs it up, drills into both kinds of target and runs the tests. It needs no secrets. A failed scheduled run opens (or comments on) an issue titled "Weekly restore drill failing", so it can't fail unnoticed. It uses the automatic `GITHUB_TOKEN`, not a stored secret.
+- **Seed data caveat.** The seeded dev database has no photos, so `Photo` is 0/0 there and the 3-table check in the ticket is thinnest for exactly the table that matters. The drill compares all 42 tables; non-empty content of every column type is covered by the typed-columns test, and the first production drill is where `Photo` and `Face` get real volume.
 - **Production, quarterly.** Run it against a real backup (download the latest `backup/pg/` dump plus manifest and drill it into a throwaway container) and record the restore time below. That run is what proves the RTO.
 
 | Date | Source | Size | Restore time | Total | Result |

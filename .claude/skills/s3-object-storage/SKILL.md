@@ -85,6 +85,13 @@ Then configure CORS on the bucket for `PUT` from the admin origin so direct uplo
 ### Delete objects when a photo is deleted
 Not implemented (`deletePhoto` has a TODO). Plan: enqueue a worker job that deletes `originalKey` and every key under `keys.derivativePrefix(...)` (`list_objects_v2` by prefix in Python). Write the Python handler test first against a fake `storage` module.
 
+### Backups, versioning and lifecycle (DOC-003)
+Policy lives in `docs/ops/backups.md` §5 (exact S3 and R2 lifecycle JSON) and the restore steps in `docs/ops/runbook-restore.md`.
+- **Whole bucket is versioned in production**, noncurrent versions kept 90 days. That is what makes an overwritten or deleted original recoverable. R2 has no versioning (check the docs again when DOC-006 picks a provider), so originals there need a second copy.
+- **Lifecycle filters match a key prefix or tags, never "the third path segment".** The key class sits mid-key (`s/{studioId}/e/{eventId}/orig|d|site|zip/…`), so "expire `d/` and `zip/` versions after 7 days" is a rule on the object tag `hub-class=derived`. The worker does not write that tag yet (WRK-018), so the rule matches nothing today. Do not tag `orig/` or `site/` (host-uploaded hero images are not reproducible).
+- **`backup/pg/` is a real top-level prefix** for `scripts/backup-db.sh --upload` dumps (`<UTC timestamp>.dump` + `.manifest`, manifest uploaded last). The app runtime key must not be able to read it: an IAM deny on `backup/*` on S3, a separate bucket on R2 (tokens are per bucket). Dumps hold personal data and `FaceProfile` embeddings.
+- Local RustFS accepts `put-bucket-versioning` and the lifecycle JSON from the docs (verified on a scratch bucket); whether it later expires anything was not tested, and lifecycle runs on a days-long clock, so treat expiry behaviour as unverifiable locally.
+
 ## Gotchas
 - `.env.example` still says "MinIO locally"; compose uses **RustFS** because MinIO's public images were withdrawn. Same API, same creds.
 - RustFS has no CORS configured, so presigned PUTs from the browser fail with a bare network error -- expected locally; the proxy fallback handles it. Do not "fix" this by making the bucket public.

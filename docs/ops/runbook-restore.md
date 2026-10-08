@@ -15,11 +15,11 @@ Keep a timestamped log of every step in the incident note. The timings go into
 - [ ] **Pick the restore point *T*** (UTC): the last moment before the damage. To find it, use the deploy time of the bad migration, the first error in the logs, or the `AuditLog.createdAt` of the destructive action.
 - [ ] **Pick the path:**
   - **A. Provider PITR.** The default. RPO is minutes.
-  - **B. Logical dump.** Use it when the provider or account is unavailable. RPO is up to 24 h, because you restore the latest `backup/pg/<date>.dump` taken before *T*.
+  - **B. Logical dump.** Use it when the provider or account is unavailable. RPO is up to 24 h, because you restore the latest `backup/pg/<timestamp>.dump` taken before *T*. The gallery face index is not in the dumps (backups.md §4); step 6 rebuilds it.
 
 ## 1. Freeze writes (≈ 5 min)
 
-- [ ] Stop the worker so no jobs run against either database.
+- [ ] Stop the worker so no jobs run against either database. **It stays stopped until step 7**: the restored `Job`, `ReminderRule` and opt-out state is *T*'s, and a worker that starts early re-sends messages and re-runs work.
 - [ ] Put web and admin into maintenance: scale to zero, or route to a static "back soon" page at the proxy (Caddy/Traefik). Every service reads the same `DATABASE_URL`, so leaving any one running keeps writing to the damaged instance.
 - [ ] Record the current `DATABASE_URL` (the old instance) in the incident note. Don't delete it.
 
@@ -39,8 +39,10 @@ Keep a timestamped log of every step in the incident note. The timings go into
 2. Download the dump and its manifest. You need platform-admin credentials for `backup/`.
 
    ```bash
-   aws s3 cp s3://hub-media/backup/pg/<date>.dump ./restore/hub.dump        # add --endpoint-url for R2/B2
-   aws s3 cp s3://hub-media/backup/pg/<date>.dump.manifest ./restore/hub.dump.manifest
+   aws s3 ls s3://hub-media/backup/pg/                                   # pick a <timestamp>.dump that has its .manifest: the manifest is uploaded last
+   aws s3 cp s3://hub-media/backup/pg/<timestamp>.dump ./restore/hub.dump        # add --endpoint-url for R2/B2
+   aws s3 cp s3://hub-media/backup/pg/<timestamp>.dump.manifest ./restore/hub.dump.manifest
+   chmod 600 ./restore/hub.dump ./restore/hub.dump.manifest
    ```
 
 3. Prove the dump is good before touching `NEW_URL`. This restores a throwaway copy and checks every table against the manifest:
@@ -73,53 +75,152 @@ Keep a timestamped log of every step in the incident note. The timings go into
     diff <(sort ./restore/hub.dump.manifest) <(sort ./restore/verify.dump.manifest) && echo IDENTICAL
     ```
 
-  - Path A: there is no manifest for an arbitrary *T*. Take one of the new instance anyway, and sanity-check `Event`, `Guest`, `Rsvp`, `Photo`, `Order` against what you expect: yesterday's dump manifest, plus what the hosts told you.
+  - Path A: there is no manifest for an arbitrary *T*. Take one of the new instance anyway (`BACKUP_EXCLUDE_DATA="" ./scripts/backup-db.sh …` so `Face` is counted too), and sanity-check `Event`, `Guest`, `Rsvp`, `Photo`, `Order` against what you expect: yesterday's dump manifest, plus what the hosts told you.
 - [ ] **Spot-check** the specific records the incident was about. For example, the event whose guests were deleted.
 
 ## 4. Re-point `DATABASE_URL` (≈ 10 min)
 
 - [ ] Update the `DATABASE_URL` secret for **web, admin and the worker**. If you use a pooler, update the pooler URL too. All three must point at `NEW_URL`; a split brain is worse than downtime.
-- [ ] Redeploy or restart all three. Prisma reads the URL at start; the worker reads it at start.
+- [ ] Restart web and admin (still behind the maintenance page). Prisma reads the URL at start. **Do not start the worker yet**; its new `DATABASE_URL` takes effect when it starts in step 7.
 - [ ] Leave the old instance running, read-only, and untouched (step 9).
 
 ## 5. Verify the service (≈ 10 min)
 
-- [ ] Web health: `curl -fsS https://<ROOT_DOMAIN>/api/health` returns `{"ok":true}`.
-- [ ] Worker health: `curl -fsS http://<worker-host>:8010/health` returns `"ok": true`.
-- [ ] When INF-014 (#79) lands, `/api/health` on web, admin and worker also reports DB and S3 reachability. Use those and expect `db: ok`.
-- [ ] Admin: the jobs page loads. Stale `RUNNING` jobs from before *T* are released by the worker (`requeue_stale`) and retried.
+- [ ] Web is up: `curl -fsS https://<ROOT_DOMAIN>/api/health` returns `{"ok":true}`. **This only proves the process is running; today it does not touch the database.** Prove the database separately:
+  - `psql "$NEW_URL" -c 'SELECT count(*) FROM "Event"'` returns the count you saw in step 3;
+  - a page that reads the database loads: open an event site and the admin events list.
+- [ ] When INF-014 (#79) lands, `/api/health` on web and admin also reports DB and S3 reachability; use it and expect `db: ok`. The worker's `/health` (port 8010) reports its models, not the database, and the worker is not running yet anyway.
+- [ ] Admin: the jobs page loads and shows the parked jobs from step 6.
 - [ ] **Smoke e2e.** When the Playwright suites exist (WEB-001 #89, ADM-001 #81 on the harness from #86), run them against the restored environment. Until then, check by hand:
   1. Sign in to admin with a magic link.
   2. Open an event in admin.
   3. Open that event's guest site.
   4. Submit an RSVP as an invited guest.
   5. Open the gallery and one photo. The original is a presigned GET.
-  6. Send one test email.
+  6. Sending a test email needs the worker: do it in step 7, after it starts.
 
 ## 6. Re-apply deletions and purges that happened after *T*
 
-A restore to *T* brings back everything deleted after *T*. That includes **biometric data** and
-the audit rows that recorded its deletion ([backups.md §7](backups.md#7-biometric-data-in-backups-cubi-destruction-timeline)).
+A restore to *T* is a rollback of **everything**, not just the data you were worried about. It
+brings back what was deleted after *T*, including **biometric data** and the audit rows that
+recorded its deletion ([backups.md §7](backups.md#7-biometric-data-in-backups-cubi-destruction-timeline)).
+It also un-does security and consent state, and makes finished work look unfinished. Work through
+all of this with the worker still stopped. Run the SQL against `NEW_URL`, ideally in a transaction
+you review before committing.
 
-- [ ] **Event face-index purges that are due** (`faceIndexPurgeAt` passed, but no purge recorded in the restored DB). Run this SQL; the worker's `PURGE_FACE_INDEX` handler deletes `Face`/`FaceCluster` and writes `faceindex.purge`:
+### 6a. Sign-in state: make nobody more signed-in than they were
+
+- [ ] **Sessions.** Sessions revoked or signed out after *T* are back. There is no revocation column to inspect, so end them all; everyone signs in again:
 
   ```sql
-  INSERT INTO "Job" (type, payload, "dedupeKey")
-  SELECT 'PURGE_FACE_INDEX', jsonb_build_object('eventId', id), 'purge-face:' || id || ':restore'
+  DELETE FROM "Session";
+  ```
+
+- [ ] **One-time sign-in tokens.** Tokens used after *T* are unused again. Burn every outstanding one:
+
+  ```sql
+  UPDATE "LoginToken" SET "usedAt" = now() WHERE "usedAt" IS NULL AND "expiresAt" > now();
+  ```
+
+- [ ] **Invite links revoked after *T*** (`InviteToken.revokedAt`) work again, and the database cannot say which. Take the list from the incident note, admin audit exports and studio emails. Revoke each by hand. If any revocation was security-driven and you can't enumerate them, revoke every live token and re-send invitations from the admin once the worker is running:
+
+  ```sql
+  UPDATE "InviteToken" SET "revokedAt" = now() WHERE "revokedAt" IS NULL AND "expiresAt" > now();
+  ```
+
+### 6b. Consent and opt-outs
+
+- [ ] **SMS opt-outs** (`ContactPoint.smsOptOut`) recorded after *T* are lost. Re-apply them from the SMS provider's opt-out (STOP) list, which the provider keeps independently of our database. Until that's done, do not start the worker: sending to an opted-out number is a compliance violation (10DLC / TCPA).
+- [ ] **Face-search opt-outs and consent revokes after *T*** (`Guest.faceSearchOptOut`, `BiometricConsent.revokedAt`, deleted `FaceProfile` rows) can only be replayed from a record outside this database. That record doesn't exist yet (LEG-008). Until it does, list them from confirmation emails or tickets, and re-apply each by hand following `docs/compliance/runbook-biometric-deletion.md` (LEG-005). Do this **before** rebuilding the face index below, so a suppressed person is not re-indexed.
+
+### 6c. Biometric purges that are due
+
+- [ ] **Event face-index purges that are due** (`faceIndexPurgeAt` passed, but no purge recorded in the restored DB). This SQL is the worker's `jobs.enqueue` upsert (`workers/media/hub_worker/jobs.py`) in bulk: a `RUNNING` row is never touched, finished or dead rows are reset to `QUEUED` with attempts 0 and no stale lock or error, and the payload is refreshed. The job writes `faceindex.purge` when the worker runs in step 7:
+
+  ```sql
+  INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
+  SELECT 'PURGE_FACE_INDEX', jsonb_build_object('eventId', id), 'QUEUED'::"JobStatus", now(), 5,
+         'purge-face:' || id || ':restore'
   FROM "Event"
   WHERE "faceIndexPurgeAt" <= now() AND "faceIndexPurgedAt" IS NULL
-  ON CONFLICT ("dedupeKey") DO UPDATE SET status = 'QUEUED', "runAt" = now(), attempts = 0;
+  ON CONFLICT ("dedupeKey") DO UPDATE SET
+    payload     = EXCLUDED.payload,
+    status      = 'QUEUED'::"JobStatus",
+    "runAt"     = CASE WHEN "Job".status = 'QUEUED'::"JobStatus"
+                       THEN GREATEST("Job"."runAt", EXCLUDED."runAt") ELSE EXCLUDED."runAt" END,
+    attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
+    "lastError" = NULL,
+    "lockedBy"  = NULL,
+    "lockedAt"  = NULL
+  WHERE "Job".status <> 'RUNNING'::"JobStatus";
   ```
 
 - [ ] **Face profiles past `purgeAfter`.** Delete them (or let the scheduled purge, WRK-012, do it), then check: `SELECT count(*) FROM "FaceProfile" WHERE "purgeAfter" <= now()` must be 0.
-- [ ] **Per-person deletions after *T*** (profile revokes, "remove me" opt-outs, DSAR deletions). These can only be replayed from a record kept outside this database, and that doesn't exist yet (LEG-008). Until it does, list them from the confirmation emails or tickets you have, and re-apply each one by hand following `docs/compliance/runbook-biometric-deletion.md` (LEG-005).
+
+### 6d. Work that already happened must not happen twice
+
+- [ ] **Park jobs that may have already run** between *T* and now. The restored queue is *T*'s: a `SEND_MESSAGE` that went out after *T* is `QUEUED` again and would email or text the same person twice. Park these types, review them on the admin jobs page, and requeue only what is truly pending:
+
+  ```sql
+  UPDATE "Job" SET status = 'DEAD'::"JobStatus", "lastError" = 'parked after restore: review before re-running'
+  WHERE status IN ('QUEUED'::"JobStatus", 'RUNNING'::"JobStatus")
+    AND type IN ('SEND_MESSAGE', 'FIRE_REMINDER', 'PRINT_SUBMIT');
+  ```
+
+- [ ] **Reminder rules.** A rule that fired after *T* has `firedAt` empty again and would fire again to every household. Mark everything already due as fired; tell hosts that a reminder due during the outage was skipped, and let them resend:
+
+  ```sql
+  UPDATE "ReminderRule" SET "firedAt" = now() WHERE "firedAt" IS NULL AND "sendAt" <= now();
+  ```
+
+### 6e. Rebuild what the dumps leave out (Path B only)
+
+Logical dumps do not contain the gallery face index (backups.md §4). After a dump restore `Face`
+and `FaceCluster` are empty, yet photos still say they were indexed. Reset them and re-queue
+indexing; the `INDEX_FACES` handler skips events with face search off and schedules `CLUSTER_FACES`
+itself. Skip this block after a PITR restore, where the rows came back.
+
+```sql
+UPDATE "Photo" p SET "facesIndexedAt" = NULL
+FROM "Event" e
+WHERE e.id = p."eventId" AND e."faceSearchEnabled" AND e."faceIndexPurgedAt" IS NULL
+  AND p."facesIndexedAt" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM "Face" f WHERE f."photoId" = p.id);
+
+INSERT INTO "Job" (type, payload, status, "runAt", "maxAttempts", "dedupeKey")
+SELECT 'INDEX_FACES', jsonb_build_object('photoId', p.id), 'QUEUED'::"JobStatus", now(), 5, 'faces:' || p.id
+FROM "Photo" p JOIN "Event" e ON e.id = p."eventId"
+WHERE p."facesIndexedAt" IS NULL AND p.status = 'READY'::"PhotoStatus"
+  AND e."faceSearchEnabled" AND e."faceIndexPurgedAt" IS NULL
+  AND (e."faceIndexPurgeAt" IS NULL OR e."faceIndexPurgeAt" > now())
+ON CONFLICT ("dedupeKey") DO UPDATE SET
+  payload     = EXCLUDED.payload,
+  status      = 'QUEUED'::"JobStatus",
+  "runAt"     = CASE WHEN "Job".status = 'QUEUED'::"JobStatus"
+                     THEN GREATEST("Job"."runAt", EXCLUDED."runAt") ELSE EXCLUDED."runAt" END,
+  attempts    = CASE WHEN "Job".status = 'QUEUED'::"JobStatus" THEN "Job".attempts ELSE 0 END,
+  "lastError" = NULL,
+  "lockedBy"  = NULL,
+  "lockedAt"  = NULL
+WHERE "Job".status <> 'RUNNING'::"JobStatus";
+```
+
+Face search results are incomplete until the queue drains (about 0.5 s of CPU per photo, so a
+2,000-photo event takes 20–30 minutes on a 4-vCPU worker, docs/01 §5). Tell studios.
+
+### 6f. The bucket
+
 - [ ] **Bucket orphans.** Originals uploaded after *T* exist in the bucket but have no `Photo` row. List them and decide with the studio whether to re-import. Deletions made after *T* left `Photo` rows pointing at deleted objects; restore those objects from versioning (below) or delete the rows. The tooling for this is WRK-005.
 
 ## 7. Unfreeze
 
-- [ ] Remove the maintenance page and start the worker.
+- [ ] Everything in step 6 is ticked. In particular, 6b (opt-outs) is done before any message can be sent.
+- [ ] **Start the worker.** It picks up the purge and indexing jobs from step 6. Check `GET http://<worker-host>:8010/health`, and watch the admin jobs page until `PURGE_FACE_INDEX` has succeeded and wrote its `faceindex.purge` audit rows.
+- [ ] Verify the purge: `SELECT count(*) FROM "Face" f JOIN "Event" e ON e.id = f."eventId" WHERE e."faceIndexPurgedAt" IS NOT NULL` is 0.
+- [ ] Send one test email and confirm it arrives (the step 5 smoke test that needs the worker).
+- [ ] Remove the maintenance page.
 - [ ] Watch errors and job failures for an hour.
-- [ ] Tell affected studios what *T* was and what they need to redo (RSVPs and uploads after *T*).
+- [ ] Tell affected studios what *T* was and what they need to redo (RSVPs and uploads after *T*, reminders skipped, people who must sign in again).
 
 ## 8. Restoring objects in the bucket (versioning, S3)
 
