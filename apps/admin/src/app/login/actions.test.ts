@@ -33,6 +33,9 @@ vi.mock("@hub/shared", async (importActual) => {
   return { ...actual, email: () => ({ send: async (m: { to: string }) => (sent.emails.push(m.to), { providerId: "fake" }) }) };
 });
 
+const req = vi.hoisted(() => ({ headers: new Headers() }));
+vi.mock("next/headers", () => ({ headers: async () => req.headers }));
+
 const limits = vi.hoisted(() => ({
   current: null as null | import("@hub/shared/ratePolicies").RateLimiter,
   audits: [] as Array<import("@hub/shared/ratePolicies").RateAuditEntry>,
@@ -61,6 +64,7 @@ const request = (address: string) => {
 beforeEach(() => {
   db.loginTokens = [];
   sent.emails = [];
+  req.headers = new Headers({ "x-forwarded-for": "203.0.113.9" });
   limits.audits = [];
   limits.current = rateLimiter({ store: memoryRateLimitStore(), audit: async (e) => void limits.audits.push(e), env: {}, random: () => 1 });
 });
@@ -85,7 +89,36 @@ describe("requestMagicLink rate limit (SHR-003)", () => {
 
   it("audits the trip once, with the hashed address only", async () => {
     for (let i = 0; i < 7; i++) await request("admin@localhost");
-    expect(limits.audits).toMatchObject([{ action: "auth.rate_limited", studioId: null, eventId: null, data: { policy: "adminMagicLinkAddress" } }]);
+    expect(limits.audits).toMatchObject([{ action: "auth.rate_limited", studioId: null, eventId: null, data: { policy: "adminMagicLinkAddressIp" } }]);
     expect(JSON.stringify(limits.audits)).not.toContain("admin@");
+  });
+
+  it("a stranger on another network cannot burn the admin's attempts; IP rotation is capped at 20", async () => {
+    req.headers = new Headers({ "x-forwarded-for": "6.6.6.6" });
+    for (let i = 0; i < 10; i++) await request("admin@localhost");
+    expect(sent.emails).toHaveLength(5);
+    req.headers = new Headers({ "x-forwarded-for": "203.0.113.9" });
+    await request("admin@localhost");
+    expect(sent.emails, "the admin's own network still gets a link").toHaveLength(6);
+    for (let i = 0; i < 30; i++) {
+      req.headers = new Headers({ "x-forwarded-for": `198.51.100.${i}` });
+      await request("admin@localhost");
+    }
+    expect(sent.emails, "address-only cap").toHaveLength(20);
+  });
+
+  it("60 requests per IP per 15 minutes across addresses, then nothing more is written", async () => {
+    for (let i = 0; i < 61; i++) await request(`stranger${i}@example.com`);
+    expect(db.loginTokens).toHaveLength(60);
+  });
+
+  it("a limiter failure sends nothing and gives the same reply, without leaking the error", async () => {
+    const ok = await request("admin@localhost");
+    sent.emails = [];
+    limits.current = { check: async () => Promise.reject(new Error("prisma: connection refused")), acquire: async () => Promise.reject(new Error("x")) };
+    const r = await request("admin@localhost");
+    expect(r).toStrictEqual(ok);
+    expect(JSON.stringify(r)).not.toContain("prisma");
+    expect(sent.emails).toStrictEqual([]);
   });
 });
