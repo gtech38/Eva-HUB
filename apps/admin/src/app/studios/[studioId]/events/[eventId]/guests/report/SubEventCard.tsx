@@ -10,6 +10,7 @@ export function SubEventCard({ sub, access, exportBase }: { sub: SubEventReport;
   const s = sub.summary;
   const q = `?subEventId=${encodeURIComponent(sub.id)}`;
   const guests = access === "names" ? sub.guests : undefined;
+  const responses = access === "names" ? sub.responses : undefined;
   return (
     <Card
       title={lt(sub.name)}
@@ -20,12 +21,14 @@ export function SubEventCard({ sub, access, exportBase }: { sub: SubEventReport;
         </div>
       }
     >
-      <div className="mb-3 grid grid-cols-4 gap-2 text-center">
-        <Count n={s.invited} label="invited" className="bg-neutral-50" />
-        <Count n={s.attending} label={`attending (${pct(s.attending, s.invited)})`} className="bg-green-50 text-green-800" />
-        <Count n={s.declined} label="declined" className="bg-red-50 text-red-800" />
-        <Count n={s.pending} label="pending" className="bg-neutral-50" />
-      </div>
+      {responses && (
+        <div className="mb-3 grid grid-cols-4 gap-2 text-center">
+          <Count n={responses.invited} label="invited" className="bg-neutral-50" />
+          <Count n={s.attending} label={`attending (${pct(s.attending, responses.invited)})`} className="bg-green-50 text-green-800" />
+          <Count n={responses.declined} label="declined" className="bg-red-50 text-red-800" />
+          <Count n={responses.pending} label="pending" className="bg-neutral-50" />
+        </div>
+      )}
       <div className="text-xs text-neutral-600">{`Attending: ${s.adults} adults · ${s.kids} children`}</div>
       {sub.servesMeal && (
         <>
@@ -52,8 +55,8 @@ export function SubEventCard({ sub, access, exportBase }: { sub: SubEventReport;
         <details className="mt-3">
           <summary className="cursor-pointer text-xs text-neutral-600">{`Guests (${guests.length})`}</summary>
           <Table head={["Household", "Guest", "Status", "Meal"]} className="mt-2">
-            {guests.map((g, i) => (
-              <tr key={i}>
+            {guests.map((g) => (
+              <tr key={g.id}>
                 <td>{g.household}</td>
                 <td>{g.guest}{g.isChild && <span className="ml-1 text-neutral-400">(child)</span>}</td>
                 <td>{g.status}</td>

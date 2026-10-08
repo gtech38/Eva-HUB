@@ -1,4 +1,4 @@
-// tdd-exempt: wiring only; the export rules (vendor 403s, CSV shapes, audit) live in lib/rsvpExport.ts and are tested there.
+// tdd-exempt: wiring only; the export rules (vendor 403s, CSV shapes, headers, audit) live in lib/rsvpExport.ts and are tested there.
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@hub/db";
 import { getPrincipal } from "@/lib/auth";

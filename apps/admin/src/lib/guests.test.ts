@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Principal } from "@hub/shared";
-import { mealTotals, reportAccess, summarizeSubEvent, type ReportMealOption, type ReportRsvp } from "./guests";
+import { buildSubEventReport, mealCell, mealTotals, reportAccess, summarizeSubEvent, type ReportGuestLine, type ReportMealOption, type ReportRsvp } from "./guests";
 
 const VEG: ReportMealOption = { id: "veg", label: { en: "Vegetarian", te: "శాకాహారం" }, isKidsMeal: false };
 const NONVEG: ReportMealOption = { id: "nonveg", label: { en: "Non-vegetarian" }, isKidsMeal: false };
@@ -84,10 +84,44 @@ describe("reportAccess()", () => {
     expect(reportAccess(p({ eventRoles: { e1: ["HOST"] } }), res)).toBe("names");
     expect(reportAccess(p({ eventRoles: { e1: ["PLANNER"] } }), res)).toBe("names");
     expect(reportAccess(p({ studioRoles: { s1: "OWNER" } }), res)).toBe("names");
-    expect(reportAccess(p({ studioRoles: { s1: "STAFF" } }), res)).toBe("names");
+    expect(reportAccess(p({ studioRoles: { s1: "STAFF" }, eventRoles: { e1: ["STAFF"] } }), res)).toBe("names");
+    expect(reportAccess(p({ studioRoles: { s1: "STAFF" } }), res)).toBe("totals"); // unassigned staff
     expect(reportAccess(p({ eventRoles: { e1: ["VENDOR"] } }), res)).toBe("totals");
     expect(reportAccess(p({ guestOf: new Set(["e1"]) }), res)).toBeNull();
     expect(reportAccess(p({ eventRoles: { e9: ["HOST"] } }), res)).toBeNull();
     expect(reportAccess(null, res)).toBeNull();
+  });
+});
+
+describe("mealCell(): one meal rule for every export", () => {
+  const veg = { label: { en: "Vegetarian" } };
+  it("shows the chosen meal for attending guests only", () => {
+    expect(mealCell({ status: "ATTENDING", mealOption: veg })).toBe("Vegetarian");
+    expect(mealCell({ status: "DECLINED", mealOption: veg })).toBe("");
+    expect(mealCell({ status: "PENDING", mealOption: veg })).toBe("");
+    expect(mealCell({ status: "ATTENDING", mealOption: null })).toBe("");
+  });
+});
+
+describe("buildSubEventReport()", () => {
+  const sub = { id: "sub1", name: { en: "Reception" }, servesMeal: true, mealOptions: OPTIONS };
+  const lines: ReportGuestLine[] = [
+    { id: "r1", household: "The Rao Family", guest: "Lakshmi Rao", isChild: false, status: "ATTENDING", meal: "Vegetarian" },
+  ];
+
+  it("names access carries invited/declined/pending counts and the guest list", () => {
+    const r = buildSubEventReport(sub, RSVPS, "names", lines);
+    expect(r.responses).toEqual({ invited: 11, declined: 1, pending: 2 });
+    expect(r.guests).toEqual(lines);
+    expect(r.summary).toMatchObject({ attending: 8, adults: 4, kids: 4 });
+  });
+
+  it("totals access (vendors) is meal counts only: no names, no invited/declined/pending, even if lines are passed", () => {
+    const r = buildSubEventReport(sub, RSVPS, "totals", lines);
+    expect(r.guests).toBeUndefined();
+    expect(r.responses).toBeUndefined();
+    expect(Object.keys(r.summary).sort()).toEqual(["adults", "attending", "kids", "meals"]);
+    expect(JSON.stringify(r)).not.toMatch(/Lakshmi|Rao/);
+    expect(r.summary.meals).toEqual(mealTotals(RSVPS, OPTIONS));
   });
 });

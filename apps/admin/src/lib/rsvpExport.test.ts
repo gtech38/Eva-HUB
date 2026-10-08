@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Principal } from "@hub/shared";
 import { parseCsv } from "./csv";
-import { summarizeSubEvent, type ReportAccess, type ReportGuestLine, type ReportRsvp, type RsvpReport } from "./guests";
+import { buildSubEventReport, reportAccess, type ReportGuestLine, type ReportRsvp, type RsvpReport } from "./guests";
+import { can } from "@hub/shared";
 import { rsvpExport, type ExportDeps, type ExportQuery } from "./rsvpExport";
 
 const res = { studioId: "s1", eventId: "e1" };
@@ -22,29 +23,29 @@ const RSVPS: ReportRsvp[] = [
   { status: "DECLINED", mealOptionId: null, isChild: false },
 ];
 const GUESTS: ReportGuestLine[] = [
-  { household: "The Rao Family", guest: "Lakshmi Rao", isChild: false, status: "ATTENDING", meal: "Vegetarian" },
-  { household: "The Rao Family", guest: "=cmd|' /C calc'!A0", isChild: true, status: "ATTENDING", meal: "Kids plate" },
-  { household: "Sharma", guest: "प्रिया शर्मा", isChild: false, status: "DECLINED", meal: "" },
+  { id: "r1", household: "The Rao Family", guest: "Lakshmi Rao", isChild: false, status: "ATTENDING", meal: "Vegetarian" },
+  { id: "r2", household: "The Rao Family", guest: "=cmd|' /C calc'!A0", isChild: true, status: "ATTENDING", meal: "Kids plate" },
+  { id: "r3", household: "Sharma", guest: "प्रिया शर्मा", isChild: false, status: "DECLINED", meal: "" },
 ];
 
-/** Recording fakes: the report loader mimics loadRsvpReport (names only in "names" mode). */
+/** Recording fakes: the loaders mimic loadRsvpReport/loadWideCsv (access from can(), names only in "names" mode). */
 function fakes(over: Partial<ExportDeps> = {}) {
   const audits: Array<Record<string, unknown>> = [];
-  const loads: Array<{ access: ReportAccess; subEventId?: string }> = [];
+  const loads: Array<{ totalsOnly: boolean; subEventId?: string }> = [];
   const deps: ExportDeps = {
     findEvent: async (studioId, eventId) => (studioId === "s1" && eventId === "e1" ? { id: "e1", slug: "priya-arjun" } : null),
-    loadReport: async (eventId, access, opts) => {
-      loads.push({ access, subEventId: opts?.subEventId });
+    loadReport: async (p, r, opts) => {
+      loads.push({ totalsOnly: Boolean(opts?.totalsOnly), subEventId: opts?.subEventId });
+      const allowed = reportAccess(p, r);
+      if (!allowed) return null;
+      const access = opts?.totalsOnly ? "totals" : allowed;
       const report: RsvpReport = { access, subEvents: [] };
-      if (eventId === "e1" && (!opts?.subEventId || opts.subEventId === "sub1")) {
-        report.subEvents.push({
-          id: "sub1", name: { en: "Wedding Ceremony" }, servesMeal: true, summary: summarizeSubEvent(RSVPS, OPTIONS),
-          ...(access === "names" ? { guests: GUESTS } : {}),
-        });
+      if (r.eventId === "e1" && (!opts?.subEventId || opts.subEventId === "sub1")) {
+        report.subEvents.push(buildSubEventReport({ id: "sub1", name: { en: "Wedding Ceremony" }, servesMeal: true, mealOptions: OPTIONS }, RSVPS, access, GUESTS));
       }
       return report;
     },
-    loadWideCsv: async () => [["household", "first_name"], ["The Rao Family", "Lakshmi"]],
+    loadWideCsv: async (p, r) => (p && can(p, "rsvp.report.names", r) ? [["household", "first_name"], ["The Rao Family", "Lakshmi"]] : null),
     audit: async (entry) => { audits.push(entry); },
     ...over,
   };
@@ -56,11 +57,10 @@ const rows = (body: string) => parseCsv(body);
 
 describe("rsvpExport(): vendor limits", () => {
   it("VENDOR gets 403 from export without subEventId (the wide names CSV)", async () => {
-    const { deps, audits, loads } = fakes();
+    const { deps, loads } = fakes();
     expect((await rsvpExport(VENDOR, res, q(), deps)).status).toBe(403);
     expect((await rsvpExport(VENDOR, res, q({ totals: true }), deps)).status).toBe(403);
     expect(loads).toEqual([]);
-    expect(audits).toEqual([]);
   });
 
   it("VENDOR gets 403 from the per-sub-event names CSV", async () => {
@@ -69,13 +69,26 @@ describe("rsvpExport(): vendor limits", () => {
     expect(loads).toEqual([]); // nothing name-level was even loaded
   });
 
+  it("audits every denied name-level attempt as rsvp.export.denied, with the vendor flag", async () => {
+    const { deps, audits } = fakes();
+    await rsvpExport(VENDOR, res, q(), deps);
+    await rsvpExport(VENDOR, res, q({ subEventId: "sub1" }), deps);
+    const unassignedStaff = base({ studioRoles: { s1: "STAFF" } });
+    await rsvpExport(unassignedStaff, res, q({ subEventId: "sub1" }), deps);
+    expect(audits).toEqual([
+      { studioId: "s1", eventId: "e1", actorUserId: "vendor", action: "rsvp.export.denied", data: { subEventId: null, totals: false, vendor: true } },
+      { studioId: "s1", eventId: "e1", actorUserId: "vendor", action: "rsvp.export.denied", data: { subEventId: "sub1", totals: false, vendor: true } },
+      { studioId: "s1", eventId: "e1", actorUserId: "u1", action: "rsvp.export.denied", data: { subEventId: "sub1", totals: false, vendor: false } },
+    ]);
+  });
+
   it("VENDOR gets 200 for export?subEventId=...&totals=1 with meal counts and no names", async () => {
     const { deps, loads } = fakes();
     const out = await rsvpExport(VENDOR, res, q({ subEventId: "sub1", totals: true }), deps);
     expect(out.status).toBe(200);
-    expect(loads).toEqual([{ access: "totals", subEventId: "sub1" }]);
+    expect(loads).toEqual([{ totalsOnly: true, subEventId: "sub1" }]);
     expect(rows(out.body)).toEqual([
-      ["meal", "kids_meal", "adults", "children", "total"],
+      ["meal", "kids_meal", "adult_guests", "child_guests", "total"],
       ["Vegetarian", "", "1", "0", "1"],
       ["Kids plate", "yes", "0", "1", "1"],
       ["No choice yet", "", "0", "0", "0"],
@@ -91,7 +104,7 @@ describe("rsvpExport(): hosts and planners", () => {
     const { deps, loads } = fakes();
     const out = await rsvpExport(HOST, res, q({ subEventId: "sub1" }), deps);
     expect(out.status).toBe(200);
-    expect(loads).toEqual([{ access: "names", subEventId: "sub1" }]);
+    expect(loads).toEqual([{ totalsOnly: false, subEventId: "sub1" }]);
     expect(rows(out.body)).toEqual([
       ["household", "guest", "is_child", "status", "meal"],
       ["The Rao Family", "Lakshmi Rao", "", "ATTENDING", "Vegetarian"],
@@ -112,7 +125,7 @@ describe("rsvpExport(): hosts and planners", () => {
   it("HOST asking for totals loads totals only (no names) and totals without subEventId is a 400", async () => {
     const { deps, loads } = fakes();
     expect((await rsvpExport(HOST, res, q({ subEventId: "sub1", totals: true }), deps)).status).toBe(200);
-    expect(loads).toEqual([{ access: "totals", subEventId: "sub1" }]);
+    expect(loads).toEqual([{ totalsOnly: true, subEventId: "sub1" }]);
     expect((await rsvpExport(HOST, res, q({ totals: true }), deps)).status).toBe(400);
   });
 
@@ -122,6 +135,7 @@ describe("rsvpExport(): hosts and planners", () => {
       const out = await rsvpExport(HOST, res, query, deps);
       expect(out.body.charCodeAt(0)).toBe(0xfeff);
       expect(out.headers["Content-Type"]).toBe("text/csv; charset=utf-8");
+      expect(out.headers["Cache-Control"]).toBe("private, no-store"); // guest data must not sit in shared caches
     }
   });
 });

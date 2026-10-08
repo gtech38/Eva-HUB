@@ -30,7 +30,7 @@ export type Action =
   | "invites.send"
   | "rsvp.report"             // headcounts and meal totals (vendors: this only)
   | "rsvp.report.names"       // name-level RSVP lists and exports
-  | "rsvp.respond"           // own household
+  | "rsvp.respond"            // own household
   | "registry.manage"
   | "photos.upload"
   | "albums.manage"
@@ -84,7 +84,7 @@ export function can(p: Principal, action: Action, r: Resource): boolean {
     case "guests.manage": return isOwner || hostish || has("PLANNER");
     case "invites.send": return isOwner || hostish || has("PLANNER");
     case "rsvp.report": return isOwner || isStaff || hostish || has("PLANNER") || has("VENDOR");
-    case "rsvp.report.names": return isOwner || isStaff || hostish || has("PLANNER");
+    case "rsvp.report.names": return isOwner || assignedStaff || hostish || has("PLANNER");
     case "rsvp.respond": return isGuest || hostish;
     case "registry.manage": return isOwner || hostish;
     case "photos.upload": return isOwner || assignedStaff;

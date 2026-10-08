@@ -65,7 +65,12 @@ describe("can()", () => {
       expect(can(base({ eventRoles: { e1: [role] } }), "rsvp.report.names", r)).toBe(true);
     }
     expect(can(base({ studioRoles: { s1: "OWNER" } }), "rsvp.report.names", r)).toBe(true);
-    expect(can(base({ studioRoles: { s1: "STAFF" } }), "rsvp.report.names", r)).toBe(true);
+    // Studio staff see names only on events they are assigned to; otherwise counts only.
+    const unassigned = base({ studioRoles: { s1: "STAFF" } });
+    expect(can(unassigned, "rsvp.report", r)).toBe(true);
+    expect(can(unassigned, "rsvp.report.names", r)).toBe(false);
+    expect(can(base({ studioRoles: { s1: "STAFF" }, eventRoles: { e1: ["STAFF"] } }), "rsvp.report.names", r)).toBe(true);
+    expect(can(base({ studioRoles: { s1: "STAFF" }, eventRoles: { e2: ["STAFF"] } }), "rsvp.report.names", r)).toBe(false);
     // A vendor who is also a planner gets names through the planner role.
     expect(can(base({ eventRoles: { e1: ["VENDOR", "PLANNER"] } }), "rsvp.report.names", r)).toBe(true);
     // Elevated: forwarded invite links and other studios never see names.

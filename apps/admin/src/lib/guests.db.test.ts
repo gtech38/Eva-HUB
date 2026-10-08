@@ -1,85 +1,102 @@
 /**
- * Postgres-backed tests for the RSVP report loaders in guests.ts. They need the local stack and a
- * seeded database (pnpm infra:up && pnpm db:seed); when Postgres or the seeded `priya-arjun` event
- * is missing every test is skipped with a message instead of failing.
- *
- * Fixture rows (one household, an adult and a child) carry a per-run marker in their names and
- * email so assertions can prove the marker never appears in a totals-only report; afterAll()
- * deletes them by id.
+ * Postgres-backed tests for the RSVP report loaders in guests.ts. They seed their own studio, events
+ * and guests (test/reportFixture.ts), so they need only the local stack (pnpm infra:up) and a
+ * migrated database. Without Postgres they are skipped with a message locally, and FAIL when CI is
+ * set: a green CI run must mean the vendor-privacy checks actually ran.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@hub/db";
 import { loadRsvpReport, loadWideCsv } from "./guests";
+import { PHONE, principal, seedReportFixture, type ReportFixture } from "../../test/reportFixture";
 
 const run = `zq${Date.now().toString(36)}`;
+const dbUp = await prisma.$queryRaw`SELECT 1`.then(() => true, () => false);
+const inCi = Boolean(process.env.CI) && !["0", "false"].includes(process.env.CI!);
+const skipReason = "Postgres unreachable at DATABASE_URL; start it with: pnpm infra:up";
 
-const event = await prisma.event.findFirst({ where: { slug: "priya-arjun" }, select: { id: true, studioId: true } }).catch(() => null);
-const sub = event
-  ? await prisma.subEvent.findFirst({ where: { eventId: event.id, servesMeal: true, mealOptions: { some: {} } }, include: { mealOptions: { orderBy: { sortOrder: "asc" } } } })
-  : null;
-const other = event ? await prisma.subEvent.findFirst({ where: { eventId: { not: event.id } }, select: { id: true } }) : null;
-const ready = Boolean(event && sub && other);
-const skipReason = "Postgres unreachable or not seeded (pnpm infra:up && pnpm db:seed)";
-if (!ready) console.log(`# apps/admin guests.db: ${skipReason} -- skipping`);
-
-describe.skipIf(!ready)(ready ? "RSVP report loaders against Postgres" : `RSVP report loaders [skipped: ${skipReason}]`, () => {
-  const ids = { household: "", adult: "", child: "", gone: "" };
-
-  beforeAll(async () => {
-    const { id: eventId, studioId } = event!;
-    const meal = sub!.mealOptions[0];
-    const hh = await prisma.household.create({ data: { eventId, studioId, name: `${run} Household` } });
-    const mk = (firstName: string, isChild: boolean, deletedAt: Date | null = null) =>
-      prisma.guest.create({ data: { eventId, studioId, householdId: hh.id, firstName, lastName: run, email: isChild ? null : `${run}@example.com`, phone: isChild ? null : "+15125550199", isChild, deletedAt } });
-    const [adult, child, gone] = [await mk("Adult", false), await mk("Child", true), await mk("Removed", false, new Date())];
-    for (const g of [adult, child, gone]) {
-      await prisma.subEventInvite.create({ data: { guestId: g.id, subEventId: sub!.id } });
-      await prisma.rsvp.create({ data: { guestId: g.id, subEventId: sub!.id, status: "ATTENDING", mealOptionId: meal.id } });
-    }
-    Object.assign(ids, { household: hh.id, adult: adult.id, child: child.id, gone: gone.id });
+if (!dbUp && inCi) {
+  describe("RSVP report loaders against Postgres", () => {
+    it("requires Postgres when CI is set", () => { throw new Error(skipReason); });
   });
+} else if (!dbUp) console.log(`# apps/admin guests.db: ${skipReason} -- skipping`);
 
-  afterAll(async () => {
-    const guestIds = [ids.adult, ids.child, ids.gone].filter(Boolean);
-    await prisma.rsvp.deleteMany({ where: { guestId: { in: guestIds } } });
-    await prisma.subEventInvite.deleteMany({ where: { guestId: { in: guestIds } } });
-    await prisma.guest.deleteMany({ where: { id: { in: guestIds } } });
-    if (ids.household) await prisma.household.delete({ where: { id: ids.household } });
-    await prisma.$disconnect();
-  });
+describe.skipIf(!dbUp)(dbUp ? "RSVP report loaders against Postgres" : `RSVP report loaders [skipped: ${skipReason}]`, () => {
+  let fx: ReportFixture;
+  let cleanup: () => Promise<void> = async () => {};
+  beforeAll(async () => { ({ fx, cleanup } = await seedReportFixture(run)); });
+  afterAll(async () => { await cleanup(); await prisma.$disconnect(); });
 
-  it("totals mode returns counts with no guest names, emails or phones anywhere in the payload", async () => {
-    const report = await loadRsvpReport(event!.id, "totals", { subEventId: sub!.id });
+  const res = () => ({ studioId: fx.studioId, eventId: fx.eventId });
+  const HOST = () => principal({ userId: "host", eventRoles: { [fx.eventId]: ["HOST"] } });
+  const VENDOR = () => principal({ userId: "vendor", eventRoles: { [fx.eventId]: ["VENDOR"] } });
+  const dinner = (rep: NonNullable<Awaited<ReturnType<typeof loadRsvpReport>>>) => rep.subEvents.find((s) => s.id === fx.dinnerId)!;
+
+  it("vendor gets meal counts only: no names, emails, phones, response counts or household figures anywhere in the payload", async () => {
+    const report = (await loadRsvpReport(VENDOR(), res()))!;
     expect(report.access).toBe("totals");
-    expect(report.subEvents.map((s) => s.id)).toEqual([sub!.id]);
-    const s = report.subEvents[0];
-    expect(s.guests).toBeUndefined();
-    expect(s.summary.attending).toBeGreaterThanOrEqual(2);
-    expect(s.summary.kids).toBeGreaterThanOrEqual(1);
-    expect(s.summary.meals.byOption[0].total).toBeGreaterThanOrEqual(2);
+    const d = dinner(report);
+    expect(d.guests).toBeUndefined();
+    expect(d.responses).toBeUndefined();
+    expect(report.households).toBeUndefined();
+    expect(Object.keys(d.summary).sort()).toEqual(["adults", "attending", "kids", "meals"]);
+    expect(d.summary).toMatchObject({ attending: 2, adults: 1, kids: 1 });
     const json = JSON.stringify(report);
     expect(json).not.toContain(run);
-    expect(json).not.toContain("5125550199");
+    expect(json).not.toContain(PHONE.slice(1));
+    expect(json).not.toContain("example.com");
   });
 
-  it("names mode lists household, guest, child flag, status and meal; soft-deleted guests are left out", async () => {
-    const report = await loadRsvpReport(event!.id, "names", { subEventId: sub!.id });
-    const mine = report.subEvents[0].guests!.filter((g) => g.household === `${run} Household`);
-    expect(mine).toEqual([
-      { household: `${run} Household`, guest: `Adult ${run}`, isChild: false, status: "ATTENDING", meal: expect.any(String) },
-      { household: `${run} Household`, guest: `Child ${run}`, isChild: true, status: "ATTENDING", meal: expect.any(String) },
+  it("meal totals count attending guests only, per option, excluding declined and soft-deleted guests", async () => {
+    const d = dinner((await loadRsvpReport(VENDOR(), res()))!);
+    expect(d.summary.meals.byOption.map((o) => [o.optionId, o.adults, o.kids, o.total])).toEqual([
+      [fx.meals.veg, 1, 0, 1],
+      [fx.meals.nonveg, 0, 0, 0], // the declined guest's stale choice is not a plate
+      [fx.meals.kids, 0, 1, 1],
     ]);
-    expect(mine[0].meal).not.toBe("");
+    expect(d.summary.meals.noChoice.total).toBe(0);
   });
 
-  it("without subEventId it reports every sub-event of the event, in order", async () => {
-    const report = await loadRsvpReport(event!.id, "totals");
-    const subs = await prisma.subEvent.findMany({ where: { eventId: event!.id }, orderBy: [{ sortOrder: "asc" }, { startsAt: "asc" }], select: { id: true } });
-    expect(report.subEvents.map((s) => s.id)).toEqual(subs.map((s) => s.id));
+  it("host gets names, response counts, household figures, and no meal for a declined guest", async () => {
+    const report = (await loadRsvpReport(HOST(), res()))!;
+    expect(report.access).toBe("names");
+    expect(report.households).toEqual({ total: 1, withPending: 1 });
+    const d = dinner(report);
+    expect(d.responses).toEqual({ invited: 4, declined: 1, pending: 1 });
+    expect(d.guests!.map((g) => [g.guest, g.isChild, g.status, g.meal])).toEqual([
+      [`Adult ${run}`, false, "ATTENDING", "Vegetarian"],
+      [`Child ${run}`, true, "ATTENDING", "Kids plate"],
+      [`Declined ${run}`, false, "DECLINED", ""],
+      [`Pending ${run}`, false, "PENDING", ""],
+    ]);
+    expect(d.guests!.every((g) => g.household === fx.householdName && typeof g.id === "string")).toBe(true);
+    expect(new Set(d.guests!.map((g) => g.id)).size).toBe(4); // unique, usable as React keys
   });
 
-  it("a sub-event id from another event yields nothing (tenant scope)", async () => {
-    expect((await loadRsvpReport(event!.id, "names", { subEventId: other!.id })).subEvents).toEqual([]);
+  it("totalsOnly narrows a names user to totals but can never widen a vendor", async () => {
+    const narrowed = (await loadRsvpReport(HOST(), res(), { totalsOnly: true }))!;
+    expect(narrowed.access).toBe("totals");
+    expect(dinner(narrowed).guests).toBeUndefined();
+    expect((await loadRsvpReport(VENDOR(), res(), { totalsOnly: false }))!.access).toBe("totals");
+  });
+
+  it("is null for guests, signed-out, invite-link sessions and roles on another event", async () => {
+    expect(await loadRsvpReport(null, res())).toBeNull();
+    expect(await loadRsvpReport(principal({ guestOf: new Set([fx.eventId]) }), res())).toBeNull();
+    expect(await loadRsvpReport(principal({ authMethod: "INVITE_LINK", eventRoles: { [fx.eventId]: ["HOST"] } }), res())).toBeNull();
+    expect(await loadRsvpReport(principal({ eventRoles: { [fx.otherEventId]: ["HOST"] } }), res())).toBeNull();
+  });
+
+  it("is scoped by studio as well as event: a wrong studioId yields nothing even for a real host", async () => {
+    const report = (await loadRsvpReport(HOST(), { studioId: "some-other-studio", eventId: fx.eventId }))!;
+    expect(report.subEvents).toEqual([]);
+    expect(report.households).toEqual({ total: 0, withPending: 0 });
+  });
+
+  it("reports sub-events in order, or one sub-event by id; an id from another event yields nothing", async () => {
+    const all = (await loadRsvpReport(VENDOR(), res()))!;
+    expect(all.subEvents.map((s) => s.id)).toEqual([fx.haldiId, fx.dinnerId]);
+    expect((await loadRsvpReport(VENDOR(), res(), { subEventId: fx.dinnerId }))!.subEvents.map((s) => s.id)).toEqual([fx.dinnerId]);
+    expect((await loadRsvpReport(HOST(), res(), { subEventId: fx.otherSubId }))!.subEvents).toEqual([]);
   });
 
   it("Rsvp has the (subEventId, status) index the report counts use (docs/03 §3)", async () => {
@@ -87,10 +104,12 @@ describe.skipIf(!ready)(ready ? "RSVP report loaders against Postgres" : `RSVP r
     expect(rows.map((r) => r.indexdef)).toEqual([expect.stringContaining('("subEventId", status)')]);
   });
 
-  it("loadWideCsv has one row per live guest with the existing wide columns", async () => {
-    const table = await loadWideCsv(event!.id);
+  it("loadWideCsv is name-level (null for vendors), one row per live guest, and uses the same meal rule", async () => {
+    expect(await loadWideCsv(VENDOR(), res())).toBeNull();
+    const table = (await loadWideCsv(HOST(), res()))!;
     expect(table[0].slice(0, 8)).toEqual(["household", "first_name", "last_name", "email", "phone", "is_child", "is_plus_one", "linked_user"]);
-    const mine = table.filter((r) => r[0] === `${run} Household`);
-    expect(mine.map((r) => r[1])).toEqual(["Adult", "Child"]);
+    expect(table.slice(1).map((r) => r[1])).toEqual(["Adult", "Child", "Declined", "Pending"]);
+    const mealCol = table[0].indexOf("Dinner meal");
+    expect(table.slice(1).map((r) => r[mealCol])).toEqual(["Vegetarian", "Kids plate", "", ""]); // declined guest: blank, as in the guest list
   });
 });
